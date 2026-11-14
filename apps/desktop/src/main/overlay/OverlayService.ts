@@ -82,6 +82,8 @@ interface Live {
   shownAt: number | null;
   createdAt: number;
   exitTimer: TimerHandle | null;
+  /** Pending "current step never appeared" check. */
+  graceTimer: TimerHandle | null;
   /** Ended (exiting or removed): ignore late async results. */
   ended: boolean;
 }
@@ -164,7 +166,11 @@ export class OverlayService implements OverlayControl {
     this.anchors.stop();
     this.expiry.dispose();
     for (const d of this.disposers) d();
-    for (const l of this.live.values()) if (l.exitTimer) this.clock.clearTimeout(l.exitTimer);
+    for (const l of this.live.values()) {
+      l.ended = true;
+      if (l.exitTimer) this.clock.clearTimeout(l.exitTimer);
+      if (l.graceTimer) this.clock.clearTimeout(l.graceTimer);
+    }
     this.live.clear();
   }
 
@@ -298,6 +304,7 @@ export class OverlayService implements OverlayControl {
       shownAt: null,
       createdAt: this.clock.now(),
       exitTimer: null,
+      graceTimer: null,
       ended: false,
     };
     if (toolName === "show_steps") {
@@ -336,7 +343,11 @@ export class OverlayService implements OverlayControl {
         const r = resolved.get(ss[0]!);
         if (r) initial.set(el, { rect: r.bounds, displayId: r.displayId });
       }
-      this.anchors.track(id, [...elements.keys()], initial);
+      // Step guides also watch elements that aren't on screen yet (later steps may appear). Other
+      // annotations only follow what they actually attached to: an explainer shown unanchored
+      // (anchor not found) must not later fade because that anchor "was lost".
+      const tracked = toolName === "show_steps" ? [...elements.keys()] : [...initial.keys()];
+      if (tracked.length) this.anchors.track(id, tracked, initial);
     }
     this.publish();
 
@@ -431,7 +442,9 @@ export class OverlayService implements OverlayControl {
   private checkCurrentStepAppears(l: Live): void {
     if (!l.steps || l.steps.completed || l.resolved.get(`step:${l.steps.current}`)) return;
     const index = l.steps.current;
-    this.clock.setTimeout(() => {
+    if (l.graceTimer) this.clock.clearTimeout(l.graceTimer);
+    l.graceTimer = this.clock.setTimeout(() => {
+      l.graceTimer = null;
       if (l.ended || !l.steps || l.steps.current !== index || l.resolved.get(`step:${index}`)) return;
       this.emit({ type: "overlay.target_lost", overlayId: l.id });
       this.fadeOut(l.id);
@@ -473,6 +486,7 @@ export class OverlayService implements OverlayControl {
   private endLive(id: string): void {
     const l = this.live.get(id);
     if (l?.exitTimer) this.clock.clearTimeout(l.exitTimer);
+    if (l?.graceTimer) this.clock.clearTimeout(l.graceTimer);
     this.expiry.untrack(id);
     this.anchors.untrack(id);
     this.manager.remove(id);
@@ -759,6 +773,12 @@ export class OverlayService implements OverlayControl {
             imageScale = COMPACT_IMAGE_SCALE;
             size = compact;
           }
+        }
+        // Still shrunk? Text must stay ≥ fontMin for older eyes: a full-size card in a corner (with a
+        // connector to its anchor) beats a smaller card beside it.
+        if (placement.scale < 1 && anchor) {
+          const full = placeBeside({ target: anchor.bounds, size, workArea: display.workArea, avoid: cardAvoid, allowShrink: false });
+          if (full.scale === 1) placement = { rect: full.rect, scale: 1, connector: full.connector };
         }
       }
       l.item = {

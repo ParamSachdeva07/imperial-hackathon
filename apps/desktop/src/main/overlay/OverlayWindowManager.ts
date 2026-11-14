@@ -4,6 +4,7 @@
  */
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from "electron";
 import { IPC, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
+import { ImageKeyRegistry } from "@pointy/shared/overlay/sceneImages";
 import type { DisplayInfo, Rect } from "@pointy/shared/overlay";
 import { toDisplayInfo } from "./coords";
 import type { OverlayPlatform } from "./platform";
@@ -22,6 +23,8 @@ interface OverlayWindow {
   displayId: string;
   win: BrowserWindow;
   ready: boolean;
+  /** Image keys whose bytes this window already has. */
+  sentImages: Set<string>;
 }
 
 /** Composition latency to wait for after changing window opacity/visibility (spec §5.1 note). */
@@ -51,6 +54,8 @@ export class ElectronScreen implements ScreenSource {
 export class OverlayWindowManager implements SceneSink {
   private windows = new Map<string, OverlayWindow>();
   private items: RenderItem[] = [];
+  private imageKeys = new Set<string>();
+  private readonly images = new ImageKeyRegistry();
   private reduceMotion = false;
   private seq = 0;
   private paintedListeners = new Set<(ids: string[]) => void>();
@@ -79,7 +84,17 @@ export class OverlayWindowManager implements SceneSink {
   }
 
   publish(items: RenderItem[], opts: { reduceMotion: boolean }): void {
-    this.items = items;
+    // Image bytes go to each window once, by key — not inside every scene (see sceneImages.ts).
+    const { items: keyed, keys } = this.images.externalize(items);
+    const dropped = this.images.prune(keys);
+    if (dropped.length) {
+      for (const w of this.windows.values()) {
+        for (const k of dropped) w.sentImages.delete(k);
+        if (w.ready && !w.win.isDestroyed()) w.win.webContents.send(IPC.imageDrop, { keys: dropped });
+      }
+    }
+    this.items = keyed;
+    this.imageKeys = keys;
     this.reduceMotion = opts.reduceMotion;
     this.seq += 1;
     for (const w of this.windows.values()) this.sendScene(w);
@@ -158,7 +173,7 @@ export class OverlayWindowManager implements SceneSink {
     });
     this.opts.platform.applyOverlayFlags(win, { contentProtection: this.opts.contentProtection });
     win.setBounds(d.bounds);
-    const entry: OverlayWindow = { displayId: d.id, win, ready: false };
+    const entry: OverlayWindow = { displayId: d.id, win, ready: false, sentImages: new Set() };
     win.once("ready-to-show", () => {
       if (win.isDestroyed()) return;
       if (this.hiddenDepth > 0) win.setOpacity(0);
@@ -168,6 +183,7 @@ export class OverlayWindowManager implements SceneSink {
     // A crashed overlay renderer is reloaded; the scene is resent on its next `overlay:ready`.
     win.webContents.on("render-process-gone", () => {
       entry.ready = false;
+      entry.sentImages.clear();
       if (!win.isDestroyed()) void this.opts.loadPage(win);
     });
     void this.opts.loadPage(win);
@@ -176,6 +192,12 @@ export class OverlayWindowManager implements SceneSink {
 
   private sendScene(w: OverlayWindow): void {
     if (!w.ready || w.win.isDestroyed()) return;
+    for (const key of this.imageKeys) {
+      if (w.sentImages.has(key)) continue;
+      const src = this.images.src(key);
+      if (src) w.win.webContents.send(IPC.image, { key, src });
+      w.sentImages.add(key);
+    }
     const bounds: Rect = w.win.getBounds();
     const display = this.screenSource.getDisplays().find((d) => d.id === w.displayId);
     const scene: RenderScene = {
@@ -198,6 +220,7 @@ export class OverlayWindowManager implements SceneSink {
     const w = this.findBySender(e);
     if (!w) return;
     w.ready = true;
+    w.sentImages.clear(); // a (re)loaded page has no cached images
     this.sendScene(w);
   };
 

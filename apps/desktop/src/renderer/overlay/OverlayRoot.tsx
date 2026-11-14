@@ -1,6 +1,8 @@
 /** Subscribes to scenes from main, renders them, and acks first paints of new item ids. */
-import { useEffect, useRef, useState } from "react";
-import type { RenderScene } from "@pointy/shared/overlay/render";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { RenderItem, RenderScene } from "@pointy/shared/overlay/render";
+import type { Rect } from "@pointy/shared/overlay/schemas";
+import { rehydrateImages } from "@pointy/shared/overlay/sceneImages";
 import { OverlayScene } from "./OverlayScene";
 
 function usePrefersReducedMotion(): boolean {
@@ -15,25 +17,68 @@ function usePrefersReducedMotion(): boolean {
   return pref;
 }
 
+/** Bounds that decide which display an item "is on" (for the overlay.shown ack). */
+function itemRects(item: RenderItem): Rect[] {
+  switch (item.kind) {
+    case "highlight":
+      return [item.target.bounds];
+    case "pointer":
+      return [item.target.bounds];
+    case "steps":
+      return item.steps.flatMap((s) => (s.target ? [s.target.bounds] : []));
+    case "explainer":
+      return [item.card];
+  }
+}
+
+const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/** Only the window that actually shows an item acks its paint (multi-display). */
+export function isOnThisDisplay(item: RenderItem, display: Rect): boolean {
+  return itemRects(item).some((r) => overlaps(r, display));
+}
+
 export function OverlayRoot() {
-  const [scene, setScene] = useState<RenderScene | null>(null);
+  const [raw, setScene] = useState<RenderScene | null>(null);
+  const images = useRef(new Map<string, string>());
+  const [imageVersion, setImageVersion] = useState(0);
   const prefersReduced = usePrefersReducedMotion();
   const painted = useRef(new Set<string>());
 
   useEffect(() => {
     const api = window.pointyOverlay;
     if (!api) return;
-    const off = api.onScene(setScene);
+    const offScene = api.onScene(setScene);
+    const offImage = api.onImage(({ key, src }) => {
+      images.current.set(key, src);
+      setImageVersion((v) => v + 1);
+    });
+    const offDrop = api.onImageDrop(({ keys }) => {
+      for (const k of keys) images.current.delete(k);
+    });
     api.ready();
-    return off;
+    return () => {
+      offScene();
+      offImage();
+      offDrop();
+    };
   }, []);
+
+  // Put image bytes (sent once, by key) back into the scene.
+  const scene = useMemo(
+    () => (raw ? { ...raw, items: rehydrateImages(raw.items, (k) => images.current.get(k)) } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- imageVersion signals new bytes in the ref
+    [raw, imageVersion],
+  );
 
   useEffect(() => {
     if (!scene) return;
     const seen = painted.current;
     const present = new Set(scene.items.map((i) => i.id));
     for (const id of seen) if (!present.has(id)) seen.delete(id);
-    const fresh = scene.items.map((i) => i.id).filter((id) => !seen.has(id));
+    const fresh = scene.items
+      .filter((i) => !seen.has(i.id) && isOnThisDisplay(i, scene.display.bounds))
+      .map((i) => i.id);
     if (fresh.length === 0) return;
     for (const id of fresh) seen.add(id);
     let raf2 = 0;
@@ -51,7 +96,7 @@ export function OverlayRoot() {
       cancelAnimationFrame(raf2);
       if (!fired) for (const id of fresh) seen.delete(id);
     };
-  }, [scene]);
+  }, [scene?.seq, scene?.display.bounds]); // eslint-disable-line react-hooks/exhaustive-deps -- re-run per scene, not per image
 
   if (!scene) return <div data-items={0} />;
   return <OverlayScene scene={scene} reduceMotion={scene.reduceMotion || prefersReduced} />;

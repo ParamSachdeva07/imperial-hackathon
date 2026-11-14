@@ -8,6 +8,16 @@ const api: PointyOverlayApi = {
     ipcRenderer.on(IPC.render, listener);
     return () => ipcRenderer.removeListener(IPC.render, listener);
   },
+  onImage(cb) {
+    const listener = (_e: IpcRendererEvent, msg: { key: string; src: string }) => cb(msg);
+    ipcRenderer.on(IPC.image, listener);
+    return () => ipcRenderer.removeListener(IPC.image, listener);
+  },
+  onImageDrop(cb) {
+    const listener = (_e: IpcRendererEvent, msg: { keys: string[] }) => cb(msg);
+    ipcRenderer.on(IPC.imageDrop, listener);
+    return () => ipcRenderer.removeListener(IPC.imageDrop, listener);
+  },
   painted(msg: PaintedMessage) {
     ipcRenderer.send(IPC.painted, msg);
   },

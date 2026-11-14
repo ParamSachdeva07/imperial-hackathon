@@ -99,6 +99,8 @@ describe("OverlayRoot", () => {
         push = cb;
         return () => {};
       },
+      onImage: () => () => {},
+      onImageDrop: () => () => {},
       painted,
       ready,
     };
@@ -150,5 +152,14 @@ describe("image slot decode failure", () => {
     fireEvent.error(img);
     expect(container.querySelector("[data-slot]")!.getAttribute("data-slot")).toBe("failed");
     expect(container.querySelector("img")).toBeNull();
+  });
+});
+
+describe("paint acks are per display", () => {
+  it("only the window whose display shows an item acks it", async () => {
+    const { isOnThisDisplay } = await import("./OverlayRoot");
+    const item = scene("ring-labeled").items[0]!;
+    expect(isOnThisDisplay(item, { x: 0, y: 0, width: 1280, height: 800 })).toBe(true);
+    expect(isOnThisDisplay(item, { x: 5000, y: 0, width: 1280, height: 800 })).toBe(false);
   });
 });

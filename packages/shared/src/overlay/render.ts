@@ -175,6 +175,10 @@ export const IPC = {
   painted: "overlay:painted",
   /** overlay renderer → main: ready to receive scenes */
   ready: "overlay:ready",
+  /** main → overlay renderer: { key, src } — image bytes, sent once per window (see sceneImages.ts) */
+  image: "overlay:image",
+  /** main → overlay renderer: { keys } — images no longer referenced */
+  imageDrop: "overlay:image-drop",
   /** fixture renderer → main: FixtureBoundsMessage */
   fixtureBounds: "fixture:bounds",
 } as const;

@@ -600,4 +600,26 @@ describe("OverlayService", () => {
     expect(item.scale).toBe(1); // text stays at full size (fontMin)
     expect(item.card.y + item.card.height).toBeLessThanOrEqual(720);
   });
+
+  it("an explainer shown without its (missing) anchor stays visible — it is not 'lost' later", async () => {
+    const r = await svc.handleTool("show_explainer", {
+      anchor: el("ghost"),
+      title: "T",
+      spec: { kind: "sequence", steps: [{ icon: "click", caption: "a" }, { icon: "send", caption: "b" }] },
+    });
+    for (let k = 0; k < 4; k++) {
+      clock.advance(300);
+      await flushPromises();
+    }
+    expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+    expect(types()).not.toContain("overlay.target_lost");
+  });
+
+  it("dispose cancels a pending step-appear check", async () => {
+    const r = await svc.handleTool("show_steps", { steps: [{ target: el("attach"), label: "A" }, { target: el("never"), label: "B" }] });
+    await svc.handleTool("advance_step", { stepsId: r.overlayId });
+    svc.dispose();
+    clock.advance(5000);
+    expect(types()).not.toContain("overlay.target_lost");
+  });
 });
