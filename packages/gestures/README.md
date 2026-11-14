@@ -66,28 +66,48 @@ Coordinates are **logical display points (Electron DIP)** relative to the displa
 
 `hand` is MediaPipe's handedness label, used as a per-hand ID. MediaPipe assumes a mirrored (selfie) image, so with a raw webcam frame "Left" may be the user's right hand. It is only used as an ID.
 
-## Using it in Electron
+## Using it in Electron (`@pointy/gestures/electron`)
+
+The gesture layer runs in a **hidden window** (camera + MediaPipe + interpreter) and reports to the main process over IPC. Everything lives in this package (`src/electron/`), so plugging it into `apps/desktop` is a few lines:
 
 ```ts
-// vision renderer (hidden BrowserWindow)
-import { GestureInterpreter } from "@pointy/gestures";
-import { HandDetector } from "@pointy/gestures/detector";
+// main process
+import { startGestureService } from "@pointy/gestures/electron";
+import { attachSystemMouse } from "@pointy/gestures/electron/mouse";
 
-const detector = await HandDetector.create({ wasmPath: "./mediapipe-wasm", modelPath: "./models/gesture_recognizer.task" });
-const interp = new GestureInterpreter({ id: display.id, width: display.bounds.width, height: display.bounds.height });
-// per frame:
-const events = interp.process(detector.detect(video, performance.now()));
-for (const e of events) window.pointy.sendGesture(e); // preload: ipcRenderer.send("gesture", e)
+const gestures = await startGestureService({
+  preloadPath: join(PRELOAD_DIR, "gestures.js"),        // built from src/electron/preload.ts
+  loadPage: (win) => loadRendererPage(win, "gestures"),  // a page whose script calls startVisionRenderer()
+});
+gestures.on("wake_requested", () => gestures.setSessionActive(true));   // then start voice, avatar…
+gestures.on("point_selected", (e) => /* TurnContext point */ e);
+gestures.on("region_selected", (e) => /* TurnContext polygon + bbox */ e);
+await attachSystemMouse(gestures);   // opt-in: "mouse"/"click" events move and click the real mouse
+// on session close (stop button, timeout): gestures.setSessionActive(false)
 ```
 
-Electron gotchas:
+| File | Role |
+|---|---|
+| `src/electron/service.ts` | main: hidden window, camera permission (own session partition), IPC with sender check, display tracking, `on()/onAny()/setSessionActive()/setConfig()` |
+| `src/electron/preload.ts` | sandboxed preload exposing `window.pointyGestures` (bundle with `externalizeDeps: false`) |
+| `src/electron/renderer.ts` | page logic: `startVisionRenderer({ wasmPath, modelPath })`. Timer-driven loop (hidden windows don't paint, so no requestAnimationFrame) |
+| `src/electron/mouse.ts` | opt-in real mouse + dwell clicks via nut-js; DIP → physical pixels on Windows |
+| `src/electron/protocol.ts` | IPC channels, commands, runtime validation of events from the renderer |
 
-- **The main process has no camera.** Run detection in a renderer, e.g. a hidden `BrowserWindow`, and forward events through a `contextBridge` preload to `ipcMain`.
-- **Hidden windows get throttled by Chromium.** Use `webPreferences: { backgroundThrottling: false }` on that window, or detection drops to ~1 fps.
-- **Web Workers can't call `getUserMedia`.** If detection moves to a worker, capture in the renderer and transfer `ImageBitmap`/`VideoFrame`s. `GestureInterpreter` is pure, so it can live anywhere.
-- **macOS camera permission**: add `NSCameraUsageDescription` to the app's Info.plist and test from the **packaged** app.
-- **Bundle the wasm and model** (`scripts/copy-wasm.mjs`, `npm run fetch-model`) so nothing depends on a CDN or venue Wi-Fi.
-- Call `interp.setDisplay(...)` when the active display changes.
+**Standalone launcher** (`electron/dev/`, works on Windows and macOS): hidden vision window, a mock session controller (opens on wake, closes after 20 s without gestures) and the real mouse, with gestures logged in the terminal.
+
+```bash
+npm run electron -w @pointy/gestures                         # use it with your camera
+POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # also show the camera window (debug)
+npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
+```
+
+Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
+
+Notes:
+- Bundle `nut-js` as external (`rollupOptions.external`): it ships a native addon.
+- macOS: the packaged app needs `NSCameraUsageDescription`, and Accessibility permission to move/click the mouse.
+- For packaged builds, ship the wasm and `gesture_recognizer.task` with the page (they're served from `.cache/public` in dev).
 
 ## Moving the real mouse
 
