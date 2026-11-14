@@ -1,0 +1,163 @@
+# Integration record (for humans and agents)
+
+This file says what has been merged into `main` and how, and how the pieces talk to each other. It also covers how to keep re-merging the feature branches as their owners push fixes. **Read this before touching an integration.**
+
+Last updated: 2026-11-14. Integration branch: `integration/overlay-anam`.
+
+---
+
+## 1. Branch map
+
+| Branch | What it is | Status |
+|---|---|---|
+| `main` | Integration target. Work lands via PRs. | Receives `integration/overlay-anam` |
+| `feat/overlay-tools` | **Pointy overlay**: the Electron app `apps/desktop`, the tool contract `packages/shared`, the explainer broker `backend/explainer-broker` and the dev CLI `tools/pointy-draw`. | ✅ Merged (stage 1) |
+| `feat/anam-overlay` | **Anam avatar**: the standalone Electron app in `anam-overlay/` (React and Vite) plus a FastAPI token broker on :8765. Its single commit sits on top of overlay-tools and adds only `anam-overlay/`. | ✅ Merged (stage 1) |
+| `feat/gestures-integration` | `packages/gestures`: camera hand tracking that becomes events, plus an Electron gesture service. Based on overlay-tools@2d3c0b5. It touches only `packages/gestures/`, root `vitest.config.ts` (adds a `gestures` project) and `package-lock.json`. | ⏳ Stage 2, not merged yet |
+| `feat/gestures` | An older, standalone version of the gestures package with unrelated history. | ❌ Superseded by `feat/gestures-integration`; do not merge |
+| (later) Jev AI / brain | The controller and model brain. | ⏳ Not started; see §7 |
+
+## 2. What was done in stage 1
+
+Commits on `integration/overlay-anam`, oldest first:
+1. `Merge feat/overlay-tools`: `--no-ff`, no conflicts. `main` was empty.
+2. `Merge feat/anam-overlay`: `--no-ff`, no conflicts. It adds only `anam-overlay/`.
+3. `chore(integration)`:
+   - Root `eslint.config.js` ignores `anam-overlay/**`, which has its own toolchain: TypeScript 7, `node --test`, its own lockfile.
+   - `apps/desktop/electron.vite.config.ts` pins the Pointy renderer dev server to port **5180**. Anam's Vite is hardcoded to 5173 with `strictPort`, so this keeps them from colliding.
+4. `feat(anam-overlay)`: adds a localhost **control server** to the Anam app. See §4.
+5. `feat(overlay)`: adds the **`move_avatar` tool and auto-dodge** in Pointy. See §5.
+
+`anam-overlay/` deliberately stays **outside** the npm workspaces (`packages/*`, `apps/*`, `tools/*`, `backend/*`), for three reasons:
+- Its tests import SDK internals by relative `node_modules` path.
+- Hoisting would break those imports.
+- Its TypeScript major version differs from the root's.
+
+Keep it standalone.
+
+## 3. Runtime layout (processes and ports)
+
+| Process | Start | Port / IPC |
+|---|---|---|
+| Pointy app (`apps/desktop`) | `npm run app` (root); `npm run voice` adds the realtime voice test window | Dev server **47615** (`~/.pointy/dev-server.json`); renderer dev **5180** |
+| Explainer broker (fal images) | `npm run broker` | **47620** |
+| Anam app (`anam-overlay`) | `cd anam-overlay && npm start` (or `npm run dev`) | Control server **47630**, falling back to an ephemeral port (`~/.pointy/anam-control.json`); Vite dev **5173** |
+| Anam token broker (FastAPI) | `cd anam-overlay && backend/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765` | **8765** |
+
+Secrets:
+- Root `.env` holds `FAL_KEY` and similar.
+- `anam-overlay/backend/.env` holds `ANAM_API_KEY` and `ANAM_PERSONA_ID`.
+- Never put the Anam key in the root `.env`. See `anam-overlay/README.md`.
+
+### Run both together
+1. Start the Anam backend: the uvicorn command above.
+2. Run `cd anam-overlay && npm install && npm run build && npm start`. The avatar dot appears top-right. Hover the corner and click to start a call; the avatar expands.
+3. Run `npm install && npm run app` at the root. Pointy finds Anam automatically through `~/.pointy/anam-control.json`. Set `POINTY_AVATAR=anam` to force it.
+4. Drive it:
+   - `npx pointy-draw move-avatar bottom_left`
+   - `npx pointy-draw highlight …` on something under the avatar; the avatar dodges.
+
+## 4. Anam control API (added in `anam-overlay/electron/control.mts`)
+
+Files and setup:
+- `control.mts` does not import `electron`.
+- `main.mts` has about 17 lines of hooks: an import, `startControlServer({ getState, moveTo })` after `createWindow()`, and `close()` on `before-quit` / `will-quit`.
+- A failure to start is logged and does not break the app.
+
+Server:
+- Binds `127.0.0.1`. Port is `ANAM_CONTROL_PORT`, default 47630, or an ephemeral port if that one is taken.
+- Discovery file: `ANAM_CONTROL_FILE`, default `~/.pointy/anam-control.json`, containing `{port, token, pid}`.
+  - The directory is mode 0700 and the file mode 0600, written atomically.
+  - It is removed on close, but only if it is still ours.
+
+Every request:
+- needs the `x-anam-control-token` header (401 without it);
+- needs Host `127.0.0.1:<port>` or `localhost:<port>` (403 otherwise);
+- must carry no `Origin` header (403 otherwise).
+
+Bodies are limited to 4 KB.
+
+| Route | Response |
+|---|---|
+| `GET /state` | `200 {ok:true, state:{expanded, dragging, bounds, workArea, displayId}}` · `503 {ok:false, reason:"no_window"}` |
+| `POST /move` `{x,y}` (window top-left, global DIP) | `200 {ok:true, bounds}` (clamped to the work area by `placeWindow`) · `409 collapsed / dragging` · `400 invalid_input` |
+
+The avatar moves **only while expanded** (in a call). The collapsed 56px dot always stays docked top-right, where its hover launcher lives. Collapsing still re-docks it.
+
+## 5. `move_avatar` tool and auto-dodge (Pointy side)
+
+**Contract** (`packages/shared/src/overlay/schemas.ts`, additive change 6):
+- Input: `MoveAvatarInput = { position?: "auto"|"top_left"|"top_right"|"bottom_left"|"bottom_right" (default auto), avoid?: Target, displayId?: string, turnId?: string }`.
+- New `ToolResult.reason`: `"avatar_unavailable"`. It covers no avatar running, collapsed, being dragged, and a failed move.
+- Success returns `{ok:true, visible:true, resolvedBounds: <new avatar bounds>}`.
+- The tool is in `MVP_TOOL_NAMES`, so it is exported to the model. The generated JSON in `packages/shared/generated/` is regenerated.
+
+**Code:**
+- `AvatarController` port: `packages/shared/src/overlay/interfaces.ts`.
+- `apps/desktop/src/main/overlay/avatar/AnamAvatarClient.ts`:
+  - polls `GET /state` every 500 ms, with a 1 s request timeout;
+  - re-reads the discovery file when a request fails, so it survives an Anam restart;
+  - implements both `AvatarController` and `AvoidRectsProvider`, so labels and cards avoid the **real** avatar while it is expanded.
+- `apps/desktop/src/main/overlay/avatar/avatarPlacement.ts` is the pure corner chooser. It uses a 24 px inset. `auto` stays put if the current spot is clear, and otherwise picks the corner with the least overlap.
+- `OverlayService.ts`:
+  - `case "move_avatar"`;
+  - **auto-dodge**: after a drawing shows, if its target inflated by 16 px overlaps the movable avatar, the avatar moves to the `auto` corner;
+  - auto-dodge is fire-and-forget, serialized, and limited to one dodge per 1.5 s;
+  - the tool result is never changed or delayed.
+- Wiring: `apps/desktop/src/main/index.ts` always starts `AnamAvatarClient` (unless `POINTY_AVATAR=mock`), so start order doesn't matter.
+  - `avoidRects` is `CompositeAvoidRects`: the real avatar's rects while Anam answers, otherwise `MockAvoidRects` (so `POINTY_AVATAR_RECT` and `none` behave as before).
+  - `scripts/e2e-cli.ts` pins `POINTY_AVATAR=mock`, so a running Anam can't skew the e2e layout.
+- Client robustness:
+  - It re-reads the discovery file on network errors **and** 401/403, so it reconnects after an Anam restart on the same port with a new token.
+  - It ignores a discovery file whose `pid` is dead.
+  - It keeps the last good state for 2 s across failed polls, so rects don't flicker. Definitive answers (collapsed, `no_window`) apply immediately.
+  - Start and dispose are idempotent.
+- Auto-dodge:
+  - It runs on `show()`, on step-guide advance (the `advance_step` tool and target selection), and when a previously unresolved target appears.
+  - Each check recomputes overlap from the drawings live **at execution time**.
+  - The 1.5 s limit counts only moves that actually happened. A check requested inside the window gets one trailing re-check.
+  - `dispose()` cancels pending moves.
+- Anam quit removes the discovery file synchronously. A start that resolves after quit is closed. The control server has 5 s request and header timeouts.
+- Other surfaces:
+  - the `pointy-draw move-avatar [position] [target]` CLI;
+  - the realtime instructions;
+  - an eval request;
+  - docs in `POINTY_OVERLAY_INTEGRATION.md`, the overlay `README.md` and `POINTY_OVERLAY_SPEC.md`.
+
+## 6. Re-syncing when a feature branch gets fixes
+
+Owners keep pushing to their `feat/*` branches. To pull their fixes in:
+```bash
+git fetch origin
+git switch integration/overlay-anam        # or a fresh branch off main once this has landed
+git merge --no-ff origin/feat/overlay-tools
+git merge --no-ff origin/feat/anam-overlay
+npm install && npm run typecheck && npm run lint && npm test
+(cd anam-overlay && npm install && npm run build && npm test)
+```
+
+Conflict hot spots:
+- **`anam-overlay/electron/main.mts`**: only our small hook block, marked by `startControlServer`, `control`, `stopControl`. Keep it when resolving.
+  - If the owner renames `placeWindow`, `expanded` or `move`, update `getState` / `moveTo` there.
+  - `control.mts` and `tests/control.test.mjs` are integration-owned files; the owner's branch doesn't have them.
+- **`packages/shared/src/overlay/schemas.ts` and `tools.ts`**: the contract. If overlay-tools adds tools or reasons, take both sides and rerun `npm run gen:tools`. Never hand-merge `generated/*.json`.
+- **`OverlayService.ts`**: the `move_avatar` case and the auto-dodge hook after `show()`.
+- **`package-lock.json`**: regenerate it with `npm install` rather than hand-merging.
+
+Better still: ask the owners to merge `main` back into their branches once this PR lands. Then future merges are pure fast-forwards of their own work.
+
+## 7. Known gaps / next steps
+
+- **Stage 2, gestures:**
+  - Merge `origin/feat/gestures-integration`. Expect conflicts only in `vitest.config.ts` (keep both projects) and `package-lock.json` (regenerate).
+  - Then wire it into `apps/desktop` per `packages/gestures/GESTURES_HANDOFF.md` §6: preload and renderer entries, `startGestureService` in `main/index.ts`, wasm and model serving, and `NSCameraUsageDescription`.
+  - Watch for camera contention with the Anam call.
+- **Jev AI / brain:** not integrated. The controller should use `exportToolDefinitions()` (which now includes `move_avatar`) and `createOverlayControl({ avatar })`. It should also decide whether to keep Pointy's own `POINTY_VOICE` realtime loop or let Anam be the only voice.
+- **Flaky upstream test:** `anam-overlay/tests/overlay.test.mjs:120` (`layout.width === layout.height` on the avatar circle) fails about 1 in 5 runs, off by roughly 1e-5 px mid-transition. It reproduces on the untouched `feat/anam-overlay` code, so it is not caused by this integration. Report it to the anam owner; a tolerance compare would fix it.
+- **Real home dir in anam's Playwright tests:** they launch the real app, which writes, then removes, `~/.pointy/anam-control.json`. Don't run them while a real Anam session is open, or set `ANAM_CONTROL_FILE` to a temp path.
+- **Constants live on both sides:** port 47630, `~/.pointy/anam-control.json` and the `ANAM_CONTROL_*` env names are defined in both `anam-overlay/electron/control.mts` and `AnamAvatarClient.ts`. Change them together.
+- **Other limits:**
+  - The control API can't start or end a call, or expand or collapse the avatar.
+  - No packaging: both apps run unpackaged.
+  - macOS only (`apps/desktop` platform layer).
+- PR #1 (`feat/overlay-tools` → `main`) is superseded by the integration PR.

@@ -1,0 +1,15 @@
+{
+  "anchor": { "kind": "element", "elementId": "fixture.attach" },
+  "title": "What these buttons do",
+  "spec": {
+    "kind": "anatomy",
+    "region": { "kind": "element", "elementId": "fixture.toolbar" },
+    "callouts": [
+      { "target": { "kind": "element", "elementId": "fixture.newEmail" }, "label": "Write a new email" },
+      { "target": { "kind": "element", "elementId": "fixture.reply" }, "label": "Answer this email" },
+      { "target": { "kind": "element", "elementId": "fixture.delete" }, "label": "Throw this email away" },
+      { "target": { "kind": "element", "elementId": "fixture.attach" }, "label": "Add a photo or file" },
+      { "target": { "kind": "element", "elementId": "fixture.sendButton" }, "label": "Send your email" }
+    ]
+  }
+}

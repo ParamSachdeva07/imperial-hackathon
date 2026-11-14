@@ -1,0 +1,20 @@
+{
+  "title": "What is the cloud?",
+  "spec": {
+    "kind": "concept",
+    "panels": [
+      {
+        "caption": "Your photos are copied from your computer...",
+        "imagePrompt": "a small house with a laptop on a table, a big friendly cloud above it, dotted lines going up from the laptop to the cloud"
+      },
+      {
+        "caption": "...to a safe building far away, called 'the cloud'.",
+        "imagePrompt": "a large calm building full of tidy shelves of photo albums, seen from the front"
+      },
+      {
+        "caption": "So you can see them on any device, any time.",
+        "imagePrompt": "a smiling older person holding a tablet showing a photo, sitting in a comfortable armchair"
+      }
+    ]
+  }
+}

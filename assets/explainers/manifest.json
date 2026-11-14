@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "prompt": "a small house with a laptop on a table, a big friendly cloud above it, dotted lines going up from the laptop to the cloud",
+      "styleId": "default",
+      "file": "34dc8ff3c372.jpg"
+    },
+    {
+      "prompt": "a large calm building full of tidy shelves of photo albums, seen from the front",
+      "styleId": "default",
+      "file": "1fb8074f19a5.jpg"
+    },
+    {
+      "prompt": "a smiling older person holding a tablet showing a photo, sitting in a comfortable armchair",
+      "styleId": "default",
+      "file": "bba82068bfa4.jpg"
+    },
+    {
+      "prompt": "a neat envelope with a green tick seal, friendly and tidy",
+      "styleId": "default",
+      "file": "acfc178bf63b.jpg"
+    },
+    {
+      "prompt": "a crumpled envelope with a fishing hook coming out of it",
+      "styleId": "default",
+      "file": "46c77d37fa65.jpg"
+    }
+  ]
+}
