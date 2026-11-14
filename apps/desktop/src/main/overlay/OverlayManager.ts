@@ -65,54 +65,134 @@ export interface OverlayManagerOptions {
 }
 
 export class OverlayManager {
-  constructor(_opts: OverlayManagerOptions = {}) {}
+  private readonly maxVisible: number;
+  private readonly historySize: number;
+  private readonly now: () => number;
+  private readonly items = new Map<string, Annotation>();
+  private idCounter = 0;
+  private currentSet: HistoryEntry[] = [];
+  private history: HistoryEntry[][] = [];
+
+  constructor(opts: OverlayManagerOptions = {}) {
+    this.maxVisible = opts.maxVisible ?? 3;
+    this.historySize = opts.historySize ?? 5;
+    this.now = opts.now ?? Date.now;
+  }
 
   /** Unique id with a readable prefix, e.g. nextId("hl") → "hl_1". */
-  nextId(_prefix: string): string {
-    throw new Error("not implemented: OverlayManager.nextId");
+  nextId(prefix: string): string {
+    this.idCounter += 1;
+    return `${prefix}_${this.idCounter}`;
   }
 
-  add(_a: NewAnnotation): { annotation: Annotation; dismissed: Dismissal[] } {
-    throw new Error("not implemented: OverlayManager.add");
+  add(a: NewAnnotation): { annotation: Annotation; dismissed: Dismissal[] } {
+    const annotation: Annotation = {
+      id: a.id,
+      toolName: a.toolName,
+      input: a.input,
+      resolvedBounds: a.resolvedBounds,
+      displayId: a.displayId,
+      state: a.pending ? "pending" : "visible",
+      createdAt: this.now(),
+      turnId: a.turnId,
+      cue: a.cue,
+    };
+    // Re-adding an id replaces the old record (and moves it to the end).
+    this.items.delete(a.id);
+    this.items.set(a.id, annotation);
+    this.currentSet.push({ toolName: a.toolName, input: a.input });
+    const dismissed = a.pending ? [] : this.applyRules(annotation);
+    return { annotation, dismissed };
   }
 
-  reveal(_cueId: string): { revealed: Annotation[]; dismissed: Dismissal[] } {
-    throw new Error("not implemented: OverlayManager.reveal");
+  reveal(cueId: string): { revealed: Annotation[]; dismissed: Dismissal[] } {
+    const revealed: Annotation[] = [];
+    const dismissed: Dismissal[] = [];
+    const pending = [...this.items.values()].filter((x) => x.state === "pending" && x.cue === cueId);
+    for (const a of pending) {
+      a.state = "visible";
+      dismissed.push(...this.applyRules(a, new Set(pending)));
+      revealed.push(a);
+    }
+    return { revealed, dismissed };
   }
 
-  get(_id: string): Annotation | undefined {
-    throw new Error("not implemented: OverlayManager.get");
+  get(id: string): Annotation | undefined {
+    return this.items.get(id);
   }
 
   /** All annotations, oldest first. */
   all(): Annotation[] {
-    throw new Error("not implemented: OverlayManager.all");
+    return [...this.items.values()];
   }
 
   visible(): Annotation[] {
-    throw new Error("not implemented: OverlayManager.visible");
+    return this.all().filter((a) => a.state === "visible");
   }
 
-  update(_id: string, _patch: Partial<Pick<Annotation, "resolvedBounds" | "displayId" | "input">>): void {
-    throw new Error("not implemented: OverlayManager.update");
+  update(id: string, patch: Partial<Pick<Annotation, "resolvedBounds" | "displayId" | "input">>): void {
+    const a = this.items.get(id);
+    if (!a) return;
+    if (patch.resolvedBounds !== undefined) a.resolvedBounds = patch.resolvedBounds;
+    if (patch.displayId !== undefined) a.displayId = patch.displayId;
+    if (patch.input !== undefined) a.input = patch.input;
   }
 
   /** visible|pending → exiting. Returns false if unknown or already exiting. */
-  beginExit(_id: string): boolean {
-    throw new Error("not implemented: OverlayManager.beginExit");
+  beginExit(id: string): boolean {
+    const a = this.items.get(id);
+    if (!a || a.state === "exiting") return false;
+    a.state = "exiting";
+    return true;
   }
 
   /** Forget an annotation entirely (after its exit animation). */
-  remove(_id: string): void {
-    throw new Error("not implemented: OverlayManager.remove");
+  remove(id: string): void {
+    this.items.delete(id);
   }
 
   /** Drop pending annotations (returns their ids) and push the current history set. */
   endTurn(): string[] {
-    throw new Error("not implemented: OverlayManager.endTurn");
+    const dropped: string[] = [];
+    for (const a of [...this.items.values()]) {
+      if (a.state === "pending") {
+        dropped.push(a.id);
+        this.items.delete(a.id);
+      }
+    }
+    if (this.currentSet.length > 0) {
+      this.history.push(this.currentSet);
+      if (this.history.length > this.historySize) {
+        this.history.splice(0, this.history.length - this.historySize);
+      }
+      this.currentSet = [];
+    }
+    return dropped;
   }
 
   lastSet(): HistoryEntry[] | null {
-    throw new Error("not implemented: OverlayManager.lastSet");
+    const last = this.history[this.history.length - 1];
+    return last ? last.map((e) => ({ ...e })) : null;
+  }
+
+  /** Apply replace/evict rules for an annotation that just became visible. Members of the same reveal `batch` are not replaced while still pending (later ones replace earlier ones as they are revealed). */
+  private applyRules(added: Annotation, batch: ReadonlySet<Annotation> = new Set()): Dismissal[] {
+    const dismissed: Dismissal[] = [];
+    if (added.toolName === "highlight" || added.toolName === "show_steps") {
+      for (const o of this.items.values()) {
+        if (o === added || (batch.has(o) && o.state === "pending") || o.toolName !== added.toolName || o.state === "exiting") continue;
+        o.state = "exiting";
+        dismissed.push({ id: o.id, reason: "replaced" });
+      }
+    }
+    for (;;) {
+      const visible = this.visible();
+      if (visible.length <= this.maxVisible) break;
+      const victim = visible.find((o) => o !== added && o.toolName !== "show_steps");
+      if (!victim) break;
+      victim.state = "exiting";
+      dismissed.push({ id: victim.id, reason: "evicted" });
+    }
+    return dismissed;
   }
 }

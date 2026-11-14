@@ -10,6 +10,8 @@
  *     region, clipped to the crop; `inside` is false when it doesn't overlap the crop at all.
  */
 import type { DisplayInfo, Rect, Size } from "@pointy/shared/overlay";
+import { globalDipToDisplayPx } from "../coords";
+import { inflate, intersection } from "../geometry";
 
 export interface CropPlan {
   displayId: string;
@@ -28,14 +30,30 @@ export interface NormalisedRect {
   inside: boolean;
 }
 
-export function planCrop(_region: Rect, _display: DisplayInfo, _padFraction = 0.15): CropPlan {
-  throw new Error("not implemented: anatomyCrop.planCrop");
+export function planCrop(region: Rect, display: DisplayInfo, padFraction = 0.15): CropPlan {
+  const padded = inflate(region, region.width * padFraction, region.height * padFraction);
+  const clamped = intersection(padded, display.bounds) ?? { ...display.bounds };
+  const px = globalDipToDisplayPx(clamped, display) ?? { x: 0, y: 0, width: 0, height: 0 };
+  return { displayId: display.id, scaleFactor: display.scaleFactor, region: clamped, px };
 }
 
-export function fitSize(_content: Size, _box: Size): Size & { scale: number } {
-  throw new Error("not implemented: anatomyCrop.fitSize");
+export function fitSize(content: Size, box: Size): Size & { scale: number } {
+  if (content.width <= 0 || content.height <= 0 || box.width <= 0 || box.height <= 0) {
+    return { width: 0, height: 0, scale: 0 };
+  }
+  const scale = Math.min(box.width / content.width, box.height / content.height);
+  return { width: content.width * scale, height: content.height * scale, scale };
 }
 
-export function normaliseInCrop(_target: Rect, _plan: CropPlan): NormalisedRect {
-  throw new Error("not implemented: anatomyCrop.normaliseInCrop");
+export function normaliseInCrop(target: Rect, plan: CropPlan): NormalisedRect {
+  const clipped = intersection(target, plan.region);
+  if (!clipped) return { nx: 0, ny: 0, nw: 0, nh: 0, inside: false };
+  const { region } = plan;
+  return {
+    nx: (clipped.x - region.x) / region.width,
+    ny: (clipped.y - region.y) / region.height,
+    nw: clipped.width / region.width,
+    nh: clipped.height / region.height,
+    inside: true,
+  };
 }
