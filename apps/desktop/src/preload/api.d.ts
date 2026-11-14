@@ -1,0 +1,22 @@
+/** Globals exposed by the preload scripts (contextIsolation bridge). */
+import type { FixtureBoundsMessage, PaintedMessage, RenderScene } from "@pointy/shared/overlay/render";
+
+export interface PointyOverlayApi {
+  /** Subscribe to scenes from main. Returns unsubscribe. */
+  onScene(cb: (scene: RenderScene) => void): () => void;
+  /** Tell main which item ids were painted for a scene seq. */
+  painted(msg: PaintedMessage): void;
+  /** Tell main the renderer is ready to receive scenes. */
+  ready(): void;
+}
+
+export interface PointyFixtureApi {
+  reportBounds(msg: FixtureBoundsMessage): void;
+}
+
+declare global {
+  interface Window {
+    pointyOverlay?: PointyOverlayApi;
+    pointyFixture?: PointyFixtureApi;
+  }
+}
