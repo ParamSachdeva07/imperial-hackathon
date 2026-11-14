@@ -1,0 +1,17 @@
+{
+  "anchor": { "kind": "element", "elementId": "fixture.emailBody" },
+  "title": "Real email or scam?",
+  "spec": {
+    "kind": "compare",
+    "left": {
+      "title": "Real email",
+      "points": ["Uses your name", "No rush or threats", "Never asks for passwords"],
+      "imagePrompt": "a neat envelope with a green tick seal, friendly and tidy"
+    },
+    "right": {
+      "title": "Scam email",
+      "points": ["Says 'URGENT'", "Threatens to close your account", "Strange web link"],
+      "imagePrompt": "a crumpled envelope with a fishing hook coming out of it"
+    }
+  }
+}

@@ -10,3 +10,4 @@ coverage/
 !.env.example
 backend/explainer-broker/.cache/
 artifacts/
+.claude/
