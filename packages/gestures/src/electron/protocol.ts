@@ -38,6 +38,7 @@ export type VisionStatus =
 // Record<…, true> makes the compiler flag any event type missing from this list.
 const EVENT_TYPES: Record<GestureEventType, true> = {
   wake_requested: true,
+  wake_progress: true,
   cursor_moved: true,
   dwell_progress: true,
   point_selected: true,

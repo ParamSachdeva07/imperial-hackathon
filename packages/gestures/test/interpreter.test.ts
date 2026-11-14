@@ -127,6 +127,50 @@ describe("wake", () => {
   });
 });
 
+describe("wake progress (ring around the raised hand)", () => {
+  it("fills from 0 to 1 while the palm is held still, then wake fires", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(it, frames(0, 1500, () => [palmAt("Left", 0.5, 0.5)]));
+    const prog = ofType(evs, "wake_progress").map((e) => e.progress);
+    expect(prog.length).toBeGreaterThan(10);
+    expect(prog.every((p, i) => i === 0 || p >= at(prog, i - 1))).toBe(true); // monotonic
+    expect(at(prog, prog.length - 1)).toBe(1);
+    const lastProg = ofType(evs, "wake_progress").pop()!;
+    const wake = ofType(evs, "wake_requested")[0]!;
+    expect(lastProg.t).toBeLessThanOrEqual(wake.t);
+    // palm centre maps onto the display
+    expect(lastProg.x).toBeGreaterThan(0);
+    expect(lastProg.x).toBeLessThan(DISPLAY.width);
+  });
+
+  it("a moving hand never completes the ring and the UI is told when it breaks", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(
+      it,
+      frames(0, 3000, (i) => {
+        const a = (i / 6) * 2 * Math.PI;
+        return [palmAt("Left", 0.6 + 0.06 * Math.cos(a), 0.3 + 0.06 * Math.sin(a))];
+      }),
+    );
+    const prog = ofType(evs, "wake_progress").map((e) => e.progress);
+    expect(prog.every((p) => p < 1)).toBe(true);
+    expect(ofType(evs, "wake_requested")).toHaveLength(0);
+  });
+
+  it("lowering the hand mid-hold sends a single progress 0", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(it, [...frames(0, 450, () => [palmAt("Left", 0.5, 0.5)]), ...frames(450, 600, () => [])]);
+    const prog = ofType(evs, "wake_progress");
+    expect(at(prog, prog.length - 1).progress).toBe(0);
+    expect(prog.filter((e) => e.progress === 0)).toHaveLength(1);
+  });
+
+  it("no ring while a session is already open", () => {
+    const evs = run(active(), frames(0, 1500, () => [palmAt("Left", 0.5, 0.5)]));
+    expect(ofType(evs, "wake_progress")).toHaveLength(0);
+  });
+});
+
 describe("pointing", () => {
   it("is ignored before the session is open", () => {
     const it = new GestureInterpreter(DISPLAY);

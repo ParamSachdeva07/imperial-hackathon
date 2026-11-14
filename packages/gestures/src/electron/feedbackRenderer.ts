@@ -22,6 +22,7 @@ const C = {
   dwell: "#2ecc71",
   click: "#ff9f43",
   region: "#2f9bff",
+  wake: "#8fd3ff",
 };
 
 export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void {
@@ -47,6 +48,8 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
   let clickProgress = 0;
   let clickFlash: { x: number; y: number; at: number } | null = null;
   let selection: { s: Selection; at: number } | null = null;
+  let wake: { x: number; y: number; progress: number } | null = null;
+  let wakeFlash: { x: number; y: number; at: number } | null = null;
 
   const reset = () => {
     cursor = null;
@@ -58,6 +61,13 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
 
   const apply = (e: GestureEvent, now: number) => {
     switch (e.type) {
+      case "wake_progress":
+        wake = e.progress > 0 ? { x: e.x, y: e.y, progress: e.progress } : null;
+        break;
+      case "wake_requested":
+        if (wake) wakeFlash = { x: wake.x, y: wake.y, at: now };
+        wake = null;
+        break;
       case "cursor_moved":
         cursor = { x: e.x, y: e.y };
         trail.push({ x: e.x, y: e.y, t: now });
@@ -129,6 +139,19 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
     }
     g.setTransform(d, 0, 0, d, 0, 0);
     g.clearRect(0, 0, w, h);
+
+    // Wake: big ring around the raised hand while it is held still (session not open yet),
+    // then a short expanding confirmation.
+    if (wake) ring(wake.x, wake.y, 56, wake.progress, C.wake);
+    if (wakeFlash) {
+      const age = (now - wakeFlash.at) / 600;
+      if (age >= 1) wakeFlash = null;
+      else {
+        g.globalAlpha = 1 - age;
+        ring(wakeFlash.x, wakeFlash.y, 56 + 50 * age, 1, C.wake);
+        g.globalAlpha = 1;
+      }
+    }
 
     if (active) {
       // Selected point / region, fading out over the last second of its life.

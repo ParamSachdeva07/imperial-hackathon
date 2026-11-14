@@ -31,6 +31,8 @@ export interface GestureFeedback {
 
 // Events the overlay draws; others (wake, scroll, mouse moves the OS already shows) are not sent.
 const DRAWN = new Set<GestureEvent["type"]>([
+  "wake_progress",
+  "wake_requested",
   "cursor_moved",
   "dwell_progress",
   "point_selected",

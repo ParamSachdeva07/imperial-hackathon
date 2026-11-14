@@ -61,7 +61,14 @@ async function main(): Promise<void> {
   const recorder = selfTest ? startSelfTestRecorder(service) : null;
 
   const useMouse = env("POINTY_GESTURES_NO_MOUSE") !== "1";
-  if (useMouse) await attachSystemMouse(service, { log });
+  if (useMouse) {
+    await attachSystemMouse(service, {
+      log,
+      onAction: (a) => {
+        if (a.type === "scroll") recorder?.scrolled(a.up);
+      },
+    });
+  }
 
   let feedback: GestureFeedback | null = null;
   if (env("POINTY_GESTURES_NO_FEEDBACK") !== "1") {
@@ -99,6 +106,7 @@ type Service = Awaited<ReturnType<typeof startGestureService>>;
 function startSelfTestRecorder(service: Service) {
   const started = Date.now();
   const seen: GestureEvent[] = [];
+  let scrolledUp = 0;
   const probe: { afterClick: { x: number; y: number } | null } = { afterClick: null };
   const nutPromise = import("@nut-tree-fork/nut-js").catch(() => null);
   service.onAny((e) => {
@@ -114,11 +122,24 @@ function startSelfTestRecorder(service: Service) {
   });
 
   return {
+    scrolled(up: number) {
+      scrolledUp += up;
+    },
     async finish(useMouse: boolean, feedback: GestureFeedback | null): Promise<void> {
-      const painted: { whileDrawing: number | null; idle: number | null } = { whileDrawing: null, idle: null };
+      const painted: { whileDrawing: number | null; idle: number | null; wakeRing: number | null } = {
+        whileDrawing: null,
+        idle: null,
+        wakeRing: null,
+      };
       if (feedback) {
         await new Promise((r) => setTimeout(r, 300)); // let the overlay paint its first (empty) frame
         painted.idle = await paintedPixels(feedback);
+        service.on("wake_progress", (e) => {
+          if (painted.wakeRing === null && e.progress > 0.5) {
+            painted.wakeRing = -1; // capture once
+            void paintedPixels(feedback).then((n) => (painted.wakeRing = n));
+          }
+        });
         service.on("dwell_progress", (e) => {
           if (painted.whileDrawing === null && e.progress > 0.5) {
             painted.whileDrawing = -1; // capture once
@@ -130,7 +151,9 @@ function startSelfTestRecorder(service: Service) {
 
       const count = (type: GestureEvent["type"], phase?: string) =>
         seen.filter((e) => e.type === type && (!phase || ("phase" in e && e.phase === phase))).length;
+      const wakeAt = seen.find((e) => e.type === "wake_requested")?.t ?? Infinity;
       const checks: [string, boolean][] = [
+        ["wake ring progresses before the wake", seen.filter((e) => e.type === "wake_progress" && e.t <= wakeAt).length > 5],
         ["one wake", count("wake_requested") === 1],
         ["mouse moved", count("mouse", "move") > 10],
         ["one click", count("click") === 1],
@@ -140,9 +163,10 @@ function startSelfTestRecorder(service: Service) {
       ];
 
       if (feedback) {
-        log(`diag: feedback overlay painted pixels — idle ${painted.idle}, while drawing ${painted.whileDrawing}`);
+        log(`diag: feedback overlay painted pixels — idle ${painted.idle}, wake ring ${painted.wakeRing}, while drawing ${painted.whileDrawing}`);
         checks.push(["feedback overlay empty when idle", painted.idle === 0]);
         checks.push(["feedback overlay draws the cursor + ring", (painted.whileDrawing ?? 0) > 500]);
+        checks.push(["feedback overlay draws the wake ring", (painted.wakeRing ?? 0) > 500]);
         checks.push(["feedback overlay stays on top", feedback.window.isAlwaysOnTop()]);
       }
 
@@ -165,6 +189,8 @@ function startSelfTestRecorder(service: Service) {
             `after click ${a ? `(${a.x}, ${a.y})` : "n/a"}; at end (${atEnd.x}, ${atEnd.y})`,
         );
         checks.push(["real mouse at the click position", !!a && Math.abs(a.x - expected.x) <= 3 && Math.abs(a.y - expected.y) <= 3]);
+        log(`diag: fist dragged down → real scroll up ${scrolledUp} (OS units)`);
+        checks.push(["fist drag down scrolls the page up", scrolledUp > 0]);
       }
 
       for (const [name, ok] of checks) log(`${ok ? "PASS" : "FAIL"}  ${name}`);

@@ -14,7 +14,7 @@ Read this before touching hand tracking, gestures, the camera, or real mouse act
 - Camera capture, MediaPipe hand tracking (`@mediapipe/tasks-vision` GestureRecognizer, 2 hands)
 - Gesture interpretation: wake, finger cursor, dwell selection, circle → region, mouse mode + dwell click, fist scroll
 - An Electron gesture service (hidden vision window + IPC to main)
-- **On-screen feedback for the user's own gestures**: drawing cursor, trail, hold rings, selected point/region (transparent click-through overlay window)
+- **On-screen feedback for the user's own gestures**: wake ring around the raised hand, drawing cursor, trail, hold rings, selected point/region (transparent click-through overlay window)
 - Optional real mouse moves/clicks (nut-js)
 
 **This package does NOT own** (other teammates' parts, consumed through events):
@@ -29,11 +29,11 @@ Plan mapping (Notion plan "Pointy (TBD)"): this covers the **MediaPipe worker** 
 
 | User gesture | Events | Notes |
 |---|---|---|
-| Open palm, raised, fingers up, held **still** 0.7 s | `wake_requested` | Only while the session is **closed**. Edge-triggered (once per raise), re-arms when the palm goes away. A moving hand (scratching, waving) does not wake. Works anywhere in the camera frame. |
+| Open palm, raised, fingers up, held **still** 0.7 s | `wake_progress` 0→1 (ring around the hand), then `wake_requested` | Only while the session is **closed**. Edge-triggered (once per raise), re-arms when the palm goes away. A moving hand (scratching, waving) does not wake. Works anywhere in the camera frame. |
 | **One finger** (index) | `mouse` start/move/end | Drives the **real system mouse** (if the controller attaches it). |
 | One finger, still ~1 s | `click_progress` 0→1, then `click` | **Dwell left click** where the mouse is. Needs ≥40 pt of movement before it can click again. Raising a still finger never clicks. |
 | **Two fingers held together** (index + middle) | `cursor_moved`, `dwell_progress`, then `point_selected` or `region_selected` | Drawing/selection cursor. Still ~0.8 s → point. Closed loop then still → region (convex hull polygon + bbox). |
-| Closed **fist**, moved | `scroll` start/move/end with `dx`, `dy` | Drag semantics (hand down ⇒ content down ⇒ scroll up). |
+| Closed **fist**, moved | `scroll` start/move/end with `dx`, `dy` | Drag semantics (hand down ⇒ content down ⇒ scroll up). With `attachSystemMouse`, becomes real wheel scrolling of the window under the mouse pointer. |
 | Two fingers spread (V) | nothing | Intentionally unused. |
 | Drawing hand disappears or changes pose | `hand_lost` | `reason: "absent" \| "pose_changed"`. **Only** emitted for the drawing (two-finger) cursor: it means "the stroke ended without a selection". |
 
@@ -49,6 +49,7 @@ Coordinates are **logical display points (Electron DIP)**, relative to the top-l
 
 ```ts
 { type: "wake_requested", source: "open_palm", hand, heldForMs, t }
+{ type: "wake_progress",  hand, progress /*0..1, 0 = hold broken*/, x, y, displayId, t }   // session closed only; x/y = palm on the display
 { type: "cursor_moved",   hand, x, y, displayId, t }
 { type: "dwell_progress", hand, progress /*0..1, 0 = hold broken*/, x, y, displayId, t }
 { type: "point_selected", hand, x, y, displayId, heldForMs, t }
@@ -89,7 +90,8 @@ gestures.setConfig({ clickDwellMs: 1200 });
 gestures.display;                      // { id, width, height, bounds } of the mapped display
 gestures.dispose();
 
-const detachMouse = await attachSystemMouse(gestures);  // OPT-IN: "mouse"/"click" events move/click the real OS mouse
+const detachMouse = await attachSystemMouse(gestures);  // OPT-IN: "mouse"/"click"/"scroll" events move, click and wheel-scroll the real OS mouse
+                                                       // options: { click?: false, scroll?: false, scrollPxPerNotch?: 100, onAction? }
 
 import { startGestureFeedback } from "@pointy/gestures/electron/feedback";
 const feedback = await startGestureFeedback(gestures, {
@@ -104,7 +106,7 @@ Feedback window flags mirror the AI overlay's mac platform adapter: transparent,
 
 What the service already does: hidden `BrowserWindow` with `backgroundThrottling: false`; camera permission granted **only** to that window via its own session partition (`pointy-gestures`), so the app's default session is untouched; macOS camera prompt (`askForMediaAccess`); IPC with sender check + runtime validation of every event; display-change tracking; reload once if the vision page crashes.
 
-**Decision for the controller owner:** the plan says desktop actions start only when the person asks by voice. `mouse`, `click` and `scroll` are **direct manipulation**. `attachSystemMouse` is opt-in for exactly this reason. Decide whether to attach it, attach it only while the session is open, or gate clicks behind confirmation. Scroll is only emitted as events: turning it into real scrolling (agent-desktop / nut-js) is not implemented yet.
+**Decision for the controller owner:** the plan says desktop actions start only when the person asks by voice. `mouse`, `click` and `scroll` are **direct manipulation**. `attachSystemMouse` is opt-in for exactly this reason. Decide whether to attach it, attach it only while the session is open, or gate clicks behind confirmation. Scroll units are converted per platform (Windows wheel delta, macOS pixels, Linux notches).
 
 ---
 
@@ -122,7 +124,7 @@ What the service already does: hidden `BrowserWindow` with `backgroundThrottling
 | `src/electron/preload.ts`, `api.ts` | Sandboxed preload exposing `window.pointyGestures` |
 | `src/electron/renderer.ts` | `startVisionRenderer({ wasmPath, modelPath, ... })`: camera → detector → interpreter → IPC. Timer-driven loop (hidden windows don't paint) |
 | `src/electron/feedback.ts`, `feedbackPreload.ts`, `feedbackRenderer.ts` | On-screen feedback overlay: main window, preload, drawing |
-| `src/electron/mouse.ts`, `coords.ts` | Opt-in real mouse + dwell clicks (nut-js), DIP → physical pixels on Windows |
+| `src/electron/mouse.ts`, `coords.ts` | Opt-in real mouse, dwell clicks and wheel scrolling (nut-js); DIP → physical pixels on Windows; per-platform scroll units |
 | `src/electron/protocol.ts` | IPC channel names, commands, validation |
 | `electron/dev/*` | Standalone launcher (mock controller, debug view, self-test). Dev only, not for the app |
 | `playground/` | Browser test page (Vite). Dev only |
@@ -134,9 +136,9 @@ What the service already does: hidden `BrowserWindow` with `backgroundThrottling
 
 ```bash
 npm install                                     # at the repo root
-npx vitest run --project gestures               # 48 gesture tests (also part of `npm test`: 468 total)
+npx vitest run --project gestures               # 55 gesture tests (also part of `npm test`)
 npm run typecheck && npm run lint               # whole repo
-npm run electron:selftest -w @pointy/gestures   # real Electron, hidden window, synthetic hands → interpreter → IPC → mock controller → real mouse + feedback overlay (checks it paints); exits 0/1
+npm run electron:selftest -w @pointy/gestures   # real Electron, hidden window, synthetic hands → interpreter → IPC → mock controller → real mouse, click and scroll + feedback overlay (checks the wake ring and cursor paint); exits 0/1
 npm run electron -w @pointy/gestures            # standalone launcher with the real camera (Windows + macOS)
 POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures   # + debug window (camera, skeleton, gesture label, mini screen)
 ```

@@ -11,7 +11,7 @@ export interface MockControllerOptions {
   log: (msg: string) => void;
 }
 
-const QUIET = new Set(["cursor_moved", "dwell_progress", "click_progress"]);
+const QUIET = new Set(["cursor_moved", "dwell_progress", "click_progress", "wake_progress"]);
 
 export function describe(e: GestureEvent): string | null {
   switch (e.type) {

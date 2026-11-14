@@ -25,6 +25,8 @@ interface HandState {
   palmGoneSince: number | null;
   holdStart: number | null;
   holdAnchor: Vec2 | null;
+  /** Last wake_progress sent (to send a single 0 when the hold breaks). */
+  wakeProgress: number;
 }
 
 interface PointerState {
@@ -182,7 +184,9 @@ export class GestureInterpreter {
       this.updateWake(st, hand, pose, t, events);
     }
     for (const [label, st] of this.hands) {
-      if (!seen.has(label)) this.notePalmGone(st, t);
+      if (seen.has(label)) continue;
+      this.notePalmGone(st, t);
+      this.breakWakeProgress(st, label, t, events);
     }
 
     if (!this.sessionActive) return events;
@@ -296,6 +300,7 @@ export class GestureInterpreter {
         palmGoneSince: null,
         holdStart: null,
         holdAnchor: null,
+        wakeProgress: 0,
       };
       this.hands.set(label, st);
     }
@@ -313,6 +318,7 @@ export class GestureInterpreter {
       st.holdStart = null;
       st.holdAnchor = null;
       this.notePalmGone(st, t);
+      this.breakWakeProgress(st, hand.label, t, events);
       return;
     }
 
@@ -323,10 +329,29 @@ export class GestureInterpreter {
       st.holdAnchor = [wrist.x, wrist.y];
     }
     const held = t - st.holdStart;
-    if (st.wakeArmed && !this.sessionActive && held >= c.wakeHoldMs) {
+    if (!st.wakeArmed || this.sessionActive) {
+      this.breakWakeProgress(st, hand.label, t, events);
+      return;
+    }
+    const progress = Math.min(1, held / c.wakeHoldMs);
+    if (progress > 0 || st.wakeProgress > 0) {
+      const palm = at(hand.landmarks, MIDDLE_MCP);
+      const [x, y] = this.toDisplay(palm.x, palm.y);
+      events.push({ type: "wake_progress", hand: hand.label, progress, x: round1(x), y: round1(y), displayId: this.display.id, t });
+      st.wakeProgress = progress;
+    }
+    if (held >= c.wakeHoldMs) {
       st.wakeArmed = false;
+      st.wakeProgress = 0;
       events.push({ type: "wake_requested", source: "open_palm", hand: hand.label, heldForMs: Math.round(held), t });
     }
+  }
+
+  /** The wake hold was interrupted: tell the UI once (progress 0) so it hides the ring. */
+  private breakWakeProgress(st: HandState, hand: HandLabel, t: number, events: GestureEvent[]): void {
+    if (st.wakeProgress <= 0) return;
+    st.wakeProgress = 0;
+    events.push({ type: "wake_progress", hand, progress: 0, x: 0, y: 0, displayId: this.display.id, t });
   }
 
   /** Screen point a finger pose designates: index tip, or the midpoint of index + middle tips. */
