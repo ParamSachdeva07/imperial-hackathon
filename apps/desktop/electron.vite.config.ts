@@ -28,6 +28,8 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, "src/renderer"),
+    // anam-overlay owns 5173 (strictPort); keep the Pointy renderer off it.
+    server: { port: 5180 },
     plugins: [react()],
     build: {
       rollupOptions: {

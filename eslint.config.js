@@ -5,7 +5,7 @@ import globals from "globals";
 
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/out/**", "**/dist/**", "**/.cache/**", "**/generated/**", "artifacts/**", "**/bin/*.js", ".claude/**"],
+    ignores: ["**/node_modules/**", "**/out/**", "**/dist/**", "**/.cache/**", "**/generated/**", "artifacts/**", "**/bin/*.js", ".claude/**", "anam-overlay/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
