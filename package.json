@@ -22,6 +22,7 @@
     "app": "npm run build -w @pointy/desktop && cd apps/desktop && npx electron .",
     "gestures:assets": "node packages/gestures/scripts/copy-wasm.mjs && npm run fetch-model -w @pointy/gestures",
     "app:gestures": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_GESTURES=1 npx electron .",
+    "app:gestures:mouse": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_GESTURES=1 POINTY_GESTURES_MOUSE=1 npx electron .",
     "e2e": "npm run build -w @pointy/desktop && tsx scripts/e2e-cli.ts",
     "eval:voice": "tsx scripts/eval-voice-tools.ts"
   },

@@ -7,11 +7,13 @@
  *  - standalone (no `base`): its own session flag; `play()` replays events into its listeners.
  *  - merged (`base` = the real service, POINTY_GESTURES=1): listeners see the real service's events AND
  *    the simulated ones; session state and `setSessionActive` go to the real service. Simulated events
- *    are never given to the real service, so they can not drive the real OS mouse.
+ *    are never given to the real service. They reach the real OS mouse only through the opt-in `mouseSink`
+ *    (POINTY_GESTURES_MOUSE=1, session open).
  */
 import type { GestureEvent } from "@pointy/gestures";
 import type { Timers } from "./DevSessionController";
 import { SimGestureSource } from "./SimGestureSource";
+import { isMouseEvent, type MouseEventSink } from "./SimMouseSink";
 
 export interface DisplayBounds {
   x: number;
@@ -35,6 +37,11 @@ export interface SimGestureServiceOptions {
   /** Display to map to when standalone. */
   display?: () => FeedbackGestureService["display"];
   timers?: Timers;
+  /**
+   * Opt-in (POINTY_GESTURES_MOUSE=1): simulated mouse / click / scroll events are also forwarded here (the
+   * input of attachSystemMouse), but only while the session is open. Never given to the real service.
+   */
+  mouseSink?: MouseEventSink;
 }
 
 export class SimGestureService implements FeedbackGestureService {
@@ -49,6 +56,12 @@ export class SimGestureService implements FeedbackGestureService {
     this.base = opts.base;
     this.displayFn = opts.display;
     this.source = new SimGestureSource(opts.timers ? { timers: opts.timers } : {});
+    const sink = opts.mouseSink;
+    if (sink) {
+      this.source.onAny((e) => {
+        if (isMouseEvent(e) && this.sessionActive) sink.emit(e);
+      });
+    }
   }
 
   get sessionActive(): boolean {

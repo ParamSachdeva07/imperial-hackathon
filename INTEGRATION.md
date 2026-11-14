@@ -187,6 +187,19 @@ Nothing under `packages/gestures/` was modified. Alexandre owns it.
 - `POINTY_GESTURES_SHOW=1`: shows the vision/debug window.
 - `POINTY_GESTURES_MOUSE=1`: the real OS mouse/clicks via nut-js, **only while a session is open**. This needs the macOS Accessibility permission.
 - `POINTY_GESTURES_IDLE_MS`: the session idle timeout (default 20000).
+- Tunables passed through `startGestureService({ config })` (invalid values are logged and ignored; see `gestureConfig.ts`): `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen; the app used to ignore it, only the package launcher honoured it), `POINTY_GESTURES_FINGER_EXTEND_RATIO`, `POINTY_GESTURES_POSE_STABLE_MS`, `POINTY_GESTURES_SCROLL_GAIN`, `POINTY_GESTURES_SCROLL_DEADZONE`, `POINTY_GESTURES_DEADBAND`.
+
+**Which gesture needs what (the "one finger does nothing" report):**
+
+| Gesture | What it does | Needs |
+|---|---|---|
+| Two fingers (index + middle) | drawing / point / region, drawn in the gestures feedback window | `npm run app:gestures` is enough |
+| One finger (index) | moves the REAL OS cursor, dwell click | `npm run app:gestures:mouse` (`POINTY_GESTURES_MOUSE=1`), an open session (wake first) and macOS Accessibility for the launching terminal/Electron |
+| Closed fist, dragged | real wheel scroll of the window under the pointer | same as one finger (place the pointer with one finger first) |
+
+`npm run app:gestures` keeps the mouse OFF by default (deliberate: it never takes over the user's cursor unasked). The feedback window draws no cursor for one finger, so with the mouse off it looks dead; the app now logs `mouse=OFF ...` at startup and a one-time hint on the first one-finger/fist event. With the flag on and Accessibility missing, startup logs the permission hint (and macOS shows its prompt) because nut-js silently does nothing without it.
+
+**Performing the poses reliably (MacBook camera):** wake with a raised open palm, steady about 1 s. One finger: curl middle, ring and pinky fully, keep the thumb tucked, point the index straight UP (not at the camera), keep the fingertip in the middle band of the image (default zone y 20-65 %, x 15-85 %; move at least 1-2 cm to clear the 8 pt deadband; hold still about 1 s to click, only after moving 40 pt). Fist: close all four fingers tightly, hold 0.2 s, then drag the whole hand several cm. Run with `POINTY_GESTURES_SHOW=1` to see the camera and the log for `mouse start` / `scroll start`; if those lines never appear it is pose classification (Alexandre), if they appear and nothing moves it is permissions.
 
 **One-time setup:** `npm run gestures:assets` copies the MediaPipe wasm and downloads the ~8 MB model into `packages/gestures/.cache/public` (gitignored). Then `npm run app:gestures` builds and runs.
 
@@ -225,6 +238,7 @@ Nothing under `packages/gestures/` was modified. Alexandre owns it.
   - `npx pointy-draw gesture session on`
   - `npx pointy-draw gesture circle --center 700,450 --radius 150`
   - `gesture dwell X,Y`, `gesture point X,Y`, `gesture lost`
+  - `gesture mouse X,Y` (one finger), `gesture click X,Y [--ms]` (dwell click), `gesture scroll [--dy N | --dy -N]` (fist drag, dy>0 scrolls up). These reach the **real OS mouse** only when the app runs with `POINTY_GESTURES_MOUSE=1` AND the session is open (`SimMouseSink.ts`: the sim forwards them to `attachSystemMouse` only under both conditions; otherwise they stay in the feedback window / are dropped). They never go through the real service.
 - Verified live on macOS with screenshots (`POINTY_CAPTURABLE=1`): wake ring, cursor, trail, dwell ring and region in his window; the AI overlay draws none of it.
 
 ### 8.5 Re-sync hot spots (when Alexandre pushes fixes)
@@ -243,7 +257,9 @@ Nothing under `packages/gestures/` was modified. Alexandre owns it.
     - his feedback window starts with `contentProtection=true`.
   - Sim screenshots: wake ring, trail, region and dwell ring are drawn by **his** window at the right positions, and the AI overlay draws nothing.
   - `npm run e2e`.
+- **Verified live (camera-free, macOS):** with `POINTY_GESTURES_MOUSE=1`, `gesture session on` then `gesture mouse 400,300` moved the real cursor to 400,300 and `800,500` to 800,500 (read via CGEventGetLocation); `gesture scroll --dy=-600` scrolled a TextEdit window under the pointer (line 1 to 43 at top); after `session off` `gesture mouse` did not move the cursor; without the flag, the same sim did not move it either.
 - **Not verified:**
+  - real-hand one-finger/fist (camera) pose rules on a MacBook (see 8.7);
   - `electron-vite dev` with the gesture pages;
   - real-camera use with `POINTY_GESTURES_MOUSE=1`;
   - packaged-app permissions (`NSCameraUsageDescription`, Accessibility);
@@ -255,3 +271,6 @@ Found by review. The fixes belong in his package, so we did not work around them
 1. **`startGestureFeedback` doesn't replay the session after the feedback page reloads.** `startFeedbackRenderer` resets its `active` flag on load, but main only sends the session state at creation and on changes. After a reload during an open session, nothing draws until the session toggles. In practice this happens only on a dev hot-reload or a renderer crash. Fix: re-send the session state on `did-finish-load`, or add a renderer `ready` handshake as the vision window has.
 2. **`startGestureFeedback` leaks on a failed load.** If `loadPage` rejects (for example, the dev server is down), the window and the service/screen listeners stay alive and no disposer is returned. Fix: try/catch with cleanup.
 3. **No reduced-motion support in `startFeedbackRenderer`.** Its canvas animations ignore `prefers-reduced-motion`, unlike the AI overlay. Fix: an option or a media-query check.
+4. **Mouse-mode feedback is missing.** `feedbackRenderer` draws no cursor for `mouse` events (only the click ring) and nothing for `scroll`, so one-finger / fist look dead whenever the real mouse is not attached (the default). Fix: draw a small cursor dot at `mouse` x/y and a scroll glyph, independent of `attachSystemMouse`; ideally also let the host learn whether a consumer is attached.
+5. **One-finger pose has no hysteresis and the recogniser label can veto the rules.** Two-finger has sticky hysteresis; pointing does not. `RECOGNIZER_MAP` sends Thumb_Up / ILoveYou / Victory / Thumb_Down to `other`, which beats the rule result, so a thumb-out point or a slightly parted second finger emits no `mouse`. The 3D wrist-to-tip ratio (1.15) also degrades when the finger points at the camera. Suggested: sticky pointing, prefer the rules over an `other` label when they say pointing/fist, an angle-based curl test.
+6. **Expose a debug event** (raw pose, label, score) so a host can render a "why is nothing happening" HUD; and consider scrolling the focused/last-mouse window when the pointer was never moved.

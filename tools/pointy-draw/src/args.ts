@@ -3,7 +3,7 @@
  */
 import { parseArgs } from "node:util";
 import { parseRect } from "@pointy/shared/overlay/geometry";
-import { circleEvents, dwellEvents, FRAME_MS, lostEvents, pointEvents, wakeEvents } from "./gesture";
+import { circleEvents, clickEvents, dwellEvents, FRAME_MS, lostEvents, mouseEvents, pointEvents, scrollEvents, wakeEvents } from "./gesture";
 
 export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
@@ -37,6 +37,8 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw gesture circle --center x,y --radius R [--ms 1500]   simulate a circled region (cursor, dwell, region_selected)
   pointy-draw gesture dwell x,y [--ms 800] | gesture point x,y | gesture lost
   pointy-draw gesture wake x,y [--ms 700]     simulate a raised open palm held still (wake ring, then wake_requested)
+  pointy-draw gesture mouse x,y | gesture click x,y [--ms 800] | gesture scroll [--dy 300]   one finger / dwell click / fist drag (dy>0 scrolls up).
+                                              These reach the REAL OS mouse only if the app runs with POINTY_GESTURES_MOUSE=1 and the session is on
   pointy-draw gesture session on|off          open/close the gesture session (feedback only shows while on)
   pointy-draw fixture                         open (or bring back) the fake mail test app
 
@@ -87,9 +89,22 @@ function expiry(v: Values): Record<string, unknown> {
 
 const optional = (key: string, value: unknown): Record<string, unknown> => (value === undefined ? {} : { [key]: value });
 
+/** parseArgs reads "--dy -300" as an option; turn it into "--dy=-300". */
+function joinNegativeDy(argv: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const next = argv[i + 1];
+    if (argv[i] === "--dy" && next !== undefined && /^-\d/.test(next)) {
+      out.push(`--dy=${next}`);
+      i++;
+    } else out.push(argv[i] as string);
+  }
+  return out;
+}
+
 export function parseCommand(argv: string[], ctx: ParseContext): Request {
   const { values: v, positionals: pos } = parseArgs({
-    args: argv,
+    args: joinNegativeDy(argv),
     allowPositionals: true,
     options: {
       element: { type: "string" },
@@ -111,6 +126,7 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       center: { type: "string" },
       radius: { type: "string" },
       ms: { type: "string" },
+      dy: { type: "string" },
       "wait-shown": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -244,9 +260,18 @@ function gestureCommand(rest: string[], v: Values, ctx: ParseContext): Request {
       return post(pointEvents(xy("gesture point"), displayId));
     case "lost":
       return post(lostEvents());
+    case "mouse":
+      return post(mouseEvents(xy("gesture mouse"), displayId));
+    case "click":
+      return post(clickEvents(xy("gesture click"), displayId, ms(800)));
+    case "scroll": {
+      const dy = v.dy === undefined ? 300 : Number(v.dy);
+      if (!Number.isFinite(dy) || dy === 0) throw new UsageError(`--dy: expected a non-zero number, got "${String(v.dy)}"`);
+      return post(scrollEvents(dy, ms(600)));
+    }
     case "session":
       if (arg !== "on" && arg !== "off") throw new UsageError("gesture session on|off");
       return { kind: "post", path: "/gesture/session", body: { active: arg === "on" } };
   }
-  throw new UsageError("gesture: circle | dwell | point | lost | wake | session");
+  throw new UsageError("gesture: circle | dwell | point | lost | wake | mouse | click | scroll | session");
 }

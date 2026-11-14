@@ -5,7 +5,7 @@
 import { createReadStream } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { protocol, session } from "electron";
+import { protocol, session, systemPreferences } from "electron";
 import { startGestureService, type GestureService } from "@pointy/gestures/electron";
 import type { GestureFeedback } from "@pointy/gestures/electron/feedback";
 import { attachSystemMouse } from "@pointy/gestures/electron/mouse";
@@ -14,8 +14,11 @@ import { GESTURE_ASSET_SCHEME, resolveAssetRequest } from "./assetResolver";
 import { DevSessionController } from "./DevSessionController";
 import type { CaptureHiding } from "./captureHiding";
 import { feedbackCaptureHiding, launchGestureFeedback } from "./feedbackHost";
+import { parseGestureConfig } from "./gestureConfig";
 import { gateMouseToSession } from "./MouseGate";
+import { ACCESSIBILITY_HINT, createMouseOffHint, MOUSE_OFF_STARTUP } from "./MouseHint";
 import { SimGestureService } from "./SimGestureService";
+import { MouseEventSink, mergeMouseSources, type MouseSource } from "./SimMouseSink";
 
 /** Session partition the gesture service uses (service default); the asset scheme is handled on it only. */
 export const GESTURE_PARTITION = "pointy-gestures";
@@ -81,12 +84,17 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
   if (env.POINTY_GESTURES !== "1") return null;
   const disposers: (() => void)[] = [];
   try {
+    const mouseEnabled = env.POINTY_GESTURES_MOUSE === "1";
+    const tuning = parseGestureConfig(env);
+    for (const w of tuning.warnings) log(w);
+    if (tuning.applied.length) log(`config overrides: ${tuning.applied.join(", ")}`);
     registerGestureAssetProtocol(join(opts.repoRoot, "packages", "gestures", ".cache", "public"));
     const service = await startGestureService({
       preloadPath: join(PRELOAD_DIR, "gestures.js"),
       loadPage: (w) => loadRendererPage(w, "gestures"),
       showWindow: env.POINTY_GESTURES_SHOW === "1",
       partition: GESTURE_PARTITION,
+      ...(tuning.applied.length ? { config: tuning.config } : {}),
     });
     disposers.push(() => service.dispose());
     disposers.push(service.onStatus((s) => log(`status: ${JSON.stringify(s)}`)));
@@ -94,7 +102,8 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     // The service never queues events: subscribe the session controller right after it resolves, before
     // any other slow work (opening the feedback window), so an early wake_requested is not lost.
     // The merged adapter (real service + simulation) is what the controller and the feedback window see.
-    const sim = new SimGestureService({ base: service });
+    const mouseSink = new MouseEventSink();
+    const sim = new SimGestureService({ base: service, ...(mouseEnabled ? { mouseSink } : {}) });
     disposers.push(() => sim.dispose());
     const idleMs = Number(env.POINTY_GESTURES_IDLE_MS);
     const sessionCtl = new DevSessionController({
@@ -108,12 +117,18 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     const feedback = await launchGestureFeedback(sim, env, log);
     if (feedback) disposers.push(() => feedback.dispose());
 
-    if (env.POINTY_GESTURES_MOUSE === "1") {
-      // Real service only: simulated events must never move the real mouse. The gate attaches the system
-      // mouse (move, click and wheel scroll) only while the session is open, so everything is session-gated.
-      disposers.push(gateMouseToSession(sessionCtl, () => attachSystemMouse(service, { log }), log));
+    if (mouseEnabled) {
+      // nut-js silently does nothing without Accessibility, while the log would still say "attached".
+      if (process.platform === "darwin" && !systemPreferences.isTrustedAccessibilityClient(true)) log(ACCESSIBILITY_HINT);
+      // Real events plus, because the flag is on, simulated ones (dev CLI) via the sink. attachSystemMouse is
+      // attached only while the session is open, and the sim forwards only while it is open, so both are session-gated.
+      const source = mergeMouseSources(service as MouseSource, mouseSink);
+      disposers.push(gateMouseToSession(sessionCtl, () => attachSystemMouse(source as unknown as GestureService, { log }), log));
+    } else {
+      log(MOUSE_OFF_STARTUP);
+      disposers.push(service.onAny(createMouseOffHint(log)));
     }
-    log(`started (show=${env.POINTY_GESTURES_SHOW === "1"}, mouse=${env.POINTY_GESTURES_MOUSE === "1"}, feedback=${feedback ? "on" : "off"})`);
+    log(`started (show=${env.POINTY_GESTURES_SHOW === "1"}, mouse=${mouseEnabled}, feedback=${feedback ? "on" : "off"})`);
     return {
       service,
       sim,

@@ -103,6 +103,32 @@ describe("pointy-draw args (spec §8.1 commands)", () => {
       expect(() => p(["gesture", "wake"])).toThrow(UsageError);
       expect(wakeEvents({ x: 0, y: 0 }, 1)).toEqual(wakeEvents({ x: 0, y: 0 }, 1));
     });
+    it("mouse: start, moves at the point, end", () => {
+      const evs = events(["gesture", "mouse", "400,300"]);
+      expect(evs.map((e) => e.type)).toEqual(["mouse", "mouse", "mouse", "mouse"]);
+      expect(evs.map((e) => e.phase)).toEqual(["start", "move", "move", "end"]);
+      for (const e of evs) expect(e).toMatchObject({ x: 400, y: 300, displayId: 1, hand: "Right" });
+      expect(() => p(["gesture", "mouse"])).toThrow(UsageError);
+    });
+    it("click: mouse, click_progress ramp 0 to 1, then click at the point", () => {
+      const evs = events(["gesture", "click", "10,20", "--ms", "330"]);
+      const prog = evs.filter((e) => e.type === "click_progress").map((e) => e.progress as number);
+      expect(prog[0]).toBe(0);
+      expect(prog.at(-1)).toBe(1);
+      expect(evs.at(-1)).toMatchObject({ type: "click", button: "left", x: 10, y: 20, displayId: 1 });
+    });
+    it("scroll: start, moves summing to dy, end; --dy sign and validation", () => {
+      const sum = (evs: Ev[]) => evs.filter((e) => e.type === "scroll" && e.phase === "move").reduce((a, e) => a + (e.dy as number), 0);
+      const evs = events(["gesture", "scroll"]);
+      expect(evs[0]).toMatchObject({ type: "scroll", phase: "start" });
+      expect(evs.at(-1)).toMatchObject({ type: "scroll", phase: "end" });
+      expect(sum(evs)).toBeCloseTo(300, 0);
+      expect(sum(events(["gesture", "scroll", "--dy", "-250"]))).toBeCloseTo(-250, 0);
+      expect(sum(events(["gesture", "scroll", "--dy=-250"]))).toBeCloseTo(-250, 0);
+      for (const dy of [200, 400, 600, -600, 137]) expect(sum(events(["gesture", "scroll", "--dy", String(dy)]))).toBeCloseTo(dy, 9);
+      expect(() => p(["gesture", "scroll", "--dy", "0"])).toThrow(UsageError);
+      expect(() => p(["gesture", "scroll", "--dy", "x"])).toThrow(UsageError);
+    });
     it("session on/off", () => {
       expect(p(["gesture", "session", "on"])).toEqual({ kind: "post", path: "/gesture/session", body: { active: true } });
       expect(p(["gesture", "session", "off"])).toMatchObject({ body: { active: false } });
