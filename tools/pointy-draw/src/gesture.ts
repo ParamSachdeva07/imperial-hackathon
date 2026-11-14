@@ -87,3 +87,45 @@ export function wakeEvents(p: Pt, displayId: number, ms = 700): SimGestureEvent[
   out.push({ type: "wake_requested", source: "open_palm", hand: HAND, heldForMs: ms, t });
   return out;
 }
+
+const mouse = (p: Pt, displayId: number, t: number, phase: "start" | "move" | "end"): SimGestureEvent => ({ type: "mouse", hand: HAND, phase, x: round(p.x), y: round(p.y), displayId, t });
+
+/**
+ * One finger: the real-mouse stream (mouse start, a few moves, end) at `p`. Only moves the real OS cursor
+ * when the app runs with POINTY_GESTURES_MOUSE=1 and the gesture session is open.
+ */
+export function mouseEvents(p: Pt, displayId: number): SimGestureEvent[] {
+  return [mouse(p, displayId, 0, "start"), mouse(p, displayId, FRAME_MS, "move"), mouse(p, displayId, 2 * FRAME_MS, "move"), mouse(p, displayId, 3 * FRAME_MS, "end")];
+}
+
+/** One finger held still: mouse at `p`, a click_progress ramp 0 to 1, then the dwell `click` (a real left click under the same gates). */
+export function clickEvents(p: Pt, displayId: number, ms = 800): SimGestureEvent[] {
+  const n = frames(ms);
+  const out: SimGestureEvent[] = [mouse(p, displayId, 0, "start"), mouse(p, displayId, FRAME_MS, "move")];
+  let t = 2 * FRAME_MS;
+  for (let i = 0; i <= n; i++, t += FRAME_MS) {
+    out.push({ type: "click_progress", hand: HAND, progress: Math.min(1, Math.max(0, round((i / n) * 1000) / 1000)), x: round(p.x), y: round(p.y), displayId, t });
+  }
+  out.push({ type: "click", hand: HAND, button: "left", x: round(p.x), y: round(p.y), displayId, t });
+  return out;
+}
+
+/**
+ * Closed fist dragged by `dy` display points in total (dy > 0 = hand down = content down = scroll UP),
+ * spread over ~`ms`: scroll start, moves summing to dx 0 / dy, end.
+ */
+export function scrollEvents(dy: number, ms = 600): SimGestureEvent[] {
+  const n = Math.max(2, Math.round(ms / FRAME_MS));
+  const step = dy / n;
+  const out: SimGestureEvent[] = [{ type: "scroll", hand: HAND, phase: "start", dx: 0, dy: 0, t: 0 }];
+  let t = FRAME_MS;
+  // Cumulative-difference rounding: per-step values are rounded but the residual carries forward, so the sum is exactly dy.
+  let emitted = 0;
+  for (let i = 0; i < n; i++, t += FRAME_MS) {
+    const target = i === n - 1 ? dy : round(step * (i + 1) * 1000) / 1000;
+    out.push({ type: "scroll", hand: HAND, phase: "move", dx: 0, dy: round((target - emitted) * 1000) / 1000, t });
+    emitted = target;
+  }
+  out.push({ type: "scroll", hand: HAND, phase: "end", dx: 0, dy: 0, t });
+  return out;
+}

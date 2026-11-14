@@ -19,7 +19,7 @@
  *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
  *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
  *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
- *   POINTY_GESTURES_MOUSE=1 let gestures drive the real OS mouse/clicks, only while the session is open
+ *   POINTY_GESTURES_MOUSE=1 one finger/fist drive the real OS mouse/clicks/scroll, only while the session is open (`npm run app:gestures:mouse`)
  *   POINTY_GESTURES_IDLE_MS gesture session idle timeout (default 20000)
  *                           The user's own hand drawing (cursor, trail, rings, wake ring, selection) is the
  *                           gestures package's feedback window (contentProtection follows POINTY_CAPTURABLE);
