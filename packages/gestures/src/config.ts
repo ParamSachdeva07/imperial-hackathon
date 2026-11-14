@@ -88,6 +88,12 @@ export interface GestureConfig {
   handoffDecayDist: number;
   /** Keep the cursor / mouse going while its pose is briefly unrecognised (blur, fingers drifting). */
   poseGraceMs: number;
+  /**
+   * When mouse mode ends (fist, other gesture, hand gone), put the mouse back where it was this
+   * long before the hand was last seen in mouse pose: the frames just before were following the
+   * index finger as it curled or dropped.
+   */
+  mouseRewindMs: number;
 
   /* Dwell click (mouse mode) */
   clickEnabled: boolean;
@@ -150,6 +156,7 @@ export const DEFAULT_CONFIG: GestureConfig = {
   handoffMs: 1500,
   handoffDecayDist: 250,
   poseGraceMs: 300,
+  mouseRewindMs: 250,
 
   clickEnabled: true,
   clickDwellMs: 1000,

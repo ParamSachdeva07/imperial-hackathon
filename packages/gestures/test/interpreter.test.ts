@@ -330,6 +330,36 @@ describe("one finger → system mouse (default mousePose)", () => {
   });
 });
 
+describe("closing the fist doesn't drag the mouse away", () => {
+  it("the index curling down (still read as Pointing_Up) doesn't move the mouse; scroll starts where it was", () => {
+    const it = active();
+    const tip = (y: number) => [hand("Right", "Pointing_Up", { x: 0.5, y })];
+    const evs = run(it, [
+      ...frames(0, 800, (i, n) => [hand("Right", "Pointing_Up", { x: 0.6 - 0.1 * (i / (n - 1)), y: 0.4 })]),
+      ...frames(800, 400, () => tip(0.4)), // still: mouse settles
+      // closing: MediaPipe still says Pointing_Up while the fingertip drops 0.15 (≈225 pt)
+      ...frames(1200, 170, (i, n) => tip(0.4 + 0.15 * (i / (n - 1)))),
+      ...frames(1370, 800, () => [fistAt("Right", 0.5, 0.55)]),
+    ]);
+    const before = ofType(evs, "mouse").filter((e) => e.t < 1200).pop()!;
+    const end = ofType(evs, "mouse").find((e) => e.phase === "end")!;
+    expect(Math.hypot(end.x - before.x, end.y - before.y)).toBeLessThan(3); // put back where it was
+    expect(ofType(evs, "scroll")[0]!.phase).toBe("start");
+  });
+
+  it("raw-pose freeze: a hand that stops looking like one finger stops moving the mouse at once", () => {
+    const it = active();
+    const evs = run(it, [
+      ...frames(0, 800, () => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 })]),
+      // the fist forms (classified Closed_Fist) while the hand drifts: before the pose is confirmed,
+      // the mouse must not follow
+      ...frames(800, 100, (i, n) => [fistAt("Right", 0.5, 0.45 + 0.1 * (i / (n - 1)))]),
+    ]);
+    const moves = ofType(evs, "mouse").filter((e) => e.t >= 800 && e.phase === "move");
+    expect(moves).toHaveLength(0);
+  });
+});
+
 describe("handoff between mouse and drawing", () => {
   // Realistic switch: the index tip stays put, the middle finger joins it,
   // so the two-finger midpoint is ~0.015 (≈31 pt) away from the index tip.
@@ -496,10 +526,11 @@ describe("tracking robustness", () => {
         return [twoFingersAt("Right", x, 0.4, spread)];
       }),
     );
-    expect(ofType(evs, "hand_lost")).toHaveLength(0);
-    const xs = ofType(evs, "cursor_moved").map((e) => e.t);
-    const gaps = xs.slice(1).map((t, i) => t - at(xs, i));
-    expect(Math.max(...gaps)).toBeLessThan(DT * 1.5); // cursor kept moving every frame
+    expect(ofType(evs, "hand_lost")).toHaveLength(0); // one continuous stroke
+    const cur = ofType(evs, "cursor_moved");
+    // the cursor holds still while the pose is unsure (no jumps), then keeps following the hand
+    expect(cur.filter((e) => e.t > 600 && e.t < 850)).toHaveLength(0);
+    expect(cur.filter((e) => e.t >= 1000).length).toBeGreaterThan(10);
   });
 
   it("the mouse survives a brief misclassification of the index finger", () => {

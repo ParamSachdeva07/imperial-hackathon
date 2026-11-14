@@ -62,6 +62,8 @@ interface MouseState {
   armAnchor: Vec2 | null;
   clickArmed: boolean;
   clickProgress: number;
+  /** Recent positions, to rewind the end position (see mouseRewindMs). */
+  hist: TimedPoint[];
 }
 
 interface EndedStroke {
@@ -156,6 +158,8 @@ export class GestureInterpreter {
     const events: GestureEvent[] = [];
     const seen = new Set<HandLabel>();
     const stablePose = new Map<HandLabel, Pose>();
+    /** This frame's pose before debouncing: changes first when the hand starts changing shape. */
+    const rawPose = new Map<HandLabel, Pose>();
 
     // 1. Per-hand pose + wake.
     for (const hand of frame.hands) {
@@ -172,14 +176,13 @@ export class GestureInterpreter {
       const [px, py] = this.toDisplay(palm.x, palm.y, false);
       st.palmHist.push({ t, x: px, y: py });
       while (st.palmHist.length && at(st.palmHist, 0).t < t - 1000) st.palmHist.shift();
-      const pose = st.tracker.update(
-        classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread, {
-          prev: st.tracker.stable,
-          stickyRatio: this.cfg.twoFingerStickyRatio,
-          stickyMaxAngle: this.cfg.twoFingerStickyMaxAngle,
-        }),
-        t,
-      );
+      const raw = classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread, {
+        prev: st.tracker.stable,
+        stickyRatio: this.cfg.twoFingerStickyRatio,
+        stickyMaxAngle: this.cfg.twoFingerStickyMaxAngle,
+      });
+      const pose = st.tracker.update(raw, t);
+      rawPose.set(hand.label, raw);
       stablePose.set(hand.label, pose);
       this.updateWake(st, hand, pose, t, events);
     }
@@ -225,6 +228,9 @@ export class GestureInterpreter {
     if (this.mouse && (!mouseHand || mouseHand.label !== this.mouse.hand)) {
       const m = this.mouse;
       if (mouseHand || seen.has(m.hand) || t - m.lastSeen >= this.cfg.lostMs) {
+        // Put the mouse back where it was before the hand started changing shape or leaving:
+        // closing a fist (or lowering the hand) drags the index tip, which the last frames followed.
+        m.pos = this.rewound(m, m.lastSeen - this.cfg.mouseRewindMs);
         events.push(this.mouseEvent(m, "end", t));
         this.lastEnded = { hand: m.hand, kind: "mouse", pos: m.pos, t };
         this.mouse = null;
@@ -236,7 +242,12 @@ export class GestureInterpreter {
         const offset = this.handoffOffset(chosen.label, "mouse", this.anchor(chosen, this.cfg.drawPose), t);
         this.pointer = this.newPointer(chosen.label, offset);
       }
-      this.updatePointer(this.pointer, chosen, t, events);
+      // While the hand is changing shape (raw pose ≠ draw pose), hold the cursor still.
+      if (rawPose.get(chosen.label) === this.cfg.drawPose || this.pointer.lastSeen === 0) {
+        this.updatePointer(this.pointer, chosen, t, events);
+      } else {
+        this.pointer.lastSeen = t;
+      }
     }
     if (mouseHand) {
       const raw = this.anchor(mouseHand, this.cfg.mousePose);
@@ -247,15 +258,25 @@ export class GestureInterpreter {
           hand: mouseHand.label, filter: this.newFilter(), pos: raw, offset,
           lastRawAnchor: null, lastSeen: t, unsureSince: null,
           recent: [], restStart: null, armAnchor: null, clickArmed: false, clickProgress: 0,
+          hist: [],
         };
       }
       const m = this.mouse;
+      // While the hand is changing shape (raw pose ≠ mouse pose, e.g. closing into a fist),
+      // hold the mouse still instead of following the curling index finger.
+      const settled = rawPose.get(mouseHand.label) === this.cfg.mousePose;
+      if (!settled && !isNew) {
+        m.lastSeen = t;
+      } else {
       m.lastRawAnchor = this.decayOffset(m.offset, m.lastRawAnchor, raw);
       const [sx, sy] = this.clampToDisplay([raw[0] + m.offset[0], raw[1] + m.offset[1]]);
       m.pos = m.filter.filter(sx, sy, t / 1000);
       m.lastSeen = t;
+      m.hist.push({ t, x: m.pos[0], y: m.pos[1] });
+      while (m.hist.length > 1 && at(m.hist, 0).t < t - 1000) m.hist.shift();
       events.push(this.mouseEvent(m, isNew ? "start" : "move", t));
       if (this.cfg.clickEnabled) this.updateDwellClick(m, t, events);
+      }
     }
 
     // 4. Fist = grab and drag the page.
@@ -360,6 +381,13 @@ export class GestureInterpreter {
     if (pose === "pointing") return this.toDisplay(a.x, a.y);
     const b = at(hand.landmarks, MIDDLE_TIP);
     return this.toDisplay((a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+
+  /** Mouse position at time `t` (latest recorded at or before it), or the current one. */
+  private rewound(m: MouseState, t: number): Vec2 {
+    let best: TimedPoint | null = null;
+    for (const q of m.hist) if (q.t <= t) best = q;
+    return best ? [best.x, best.y] : m.pos;
   }
 
   private mouseEvent(m: MouseState, phase: "start" | "move" | "end", t: number): GestureEvent {

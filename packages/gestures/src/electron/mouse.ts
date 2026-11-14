@@ -84,8 +84,8 @@ export async function attachSystemMouse(
     }
   };
 
+  // "end" carries the rewound position (before the hand changed shape): move there too.
   const offMouse = service.on("mouse", (e) => {
-    if (e.phase === "end") return;
     pending = convert(e.x, e.y);
     void flush();
   });
