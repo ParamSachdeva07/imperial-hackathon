@@ -26,7 +26,7 @@ const check = (name: string, cond: boolean, detail?: unknown) => {
 function draw(...args: string[]): { code: number; json: Record<string, unknown> | null; out: string } {
   const r = spawnSync(cli, args, { cwd: root, encoding: "utf8", timeout: 20_000 });
   const out = (r.stdout ?? "").trim();
-  let json: Record<string, unknown> | null = null;
+  let json: Record<string, unknown> | null;
   try {
     json = JSON.parse(out) as Record<string, unknown>;
   } catch {
