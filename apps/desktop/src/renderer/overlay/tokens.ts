@@ -47,6 +47,7 @@ export const themeVars: Record<string, string> = {
   "--enter-ms": ms(theme.anim.enterMs),
   "--exit-ms": ms(theme.anim.exitMs),
   "--move-ms": ms(theme.anim.moveMs),
+  "--step-glide-ms": ms(theme.anim.stepGlideMs),
   "--pulse-ms": ms(theme.anim.pulseMs),
   "--pulse-count": String(theme.anim.pulseCount),
   "--easing": theme.anim.easing,

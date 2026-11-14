@@ -223,7 +223,10 @@ describe("OverlayService", () => {
     if (item?.kind !== "steps") throw new Error();
     expect(item.steps.map((s) => s.status)).toEqual(["current", "future", "future"]);
     expect(item.steps[1]!.target).toBeNull();
-    expect(item.steps[0]!.labelBox?.text).toBe("Attach");
+    // One step at a time: the number lives in the label; the next step isn't on screen yet → no hint.
+    expect(item.steps[0]!.labelBox).toMatchObject({ text: "Step 1 of 3 · Attach", tone: "info" });
+    expect(item.steps.map((s) => s.labelBox !== null)).toEqual([true, false, false]);
+    expect(item.steps.every((s) => s.badge === null)).toBe(true);
 
     svc.onTurnStart("t2"); // survives turns
     svc.onTargetSelected("attach");
@@ -235,7 +238,10 @@ describe("OverlayService", () => {
     item = sink.byId(r.overlayId!);
     if (item?.kind !== "steps") throw new Error();
     expect(item.steps[1]!.target).not.toBeNull();
-    expect(item.steps[1]!.badge).not.toBeNull();
+    // Now on step 2: its label carries the number; only step 3 (the next one) has the faint hint.
+    expect(item.steps[1]!.labelBox?.text).toBe("Step 2 of 3 · Appears later");
+    expect(item.steps.map((s) => s.labelBox !== null)).toEqual([false, true, false]);
+    expect(item.steps.map((s) => s.badge !== null)).toEqual([false, false, true]);
 
     await svc.handleTool("advance_step", { stepsId: r.overlayId });
     await svc.handleTool("advance_step", { stepsId: r.overlayId });
@@ -243,7 +249,12 @@ describe("OverlayService", () => {
     item = sink.byId(r.overlayId!);
     if (item?.kind !== "steps") throw new Error();
     expect(item.steps.every((s) => s.status === "past")).toBe(true);
-    clock.advance(1300);
+    // Finished: "✓ All done" on the last control, no hint, then it fades after ~1.5 s.
+    expect(item.steps[2]!.labelBox).toMatchObject({ text: "All done", tone: "success" });
+    expect(item.steps.every((s) => s.badge === null)).toBe(true);
+    clock.advance(1400);
+    expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+    clock.advance(200);
     expect(sink.byId(r.overlayId!)?.state).toBe("exiting");
     expect(await svc.handleTool("advance_step", { stepsId: "st_missing" })).toMatchObject({ reason: "unknown_overlay" });
   });
@@ -490,7 +501,7 @@ describe("OverlayService", () => {
       expect(types()).not.toContain("overlay.expired");
       svc.onTargetSelected("send");
       expect(events).toContainEqual({ type: "steps.completed", stepsId: r.overlayId });
-      clock.advance(1300); // all ✓ shown briefly, then it ends
+      clock.advance(1600); // "All done" shown briefly, then it ends
       expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
     });
 
@@ -503,7 +514,7 @@ describe("OverlayService", () => {
       expect(r).toMatchObject({ ok: true, visible: true, reason: "display_not_found" });
     });
 
-    it("a lost current step fades out with its ring and badge still drawn", async () => {
+    it("a lost current step fades out with its ring and label still drawn", async () => {
       const r = await svc.handleTool("show_steps", { steps: [{ target: el("attach"), label: "Attach" }] });
       bounds.set("attach", null);
       clock.advance(300);
@@ -514,7 +525,7 @@ describe("OverlayService", () => {
       if (item?.kind !== "steps") throw new Error();
       expect(item.state).toBe("exiting");
       expect(item.steps[0]!.target).not.toBeNull();
-      expect(item.steps[0]!.badge).not.toBeNull();
+      expect(item.steps[0]!.labelBox).not.toBeNull();
     });
   });
 

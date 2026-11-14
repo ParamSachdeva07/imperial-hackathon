@@ -48,12 +48,16 @@ export const theme = {
     pulseMs: 1400,
     /** Anchor-follow animation when a tracked element moves (spec §5.4). */
     moveMs: 150,
+    /** Step guides: the ring + label glide from a finished step to the next one (calm, ease-in-out). */
+    stepGlideMs: 450,
     /** Card entry starts from this scale (spec §7.1). */
     cardEnterScale: 0.96,
   },
   pointerSize: 96,
   /** Diameter (px) of a numbered step badge. Derived (not in the spec table). */
   stepBadgeSize: 56,
+  /** Diameter (px) of the small, faint "next step" hint on step guides (one step at a time). */
+  stepHintSize: 32,
   cardMaxWidth: 520,
   edgeMargin: 24,
   /** When true: no glides or pulses, just fade in. Overridden at runtime by settings / OS preference. */

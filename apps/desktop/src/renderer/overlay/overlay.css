@@ -216,39 +216,34 @@ body,
 }
 
 /* ---------- steps ---------- */
-.step-badge {
+/* One step at a time: the current step's ring and label glide to the next control (calm,
+   ease-in-out); the halo pulses again only after the glide has landed. */
+.item-steps .step-ring .shape-outline,
+.item-steps .step-ring .shape-stroke {
+  transition: d var(--step-glide-ms) ease-in-out, stroke var(--step-glide-ms) ease-in-out;
+}
+.item-steps .step-halo .ring-halo {
+  animation-delay: var(--step-glide-ms);
+}
+.item-steps .step-label .label {
+  transition: left var(--step-glide-ms) ease-in-out, top var(--step-glide-ms) ease-in-out,
+    width var(--step-glide-ms) ease-in-out, height var(--step-glide-ms) ease-in-out;
+}
+/* Small, faint hint of the NEXT step (number + white outline, never a strong colour). */
+.step-hint {
   position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  border: var(--outline) solid var(--outline-color);
-  font-size: 30px;
+  border: 2px solid var(--outline-color);
+  background: #111827;
+  color: #fff;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1;
-  color: #fff;
-  background: #111827;
-  transition: left var(--move-ms) linear, top var(--move-ms) linear, opacity var(--move-ms) linear;
-}
-.step-current {
-  background: var(--info);
-  box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.35);
-}
-.step-future { opacity: 0.55; }
-.step-past { background: var(--success); }
-.step-path-outline {
-  fill: none;
-  stroke: var(--outline-color);
-  stroke-width: 12px;
-  stroke-linecap: round;
-  stroke-dasharray: 0.1 18;
-}
-.step-path-dots {
-  fill: none;
-  stroke: #111827;
-  stroke-width: 6px;
-  stroke-linecap: round;
-  stroke-dasharray: 0.1 18;
+  opacity: 0.45;
+  transition: left var(--step-glide-ms) ease-in-out, top var(--step-glide-ms) ease-in-out;
 }
 
 /* ---------- explainer card ---------- */

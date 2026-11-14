@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PaintedMessage, RenderItem, RenderScene } from "@pointy/shared/overlay/render";
+import type { PaintedMessage, RenderItem, RenderScene, StepsItem } from "@pointy/shared/overlay/render";
 import { OverlayRoot } from "./OverlayRoot";
 import { OverlayScene } from "./OverlayScene";
 import { calloutDot } from "./explainer/AnatomyTemplate";
@@ -53,13 +53,50 @@ describe("OverlayScene", () => {
     expect(glyphs).toEqual(["info", "warning", "success"]);
   });
 
-  it("StepBadges statuses; null targets omitted", () => {
+  it("steps: one at a time — one ring, one label, a faint hint on the next step only, no lines", () => {
     const { container } = render(<OverlayScene scene={scene("steps")} reduceMotion={false} />);
-    const st = [...container.querySelectorAll(".step-badge")].map((e) => e.getAttribute("data-status"));
-    expect(st).toEqual(["past", "current", "future", "future"]);
-    expect(container.querySelector('[data-step="3"]')).toBeNull();
-    expect(container.querySelectorAll(".item-steps .label")).toHaveLength(1);
-    expect(container.querySelectorAll(".step-path")).toHaveLength(3);
+    expect(container.querySelectorAll(".step-path")).toHaveLength(0); // no dotted lines
+    expect(container.querySelectorAll(".step-badge")).toHaveLength(0); // no big numbered circles
+    expect(container.querySelectorAll(".item-steps .step-ring .shape-stroke")).toHaveLength(1);
+    const labels = container.querySelectorAll(".item-steps .label");
+    expect(labels).toHaveLength(1);
+    expect(labels[0]!.textContent).toContain("Step 2 of 5 · Choose Share");
+    const hints = [...container.querySelectorAll(".step-hint")];
+    expect(hints.map((h) => h.getAttribute("data-step"))).toEqual(["2"]);
+    expect(hints[0]!.textContent).toBe("3");
+  });
+
+  it("steps: the ring and label are the same DOM nodes when the guide advances (so they glide)", () => {
+    const base = scene("steps");
+    const { container, rerender } = render(<OverlayScene scene={base} reduceMotion={false} />);
+    const ring = container.querySelector(".step-ring .shape-stroke");
+    const labelEl = container.querySelector(".step-label .label");
+    const item = base.items[0] as StepsItem;
+    const advanced: StepsItem = {
+      ...item,
+      current: 2,
+      steps: item.steps.map((s) =>
+        s.index === 1
+          ? { ...s, status: "past", labelBox: null }
+          : s.index === 2
+            ? { ...s, status: "current", badge: null, labelBox: { ...item.steps[1]!.labelBox!, text: "Step 3 of 5 · Pick a person" } }
+            : s.index === 4
+              ? { ...s, badge: { x: 10, y: 10 } }
+              : s,
+      ),
+    };
+    rerender(<OverlayScene scene={{ ...base, seq: base.seq + 1, items: [advanced] }} reduceMotion={false} />);
+    expect(container.querySelector(".step-ring .shape-stroke")).toBe(ring);
+    expect(container.querySelector(".step-label .label")).toBe(labelEl);
+    expect(container.querySelector(".step-label .label")!.textContent).toContain("Step 3 of 5");
+    expect([...container.querySelectorAll(".step-hint")].map((h) => h.getAttribute("data-step"))).toEqual(["4"]);
+  });
+
+  it("steps: completed shows a green ring and “All done”", () => {
+    const { container } = render(<OverlayScene scene={scene("steps-done")} reduceMotion={false} />);
+    expect(container.querySelector(".item-steps .step-ring .ring.tone-success")).not.toBeNull();
+    expect(container.querySelector(".item-steps .label")!.textContent).toContain("All done");
+    expect(container.querySelectorAll(".step-hint")).toHaveLength(0);
   });
 
   it("anatomy: dots at normalised positions, legend lists all callouts", () => {

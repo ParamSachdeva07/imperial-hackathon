@@ -20,7 +20,7 @@ const SCENES = [
   "ring-labeled", "ring-glyph", "underline-labeled", "underline-glyph",
   "spotlight-info-label", "spotlight-warning-glyph", "spotlight-success-label", "spotlight-polygon",
   "ring-shapes", "pointer-tap", "pointer-double-tap", "pointer-drag", "pointer-label",
-  "pointer-top", "pointer-right", "pointer-bottom", "steps",
+  "pointer-top", "pointer-right", "pointer-bottom", "steps", "steps-done",
   "explainer-sequence", "explainer-sequence-5", "explainer-compare", "explainer-compare-images",
   "explainer-anatomy", "explainer-anatomy-legend-only",
   "explainer-concept-loading", "explainer-concept-ready", "explainer-concept-failed",

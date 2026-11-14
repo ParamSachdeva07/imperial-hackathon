@@ -88,9 +88,15 @@ export interface RenderStep {
   status: StepStatus;
   /** null while the step's element is not found (e.g. it only appears after the previous step). */
   target: RenderTarget | null;
-  /** Badge centre (global DIP); null when target is null. */
+  /**
+   * Centre of the small faint "next step" hint (global DIP). Only the step right after the current
+   * one has it (one step at a time); null for every other step.
+   */
   badge: Point | null;
-  /** Label box, only for the current step. */
+  /**
+   * The step label ("Step i of n · …", tone info) — only on the current step; when the guide is
+   * completed, "All done" (tone success) on the last step.
+   */
   labelBox: RenderLabel | null;
 }
 

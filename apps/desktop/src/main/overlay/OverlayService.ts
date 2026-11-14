@@ -21,6 +21,7 @@ import {
   type HighlightInput,
   type OverlayControl,
   type OverlayEvent,
+  type Point,
   type PointAtInput,
   type Rect,
   type RenderItem,
@@ -40,7 +41,7 @@ import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, type ExpireCause } from "./ExpiryManager";
 import { ExplainerService, type ExplainerState } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
-import { center, union } from "./geometry";
+import { center } from "./geometry";
 import { badgePlacement, placeBeside, placeCentredRight, pointerPlacement } from "./LayoutEngine";
 import { OverlayManager, type Dismissal } from "./OverlayManager";
 import type { SceneSink, ScreenSource } from "./ports";
@@ -58,7 +59,7 @@ export interface OverlayServiceDeps {
   reduceMotion?: () => boolean;
   /** Anchor polling interval (spec: ~300 ms). */
   anchorIntervalMs?: number;
-  /** How long a completed step guide stays (all ✓) before fading. */
+  /** How long a completed step guide shows "✓ All done" before fading. */
   stepsCompletedHoldMs?: number;
   /** Hide overlay windows during anatomy capture (when content protection doesn't exclude them). */
   hideDuringCapture?: boolean;
@@ -425,7 +426,7 @@ export class OverlayService implements OverlayControl {
       // Show all ✓ briefly, then end — unless the caller explicitly asked for a manual or timed lifetime.
       const explicit = (l.input as ShowStepsInput).expires;
       if (explicit !== "manual" && typeof explicit !== "object") {
-        const hold = this.deps.stepsCompletedHoldMs ?? 1200;
+        const hold = this.deps.stepsCompletedHoldMs ?? 1500;
         this.expiry.untrack(stepsId);
         this.expiry.track({ id: stepsId, expires: { ms: Math.max(500, hold) }, elementIds: [], coordinateOnly: false });
       }
@@ -716,30 +717,44 @@ export class OverlayService implements OverlayControl {
     }
 
     if (l.toolName === "show_steps" && l.steps) {
+      // One step at a time: a ring + "Step i of n · label" on the current control, a small faint
+      // hint on the NEXT control, nothing for the others. Completed: "All done" on the last one.
       const i = l.input as ShowStepsInput;
+      const st = l.steps;
+      const n = i.steps.length;
+      const focusIdx = st.completed ? n - 1 : st.current;
+      const hintIdx = st.completed ? -1 : st.current + 1;
+      const otherTargets = (idx: number) =>
+        i.steps.flatMap((_, j) => {
+          const o = j === idx ? null : l.resolved.get(`step:${j}`);
+          return o ? [o.bounds] : [];
+        });
+      const hintTarget = hintIdx >= 0 && hintIdx < n ? (l.resolved.get(`step:${hintIdx}`) ?? null) : null;
+      let hint: Point | null = null;
+      let hintRect: Rect | null = null;
+      if (hintTarget) {
+        const size = theme.stepHintSize;
+        hint = badgePlacement(hintTarget.bounds, this.displayOf(hintTarget).workArea, size, otherTargets(hintIdx));
+        hintRect = { x: hint.x - size / 2, y: hint.y - size / 2, width: size, height: size };
+      }
       const steps: RenderStep[] = i.steps.map((s, idx) => {
         const r = l.resolved.get(`step:${idx}`) ?? null;
-        const status = statusOf(l.steps!, idx);
-        if (!r) return { index: idx, label: s.label, status, target: null, badge: null, labelBox: null };
-        const display = this.displayOf(r);
-        // Never cover a neighbouring step's control (adjacent toolbar buttons).
-        const otherTargets = i.steps.flatMap((_, j) => {
-          const o = j === idx ? null : l.resolved.get(`step:${j}`);
-          return o ? [o.bounds] : [];
-        });
-        const badge = badgePlacement(r.bounds, display.workArea, theme.stepBadgeSize, otherTargets);
-        const half = theme.stepBadgeSize / 2;
-        const badgeRect = { x: badge.x - half, y: badge.y - half, width: theme.stepBadgeSize, height: theme.stepBadgeSize };
-        // The current step's label must not cover the guide's other steps either.
-        const ownOthers = i.steps.flatMap((_, j) => {
-          const o = j === idx ? null : l.resolved.get(`step:${j}`);
-          return o ? [o.bounds] : [];
-        });
-        const labelBox =
-          status === "current"
-            ? this.placeLabel(s.label, undefined, union(r.bounds, badgeRect), display, [...avoid, ...ownOthers])
-            : null;
-        return { index: idx, label: s.label, status, target: { bounds: r.bounds, shape: r.shape }, badge, labelBox };
+        let labelBox: RenderLabel | null = null;
+        if (r && idx === focusIdx) {
+          const text = st.completed ? "All done" : `Step ${idx + 1} of ${n} · ${s.label}`;
+          const tone: Tone = st.completed ? "success" : "info";
+          // Never cover the guide's other controls or the next-step hint.
+          const labelAvoid = [...avoid, ...otherTargets(idx), ...(hintRect ? [hintRect] : [])];
+          labelBox = this.placeLabel(text, tone, r.bounds, this.displayOf(r), labelAvoid);
+        }
+        return {
+          index: idx,
+          label: s.label,
+          status: statusOf(st, idx),
+          target: r ? { bounds: r.bounds, shape: r.shape } : null,
+          badge: idx === hintIdx ? hint : null,
+          labelBox,
+        };
       });
       l.item = { kind: "steps", id: l.id, state, current: l.steps.current, completed: l.steps.completed, steps };
       return;

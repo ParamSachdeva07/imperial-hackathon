@@ -172,15 +172,27 @@ function pointer(id: string, motion: PointerItem["motion"], over: Partial<Pointe
 }
 
 const stepRects = [rect(100, 500, 200, 64), rect(420, 380, 200, 64), rect(780, 280, 200, 64), rect(520, 620, 200, 64), rect(1000, 160, 200, 64)];
-function step(i: number, status: RenderStep["status"], found: boolean, text: string): RenderStep {
+/**
+ * One step at a time: only the focused step has a label ("Step i of n · …", or "All done" when
+ * completed) and only the NEXT step has the small faint hint.
+ */
+function step(
+  i: number,
+  status: RenderStep["status"],
+  found: boolean,
+  text: string,
+  opts: { focus?: "current" | "done"; hint?: boolean; total?: number } = {},
+): RenderStep {
   const r = stepRects[i]!;
+  const total = opts.total ?? 5;
+  const labelText = opts.focus === "done" ? "All done" : `Step ${i + 1} of ${total} · ${text}`;
   return {
     index: i,
     label: text,
     status,
     target: found ? rt(r) : null,
-    badge: found ? { x: r.x - 20, y: r.y - 8 } : null,
-    labelBox: status === "current" ? label(text, r.x, r.y + r.height + 28, "info") : null,
+    badge: found && opts.hint ? { x: r.x - 26, y: r.y + r.height / 2 } : null,
+    labelBox: found && opts.focus ? label(labelText, r.x, r.y + r.height + 28, opts.focus === "done" ? "success" : "info") : null,
   };
 }
 
@@ -252,7 +264,7 @@ export const SCENES: GalleryScene[] = [
   },
   {
     name: "steps",
-    title: "Steps: past, current, future, not found",
+    title: "Steps: one at a time — current step + faint hint of the next",
     targets: stepRects.map((r, i) => ({ rect: r, text: ["Open menu", "Choose Share", "Pick a person", "(not found)", "Send"][i]! })).filter((_, i) => i !== 3),
     scene: scene([
       {
@@ -261,7 +273,34 @@ export const SCENES: GalleryScene[] = [
         state: "visible",
         current: 1,
         completed: false,
-        steps: [step(0, "past", true, "Open menu"), step(1, "current", true, "Choose Share"), step(2, "future", true, "Pick a person"), step(3, "future", false, "Hidden"), step(4, "future", true, "Send")],
+        steps: [
+          step(0, "past", true, "Open menu"),
+          step(1, "current", true, "Choose Share", { focus: "current" }),
+          step(2, "future", true, "Pick a person", { hint: true }),
+          step(3, "future", false, "Hidden"),
+          step(4, "future", true, "Send"),
+        ],
+      } satisfies StepsItem,
+    ]),
+  },
+  {
+    name: "steps-done",
+    title: "Steps: completed — “All done” on the last control",
+    targets: stepRects.map((r, i) => ({ rect: r, text: ["Open menu", "Choose Share", "Pick a person", "(not found)", "Send"][i]! })).filter((_, i) => i !== 3),
+    scene: scene([
+      {
+        id: "steps",
+        kind: "steps",
+        state: "visible",
+        current: 5,
+        completed: true,
+        steps: [
+          step(0, "past", true, "Open menu"),
+          step(1, "past", true, "Choose Share"),
+          step(2, "past", true, "Pick a person"),
+          step(3, "past", false, "Hidden"),
+          step(4, "past", true, "Send", { focus: "done" }),
+        ],
       } satisfies StepsItem,
     ]),
   },
