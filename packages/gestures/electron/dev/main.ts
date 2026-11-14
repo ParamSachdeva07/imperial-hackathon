@@ -11,8 +11,9 @@
  *   POINTY_GESTURES_SELFTEST=1   synthetic hands instead of the camera; checks the pipeline and exits
  */
 import { join } from "node:path";
-import { app, type BrowserWindow } from "electron";
+import { app, screen, type BrowserWindow } from "electron";
 import type { GestureEvent } from "../../src/events";
+import { toMousePoint } from "../../src/electron/coords";
 import { attachSystemMouse } from "../../src/electron/mouse";
 import { startGestureService } from "../../src/electron/service";
 import { startMockController } from "./mockController";
@@ -61,7 +62,17 @@ async function runSelfTest(
   useMouse: boolean,
 ): Promise<void> {
   const seen: GestureEvent[] = [];
-  service.onAny((e) => seen.push(e));
+  const probe: { afterClick: { x: number; y: number } | null } = { afterClick: null };
+  const nut = useMouse ? await import("@nut-tree-fork/nut-js") : null;
+  service.onAny((e) => {
+    seen.push(e);
+    // Read the real mouse right after the click, before anything else can move it.
+    if (e.type === "click" && nut) {
+      setTimeout(() => {
+        void nut.mouse.getPosition().then((p) => (probe.afterClick = { x: p.x, y: p.y }));
+      }, 250);
+    }
+  });
   await new Promise((r) => setTimeout(r, SELFTEST_DURATION_MS + 1500));
 
   const count = (type: GestureEvent["type"], phase?: string) =>
@@ -75,13 +86,25 @@ async function runSelfTest(
     ["scroll start + end", count("scroll", "start") === 1 && count("scroll", "end") === 1],
   ];
 
-  if (useMouse) {
-    const click = seen.find((e) => e.type === "click");
-    const { mouse } = await import("@nut-tree-fork/nut-js");
-    const pos = await mouse.getPosition();
-    const b = service.display.bounds;
-    const ok = !!click && Math.abs(pos.x - (b.x + click.x)) <= 3 && Math.abs(pos.y - (b.y + click.y)) <= 3;
-    checks.push([`real mouse at the click position (${pos.x}, ${pos.y})`, ok]);
+  const click = seen.find((e) => e.type === "click");
+  if (nut && click) {
+    // Same conversion as the mouse module: DIP → OS mouse coordinates (physical pixels on Windows).
+    const expected = toMousePoint(service.display.bounds, click.x, click.y, process.platform, (p) =>
+      screen.dipToScreenPoint(p),
+    );
+    const atEnd = await nut.mouse.getPosition();
+    const d = screen.getPrimaryDisplay();
+    log(
+      `diag: display ${d.bounds.width}×${d.bounds.height} DIP at (${d.bounds.x}, ${d.bounds.y}), scaleFactor ${d.scaleFactor}, ` +
+        `nut screen ${await nut.screen.width()}×${await nut.screen.height()}`,
+    );
+    log(
+      `diag: click (${click.x}, ${click.y}) DIP → expected mouse (${expected.x}, ${expected.y}); ` +
+        `after click ${probe.afterClick ? `(${probe.afterClick.x}, ${probe.afterClick.y})` : "n/a"}; at end (${atEnd.x}, ${atEnd.y})`,
+    );
+    const a = probe.afterClick;
+    const ok = !!a && Math.abs(a.x - expected.x) <= 3 && Math.abs(a.y - expected.y) <= 3;
+    checks.push(["real mouse at the click position", ok]);
   }
 
   for (const [name, ok] of checks) log(`${ok ? "PASS" : "FAIL"}  ${name}`);
