@@ -34,6 +34,7 @@ The playground shows the camera with landmarks (tick "Show active zone" to see t
 | Closed loop drawn with the draw pose, then still for `dwellMs` | `region_selected` | Polygon (simplified) and bbox. Rejects back-and-forth scribbles with a compactness test (4πA/P²). |
 | Pointing hand gone (`lostMs`) or pose changed | `hand_lost` | UI hides the cursor. |
 | **One finger** (index) — `mousePose` | `mouse` (`start` / `move` / `end`, `x`, `y`) | Drives the **real system mouse**: the controller moves the OS cursor to (x, y). No drawing, no selection. In the playground, `npm run mouse-bridge` does the moving (browsers can't). |
+| One finger, still for `clickDwellMs` (1 s) | `click_progress` (0→1), then `click` (`button: "left"`, `x`, `y`) | **Dwell click** where the mouse is. Arms only after the mouse has moved `clickArmDist` (40 pt) since it appeared or last clicked, so raising a still finger or resting the hand never clicks, and one hold = one click. `clickEnabled: false` turns it off. |
 | Two fingers spread (V sign) | nothing | Deliberately unused, to avoid accidental triggers. |
 
 The finger mapping is configurable: `new GestureInterpreter(display, { drawPose: "pointing", mousePose: "two_finger" })` restores one finger = draw, two fingers = mouse.
@@ -56,6 +57,8 @@ Coordinates are **logical display points (Electron DIP)** relative to the displa
 { type: "hand_lost",      hand: "Right", reason: "absent" | "pose_changed", t }
 { type: "scroll",         hand: "Right", phase: "start" | "move" | "end", dx: 0, dy: 12.5, t }
 { type: "mouse",          hand: "Right", phase: "start" | "move" | "end", x, y, displayId, t }
+{ type: "click_progress", hand: "Right", progress: 0.4, x, y, displayId, t }
+{ type: "click",          hand: "Right", button: "left", x, y, displayId, t }
 ```
 
 `hand` is MediaPipe's handedness label, used as a per-hand ID. MediaPipe assumes a mirrored (selfie) image, so with a raw webcam frame "Left" may be the user's right hand. It is only used as an ID.
@@ -86,6 +89,8 @@ Electron gotchas:
 ## Moving the real mouse
 
 `npm run mouse-bridge` (second terminal) starts `scripts/mouse-bridge.mjs`: a WebSocket server on `127.0.0.1:8765` that only accepts the dev page's origin and moves the OS cursor with `@nut-tree-fork/nut-js`. The playground connects automatically and sends normalized positions.
+
+The bridge also performs `click` events (`mouse.leftClick()` at the given position); clicks are queued and never dropped, moves keep only the latest.
 
 In Electron, skip the bridge: on a `mouse` event the main process converts (x, y) DIP + `displayId` to the screen position and calls `mouse.setPosition` (nut-js) or the agent-desktop equivalent. macOS needs the Accessibility permission for this.
 

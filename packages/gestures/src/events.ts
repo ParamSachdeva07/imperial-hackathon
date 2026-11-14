@@ -91,6 +91,26 @@ export type GestureEvent =
       displayId: number;
       t: number;
     }
+  /** Mouse mode: hold progress (0..1) before a dwell click, for the ring around the mouse. 0 = hold broken. */
+  | {
+      type: "click_progress";
+      hand: HandLabel;
+      progress: number;
+      x: number;
+      y: number;
+      displayId: number;
+      t: number;
+    }
+  /** Mouse mode: the finger stayed still long enough → left click at (x, y), where the mouse is. */
+  | {
+      type: "click";
+      hand: HandLabel;
+      button: "left";
+      x: number;
+      y: number;
+      displayId: number;
+      t: number;
+    }
   /** The pointing hand disappeared or stopped pointing. The cursor should be hidden. */
   | {
       type: "hand_lost";

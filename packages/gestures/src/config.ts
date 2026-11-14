@@ -85,6 +85,13 @@ export interface GestureConfig {
   /** Keep the cursor / mouse going while its pose is briefly unrecognised (blur, fingers drifting). */
   poseGraceMs: number;
 
+  /* Dwell click (mouse mode) */
+  clickEnabled: boolean;
+  /** Hold still this long in mouse mode to click. */
+  clickDwellMs: number;
+  /** The mouse must move this far (points) from the start / last click before it can click again. */
+  clickArmDist: number;
+
   /* Scroll (closed fist drag) */
   /** Page movement per display point of hand movement. */
   scrollGain: number;
@@ -137,6 +144,10 @@ export const DEFAULT_CONFIG: GestureConfig = {
   handoffMs: 1500,
   handoffDecayDist: 250,
   poseGraceMs: 300,
+
+  clickEnabled: true,
+  clickDwellMs: 1000,
+  clickArmDist: 40,
 
   scrollGain: 1.0,
   scrollDeadzone: 3,

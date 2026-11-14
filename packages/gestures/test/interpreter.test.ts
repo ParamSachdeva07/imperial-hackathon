@@ -330,6 +330,77 @@ describe("handoff between mouse and drawing", () => {
   });
 });
 
+describe("dwell click (mouse mode)", () => {
+  const finger = (x: number, y = 0.4) => [hand("Right", "Pointing_Up", { x, y })];
+  const sweep = (t0: number, from: number, to: number, ms = 800) =>
+    frames(t0, ms, (i, n) => finger(from + (to - from) * (i / (n - 1))));
+
+  it("move, then hold still ~1 s → exactly one left click where the mouse is", () => {
+    const it = active();
+    const evs = run(it, [...sweep(0, 0.4, 0.6), ...frames(800, 1500, () => finger(0.6))]);
+    const clicks = ofType(evs, "click");
+    expect(clicks).toHaveLength(1);
+    const lastMouse = ofType(evs, "mouse").filter((e) => e.t <= clicks[0].t).pop()!;
+    expect(Math.hypot(clicks[0].x - lastMouse.x, clicks[0].y - lastMouse.y)).toBeLessThan(1);
+    const prog = ofType(evs, "click_progress").map((e) => e.progress);
+    expect(prog[prog.length - 1]).toBe(1);
+    expect(clicks[0].t).toBeGreaterThan(1500); // ≥ clickDwellMs after the hand stopped
+  });
+
+  it("keeping still longer does not click again", () => {
+    const it = active();
+    const evs = run(it, [...sweep(0, 0.4, 0.6), ...frames(800, 5000, () => finger(0.6))]);
+    expect(ofType(evs, "click")).toHaveLength(1);
+  });
+
+  it("moving away and holding again gives a second click", () => {
+    const it = active();
+    const evs = run(it, [
+      ...sweep(0, 0.4, 0.6),
+      ...frames(800, 1500, () => finger(0.6)),
+      ...sweep(2300, 0.6, 0.45),
+      ...frames(3100, 1500, () => finger(0.45)),
+    ]);
+    expect(ofType(evs, "click")).toHaveLength(2);
+  });
+
+  it("raising a still finger never clicks (it must move first)", () => {
+    const it = active();
+    const evs = run(it, frames(0, 4000, () => finger(0.5)));
+    expect(ofType(evs, "mouse").length).toBeGreaterThan(50);
+    expect(ofType(evs, "click")).toHaveLength(0);
+  });
+
+  it("hand tremor after a click does not re-arm it", () => {
+    const it = active();
+    let seed = 7;
+    const rand = () => ((seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32 - 0.5);
+    const evs = run(it, [
+      ...sweep(0, 0.4, 0.6),
+      ...frames(800, 6000, () => finger(0.6 + 0.004 * rand(), 0.4 + 0.004 * rand())), // ≈ ±4 pt jitter
+    ]);
+    expect(ofType(evs, "click")).toHaveLength(1);
+  });
+
+  it("can be turned off", () => {
+    const it = new GestureInterpreter(DISPLAY, { clickEnabled: false });
+    it.setSessionActive(true);
+    const evs = run(it, [...sweep(0, 0.4, 0.6), ...frames(800, 1500, () => finger(0.6))]);
+    expect(ofType(evs, "click")).toHaveLength(0);
+    expect(ofType(evs, "click_progress")).toHaveLength(0);
+  });
+
+  it("drawing mode still selects instead of clicking", () => {
+    const it = active();
+    const evs = run(it, [
+      ...frames(0, 800, (i, n) => [twoFingersAt("Right", 0.4 + 0.2 * (i / (n - 1)), 0.4)]),
+      ...frames(800, 1500, () => [twoFingersAt("Right", 0.6, 0.4)]),
+    ]);
+    expect(ofType(evs, "click")).toHaveLength(0);
+    expect(ofType(evs, "point_selected")).toHaveLength(1);
+  });
+});
+
 describe("tracking robustness", () => {
   it("drawing survives a brief loss of the two-finger pose (fingers drift apart)", () => {
     const it = active();

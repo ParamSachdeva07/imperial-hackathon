@@ -36,25 +36,38 @@ wss.on("connection", (socket, req) => {
     socket.close(1008, "origin not allowed");
     return;
   }
-  console.log("Playground connected — two fingers together now move your mouse.");
+  console.log("Playground connected — one finger moves your mouse, holding still clicks.");
 
   let busy = false;
-  let pending = null;
+  let pending = null; // latest move only (older moves are useless)
+  const clicks = []; // clicks are never dropped
+
+  const toPoint = ({ u, v }) =>
+    new Point(
+      Math.round(Math.min(1, Math.max(0, u)) * (width - 1)),
+      Math.round(Math.min(1, Math.max(0, v)) * (height - 1)),
+    );
 
   const flush = async () => {
-    if (busy || !pending) return;
+    if (busy) return;
     busy = true;
-    const { u, v } = pending;
-    pending = null;
     try {
-      const x = Math.round(Math.min(1, Math.max(0, u)) * (width - 1));
-      const y = Math.round(Math.min(1, Math.max(0, v)) * (height - 1));
-      await mouse.setPosition(new Point(x, y));
+      while (clicks.length || pending) {
+        if (clicks.length) {
+          const c = clicks.shift();
+          await mouse.setPosition(toPoint(c));
+          await mouse.leftClick();
+          console.log("click");
+        } else {
+          const p = pending;
+          pending = null;
+          await mouse.setPosition(toPoint(p));
+        }
+      }
     } catch (err) {
-      console.error("setPosition failed:", String(err));
+      console.error("mouse action failed:", String(err));
     } finally {
       busy = false;
-      if (pending) flush();
     }
   };
 
@@ -66,7 +79,8 @@ wss.on("connection", (socket, req) => {
       return;
     }
     if (typeof msg?.u !== "number" || typeof msg?.v !== "number") return;
-    pending = { u: msg.u, v: msg.v }; // keep only the latest position
+    if (msg.type === "click") clicks.push({ u: msg.u, v: msg.v });
+    else pending = { u: msg.u, v: msg.v }; // keep only the latest position
     flush();
   });
 

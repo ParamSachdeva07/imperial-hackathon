@@ -13,6 +13,10 @@ const statusEl = $("status");
 const logEl = $("log");
 const hintEl = $("hint");
 const camCtx = cam.getContext("2d")!;
+// Transparent full-window layer (like the app's click-through overlay): cursor, rings,
+// strokes and selections are drawn here so they also show over the side panel.
+const overlay = $<HTMLCanvasElement>("overlay");
+const ov = overlay.getContext("2d")!;
 const scr = screenCanvas.getContext("2d")!;
 
 /* ---------- state for drawing ---------- */
@@ -24,6 +28,8 @@ const TRAIL_MS = 10000;
 let page = { x: 0, y: 0 }; // fake document offset, moved by fist-drag
 let grabbing = false;
 let mouseDot: { x: number; y: number } | null = null; // where the system mouse is being sent
+let clickProgress = 0;
+let clickFlash: { x: number; y: number; t: number } | null = null;
 
 /* ---------- optional bridge to the real system mouse (scripts/mouse-bridge.mjs) ---------- */
 let bridge: WebSocket | null = null;
@@ -31,7 +37,7 @@ function connectBridge() {
   const ws = new WebSocket("ws://127.0.0.1:8765");
   ws.onopen = () => {
     bridge = ws;
-    $("bridge").textContent = "Mouse bridge: connected — one finger moves your real mouse";
+    $("bridge").textContent = "Mouse bridge: connected — one finger moves your real mouse, hold still to click";
     $("bridge").classList.add("on");
   };
   ws.onclose = () => {
@@ -96,8 +102,8 @@ window.addEventListener("mousemove", (ev) => {
 });
 
 /** Screen px → canvas CSS px transform: canvas = screen + offset. */
-function screenToCanvas(): { ax: number; bx: number; ay: number; by: number; how: string } {
-  const r = screenCanvas.getBoundingClientRect();
+function screenToCanvas(target: HTMLElement = screenCanvas): { ax: number; bx: number; ay: number; by: number; how: string } {
+  const r = target.getBoundingClientRect();
   if (locked && lockedFor === windowKey()) {
     return { ax: 1, bx: locked.dx - r.left, ay: 1, by: locked.dy - r.top, how: "measured ✓ (locked)" };
   }
@@ -120,7 +126,7 @@ const TUNABLE: (keyof GestureConfig)[] = [
   "wakeHoldMs", "dwellMs", "dwellSpeed", "moveSpeed", "oneEuroMinCutoff", "oneEuroBeta",
   "minLoopLength", "minLoopArea", "minCompactness", "closeFrac", "poseStableMs", "fingerExtendRatio",
   "wakeMaxMotion", "wakeUprightMin", "scrollGain", "scrollDeadzone", "scrollGraceMs", "scrollMinCutoff", "twoFingerMaxSpread",
-  "poseGraceMs", "handoffDecayDist",
+  "poseGraceMs", "handoffDecayDist", "clickDwellMs", "clickArmDist",
 ];
 for (const key of TUNABLE) {
   const label = document.createElement("label");
@@ -142,6 +148,7 @@ $("endSession").onclick = () => {
   trail = [];
   grabbing = false;
   mouseDot = null;
+  clickProgress = 0;
   statusEl.textContent = "Idle — raise an open palm to wake";
   statusEl.classList.remove("awake");
 };
@@ -161,6 +168,7 @@ const CORNERS = ["TOP-LEFT", "TOP-RIGHT", "BOTTOM-RIGHT", "BOTTOM-LEFT"];
 function log(e: GestureEvent) {
   if (e.type === "cursor_moved" || e.type === "dwell_progress") return;
   if ((e.type === "scroll" || e.type === "mouse") && e.phase === "move") return;
+  if (e.type === "click_progress") return;
   const line = `${(e.t / 1000).toFixed(2)}s ${JSON.stringify(e)}`;
   logEl.textContent = (line + "\n" + logEl.textContent).slice(0, 8000);
 }
@@ -179,9 +187,19 @@ function handle(e: GestureEvent) {
       trail.push([e.x, e.y, e.t]);
       while (trail.length && trail[0][2] < e.t - TRAIL_MS) trail.shift();
       break;
+    case "click_progress":
+      clickProgress = e.progress;
+      break;
+    case "click":
+      clickProgress = 0;
+      clickFlash = { x: e.x, y: e.y, t: performance.now() };
+      bridge?.send(JSON.stringify({ type: "click", u: e.x / window.screen.width, v: e.y / window.screen.height }));
+      break;
     case "mouse":
       if (e.phase === "end") {
         mouseDot = null;
+  clickProgress = 0;
+        clickProgress = 0;
         break;
       }
       mouseDot = { x: e.x, y: e.y };
@@ -318,67 +336,96 @@ function drawScreen() {
   scr.fillStyle = "rgba(255,255,255,0.5)";
   scr.font = "13px system-ui";
   scr.fillText(`alignment: ${m.how}`, 20, screenCanvas.clientHeight - 16);
-  scr.transform(m.ax, 0, 0, m.ay, m.bx, m.by);
+
+  // Overlay layer, in screen coordinates mapped to the window.
+  const w = window.innerWidth, h = window.innerHeight;
+  if (overlay.width !== Math.round(w * d) || overlay.height !== Math.round(h * d)) {
+    overlay.width = Math.round(w * d);
+    overlay.height = Math.round(h * d);
+  }
+  ov.setTransform(d, 0, 0, d, 0, 0);
+  ov.clearRect(0, 0, w, h);
+  const o = screenToCanvas(overlay);
+  ov.transform(o.ax, 0, 0, o.ay, o.bx, o.by);
 
   if (selection?.type === "region_selected") {
-    scr.fillStyle = "rgba(74, 211, 255, 0.2)";
-    scr.strokeStyle = "#4ad3ff";
-    scr.lineWidth = 2;
-    scr.beginPath();
-    selection.polygon.forEach(([x, y], i) => (i ? scr.lineTo(x, y) : scr.moveTo(x, y)));
-    scr.closePath();
-    scr.fill();
-    scr.stroke();
+    ov.fillStyle = "rgba(74, 211, 255, 0.2)";
+    ov.strokeStyle = "#4ad3ff";
+    ov.lineWidth = 2;
+    ov.beginPath();
+    selection.polygon.forEach(([x, y], i) => (i ? ov.lineTo(x, y) : ov.moveTo(x, y)));
+    ov.closePath();
+    ov.fill();
+    ov.stroke();
     const b = selection.bbox;
-    scr.setLineDash([4, 4]);
-    scr.strokeRect(b.x, b.y, b.width, b.height);
-    scr.setLineDash([]);
+    ov.setLineDash([4, 4]);
+    ov.strokeRect(b.x, b.y, b.width, b.height);
+    ov.setLineDash([]);
   } else if (selection?.type === "point_selected") {
-    scr.strokeStyle = "#7CFC9A";
-    scr.lineWidth = 3;
-    scr.beginPath();
-    scr.arc(selection.x, selection.y, 28, 0, 2 * Math.PI);
-    scr.stroke();
+    ov.strokeStyle = "#7CFC9A";
+    ov.lineWidth = 3;
+    ov.beginPath();
+    ov.arc(selection.x, selection.y, 28, 0, 2 * Math.PI);
+    ov.stroke();
   }
 
   if (trail.length > 1) {
-    scr.strokeStyle = "rgba(255, 213, 74, 0.6)";
-    scr.lineWidth = 3;
-    scr.beginPath();
-    trail.forEach(([x, y], i) => (i ? scr.lineTo(x, y) : scr.moveTo(x, y)));
-    scr.stroke();
+    ov.strokeStyle = "rgba(255, 213, 74, 0.6)";
+    ov.lineWidth = 3;
+    ov.beginPath();
+    trail.forEach(([x, y], i) => (i ? ov.lineTo(x, y) : ov.moveTo(x, y)));
+    ov.stroke();
   }
 
+  if (mouseDot && clickProgress > 0) {
+    // Dwell-click ring around the (real or simulated) mouse.
+    ov.strokeStyle = "#ff9f43";
+    ov.lineWidth = 5;
+    ov.beginPath();
+    ov.arc(mouseDot.x, mouseDot.y, 22, -Math.PI / 2, -Math.PI / 2 + clickProgress * 2 * Math.PI);
+    ov.stroke();
+  }
+  if (clickFlash) {
+    const age = (performance.now() - clickFlash.t) / 400;
+    if (age >= 1) clickFlash = null;
+    else {
+      ov.strokeStyle = `rgba(255, 159, 67, ${1 - age})`;
+      ov.lineWidth = 4;
+      ov.beginPath();
+      ov.arc(clickFlash.x, clickFlash.y, 22 + 30 * age, 0, 2 * Math.PI);
+      ov.stroke();
+    }
+  }
   if (mouseDot && !bridge) {
     // Simulated system mouse, only when the bridge isn't moving the real one.
     const { x, y } = mouseDot;
-    scr.fillStyle = "#ffffff";
-    scr.strokeStyle = "#000000";
-    scr.lineWidth = 2;
-    scr.beginPath();
-    scr.moveTo(x, y);
-    scr.lineTo(x, y + 26);
-    scr.lineTo(x + 7, y + 19);
-    scr.lineTo(x + 13, y + 31);
-    scr.lineTo(x + 18, y + 29);
-    scr.lineTo(x + 12, y + 17);
-    scr.lineTo(x + 21, y + 17);
-    scr.closePath();
-    scr.fill();
-    scr.stroke();
+    ov.fillStyle = "#ffffff";
+    ov.strokeStyle = "#000000";
+    ov.lineWidth = 2;
+    ov.beginPath();
+    ov.moveTo(x, y);
+    ov.lineTo(x, y + 26);
+    ov.lineTo(x + 7, y + 19);
+    ov.lineTo(x + 13, y + 31);
+    ov.lineTo(x + 18, y + 29);
+    ov.lineTo(x + 12, y + 17);
+    ov.lineTo(x + 21, y + 17);
+    ov.closePath();
+    ov.fill();
+    ov.stroke();
   }
 
   if (cursor) {
-    scr.fillStyle = awake ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)";
-    scr.beginPath();
-    scr.arc(cursor.x, cursor.y, 10, 0, 2 * Math.PI);
-    scr.fill();
+    ov.fillStyle = awake ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)";
+    ov.beginPath();
+    ov.arc(cursor.x, cursor.y, 10, 0, 2 * Math.PI);
+    ov.fill();
     if (dwell > 0) {
-      scr.strokeStyle = "#7CFC9A";
-      scr.lineWidth = 5;
-      scr.beginPath();
-      scr.arc(cursor.x, cursor.y, 24, -Math.PI / 2, -Math.PI / 2 + dwell * 2 * Math.PI);
-      scr.stroke();
+      ov.strokeStyle = "#7CFC9A";
+      ov.lineWidth = 5;
+      ov.beginPath();
+      ov.arc(cursor.x, cursor.y, 24, -Math.PI / 2, -Math.PI / 2 + dwell * 2 * Math.PI);
+      ov.stroke();
     }
   }
 }

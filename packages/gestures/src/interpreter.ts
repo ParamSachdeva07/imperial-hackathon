@@ -52,6 +52,13 @@ interface MouseState {
   lastRawAnchor: Vec2 | null;
   lastSeen: number;
   unsureSince: number | null;
+  /* dwell click */
+  recent: TimedPoint[];
+  restStart: number | null;
+  /** Where the mouse was when it started or last clicked; it must move clickArmDist away to re-arm. */
+  armAnchor: Vec2 | null;
+  clickArmed: boolean;
+  clickProgress: number;
 }
 
 interface EndedStroke {
@@ -230,6 +237,7 @@ export class GestureInterpreter {
         this.mouse = {
           hand: mouseHand.label, filter: this.newFilter(), pos: raw, offset,
           lastRawAnchor: null, lastSeen: t, unsureSince: null,
+          recent: [], restStart: null, armAnchor: null, clickArmed: false, clickProgress: 0,
         };
       }
       const m = this.mouse;
@@ -238,6 +246,7 @@ export class GestureInterpreter {
       m.pos = m.filter.filter(sx, sy, t / 1000);
       m.lastSeen = t;
       events.push(this.mouseEvent(m, isNew ? "start" : "move", t));
+      if (this.cfg.clickEnabled) this.updateDwellClick(m, t, events);
     }
 
     // 4. Fist = grab and drag the page.
@@ -449,6 +458,44 @@ export class GestureInterpreter {
     if (Math.hypot(s.acc[0], s.acc[1]) >= c.scrollDeadzone) {
       events.push({ type: "scroll", hand: s.hand, phase: "move", dx: round1(s.acc[0]), dy: round1(s.acc[1]), t });
       s.acc = [0, 0];
+    }
+  }
+
+  /** Mouse mode: hold still clickDwellMs → one left click; must move clickArmDist away before the next. */
+  private updateDwellClick(m: MouseState, t: number, events: GestureEvent[]): void {
+    const c = this.cfg;
+    const [x, y] = m.pos;
+    const displayId = this.display.id;
+
+    m.armAnchor ??= [x, y];
+    if (!m.clickArmed && dist(m.armAnchor, [x, y]) >= c.clickArmDist) m.clickArmed = true;
+
+    m.recent.push({ t, x, y });
+    while (m.recent.length > 2 && m.recent[0].t < t - c.speedWindowMs) m.recent.shift();
+    const first = m.recent[0];
+    const dt = (t - first.t) / 1000;
+    const speed = dt > 0 ? dist([first.x, first.y], [x, y]) / dt : 0;
+    const resting = m.restStart !== null ? speed <= c.moveSpeed : speed < c.dwellSpeed;
+
+    if (!resting) {
+      m.restStart = null;
+      if (m.clickProgress > 0) {
+        events.push({ type: "click_progress", hand: m.hand, progress: 0, x: round1(x), y: round1(y), displayId, t });
+      }
+      m.clickProgress = 0;
+      return;
+    }
+
+    if (m.restStart === null) m.restStart = t;
+    if (!m.clickArmed) return;
+    const progress = Math.min(1, (t - m.restStart) / c.clickDwellMs);
+    m.clickProgress = progress;
+    events.push({ type: "click_progress", hand: m.hand, progress, x: round1(x), y: round1(y), displayId, t });
+    if (progress >= 1) {
+      events.push({ type: "click", hand: m.hand, button: "left", x: round1(x), y: round1(y), displayId, t });
+      m.clickArmed = false;
+      m.armAnchor = [x, y];
+      m.clickProgress = 0;
     }
   }
 
