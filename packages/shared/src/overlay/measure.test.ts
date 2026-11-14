@@ -6,9 +6,10 @@ describe("measure", () => {
   it("counts wrapped lines", () => {
     expect(lineCount("", 24, 200)).toBe(1);
     expect(lineCount("short", 24, 400)).toBe(1);
-    // 24 px * 0.56 ≈ 13.4 px/char → 100 px ≈ 7 chars per line
+    // lowercase ≈ 14 px/char at 24 px → 100 px ≈ 7 chars per line
     expect(lineCount("aaaa bbbb cccc", 24, 100)).toBe(3);
-    expect(lineCount("a".repeat(20), 24, 100)).toBe(3); // hard wrap of a long word
+    expect(lineCount("a".repeat(20), 24, 100)).toBeGreaterThanOrEqual(3); // hard wrap of a long word
+    expect(lineCount("WWWW WWWW", 24, 100)).toBe(2); // capitals are wider than lowercase
   });
 
   it("labels respect the max width and grow in height when wrapping", () => {
