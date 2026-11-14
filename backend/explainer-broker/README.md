@@ -29,14 +29,17 @@ result.data.images[0].url
 Default: `fal-ai/flux/schnell` (FLUX.1 [schnell], 1-4 step distilled, fal markets it as sub-second;
 independent reviews report roughly 1-2 s per image on fal). Override with `FAL_MODEL_ID`.
 
-Latency measurements: **NOT YET MEASURED.** No `FAL_KEY` was available when this was built (the main
-checkout had no `.env`), so no live calls were made. Candidates to measure once a key exists
-(5 calls each, 640x640, report median):
+Latency measurements (2026-11-14, from a London laptop, `fal.subscribe` end-to-end incl. queue,
+640×640, 1 image, style suffix appended; 3 calls each + the 5 pregen calls for schnell):
 
-| Model | Notes | Measured |
-| --- | --- | --- |
-| `fal-ai/flux/schnell` | current default, 4 steps | pending |
-| `fal-ai/flux-2/turbo` (verify id on fal.ai/models) | distilled FLUX.2; one benchmark reports ~6.6 s at 1024px | pending |
-| `fal-ai/z-image/turbo` (verify id on fal.ai/models) | not benchmarked in sources found | pending |
+| Model | Notes | Measured (ms) | Median |
+| --- | --- | --- | --- |
+| `fal-ai/flux/schnell` | **default**, 4 steps | 1744, 1014, 1406 (pregen: 2097–2529 incl. download) | **~1.4 s** |
+| `fal-ai/flux-2/turbo` | distilled FLUX.2 | 2223, 1888, 1892 | ~1.9 s |
+| `fal-ai/z-image/turbo` | | 1806, 3065, 1052 | ~1.8 s (high variance) |
+
+All three IDs resolved on fal. schnell is fastest and steadiest, so it stays the default; all are
+well inside the 8 s client timeout. Pre-generated images live in `assets/explainers/` and are used
+first, so the live demo never depends on fal responding.
 
 Update the table and `DEFAULT_MODEL_ID` in `src/falGenerate.ts` after measuring.
