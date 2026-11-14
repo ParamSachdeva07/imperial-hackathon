@@ -5,7 +5,7 @@
  * Call `startVisionRenderer()` from the page's entry script (see electron/dev/vision.ts).
  */
 import type { GestureConfig } from "../config";
-import type { DisplayInfo, FrameObservation } from "../events";
+import type { DisplayInfo, FrameObservation, GestureEvent } from "../events";
 import { GestureInterpreter } from "../interpreter";
 import type { PointyGesturesApi } from "./api";
 import type { GestureCommand } from "./protocol";
@@ -26,6 +26,8 @@ export interface VisionRendererOptions {
   source?: FrameSource;
   /** Element to show the camera preview in (only visible if the window is shown for debugging). */
   previewParent?: HTMLElement;
+  /** Called after every processed frame (debug views). */
+  onFrame?: (obs: FrameObservation, events: GestureEvent[], display: DisplayInfo) => void;
 }
 
 const DEFAULT_MODEL_URL =
@@ -130,7 +132,9 @@ export async function startVisionRenderer(opts: VisionRendererOptions): Promise<
       if (obs && interp && display) {
         frames++;
         hands = obs.hands.length;
-        api.emit(interp.process(obs));
+        const events = interp.process(obs);
+        api.emit(events);
+        opts.onFrame?.(obs, events, display);
       }
     } catch (err) {
       api.status({ type: "error", message: err instanceof Error ? err.message : String(err) });

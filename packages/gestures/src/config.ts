@@ -32,6 +32,10 @@ export interface GestureConfig {
   poseStableMs: number;
   /** Index/middle tip gap ÷ palm width below which two fingers count as "together". */
   twoFingerMaxSpread: number;
+  /** Once in two-finger mode, the middle finger only counts as folded below this ratio (hysteresis). */
+  twoFingerStickyRatio: number;
+  /** …and the fingers only count as apart above this angle (degrees) between them. */
+  twoFingerStickyMaxAngle: number;
 
   /* Wake (flow 1) */
   wakeHoldMs: number;
@@ -115,6 +119,8 @@ export const DEFAULT_CONFIG: GestureConfig = {
   fingerExtendRatio: 1.15,
   poseStableMs: 120,
   twoFingerMaxSpread: 0.5,
+  twoFingerStickyRatio: 1.0,
+  twoFingerStickyMaxAngle: 12,
 
   wakeHoldMs: 700,
   wakeRearmMs: 500,

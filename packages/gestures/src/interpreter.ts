@@ -171,7 +171,11 @@ export class GestureInterpreter {
       st.palmHist.push({ t, x: px, y: py });
       while (st.palmHist.length && at(st.palmHist, 0).t < t - 1000) st.palmHist.shift();
       const pose = st.tracker.update(
-        classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread),
+        classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread, {
+          prev: st.tracker.stable,
+          stickyRatio: this.cfg.twoFingerStickyRatio,
+          stickyMaxAngle: this.cfg.twoFingerStickyMaxAngle,
+        }),
         t,
       );
       stablePose.set(hand.label, pose);

@@ -19,7 +19,8 @@ function oneFinger(x: number, y: number): HandObservation {
   const lm = blank(0.5, y + 0.2);
   lm[8] = { x, y, z: 0 };
   lm[9] = { x: 0.5, y: y + 0.1, z: 0 };
-  lm[12] = { x: 0.5, y: y, z: 0 };
+  lm[10] = { x: 0.5, y: y + 0.08, z: 0 };
+  lm[12] = { x: 0.5, y: y + 0.14, z: 0 }; // middle finger folded
   return { label: "Right", landmarks: lm, gesture: { name: "Pointing_Up", score: 0.9 } };
 }
 

@@ -61,7 +61,54 @@ export function ruleBasedPose(hand: HandObservation, ratio: number, maxSpread = 
  * MediaPipe's canned label wins when it is confident about a class we know;
  * otherwise (e.g. "None", or pointing sideways) our rules decide.
  */
-export function classifyPose(hand: HandObservation, minScore: number, ratio: number, maxSpread = 0.5): Pose {
+/**
+ * Hysteresis for two fingers: once a hand is in two_finger, it stays there unless the middle
+ * finger is clearly folded (ratio `stickyRatio` instead of `ratio`) or the fingers clearly part.
+ * Glued fingers often leave the middle one slightly bent, which otherwise flips the hand to
+ * "pointing" (mouse) in the middle of a circle.
+ */
+export interface PoseHysteresis {
+  prev: Pose;
+  stickyRatio: number;
+  /** Max angle (degrees) between index and middle fingers to stay "together". */
+  stickyMaxAngle: number;
+}
+
+const MIDDLE_MCP = 9;
+
+/** Angle in degrees between index (MCP→tip) and middle (MCP→tip): ~0 when glued, opens in a V. */
+function fingerAngle(lm: Point3[]): number {
+  const a = at(lm, INDEX_MCP), b = at(lm, FINGERS.index.tip);
+  const c = at(lm, MIDDLE_MCP), d = at(lm, FINGERS.middle.tip);
+  const u = [b.x - a.x, b.y - a.y, b.z - a.z];
+  const v = [d.x - c.x, d.y - c.y, d.z - c.z];
+  const dot = u[0]! * v[0]! + u[1]! * v[1]! + u[2]! * v[2]!;
+  const nu = Math.hypot(u[0]!, u[1]!, u[2]!);
+  const nv = Math.hypot(v[0]!, v[1]!, v[2]!);
+  if (nu === 0 || nv === 0) return 0;
+  return (Math.acos(Math.min(1, Math.max(-1, dot / (nu * nv)))) * 180) / Math.PI;
+}
+
+function stillTwoFinger(hand: HandObservation, h: PoseHysteresis): boolean {
+  const lm = hand.worldLandmarks ?? hand.landmarks;
+  if (!lm || lm.length < 21) return false;
+  const index = isExtended(lm, FINGERS.index, h.stickyRatio);
+  const middle = isExtended(lm, FINGERS.middle, h.stickyRatio);
+  const ring = isExtended(lm, FINGERS.ring, h.stickyRatio);
+  const pinky = isExtended(lm, FINGERS.pinky, h.stickyRatio);
+  if (!index || !middle || (ring && pinky)) return false;
+  // Not the tip gap: a slightly bent middle finger drops its tip, but stays parallel to the index.
+  return fingerAngle(lm) <= h.stickyMaxAngle;
+}
+
+export function classifyPose(
+  hand: HandObservation,
+  minScore: number,
+  ratio: number,
+  maxSpread = 0.5,
+  hysteresis?: PoseHysteresis,
+): Pose {
+  if (hysteresis?.prev === "two_finger" && stillTwoFinger(hand, hysteresis)) return "two_finger";
   // MediaPipe has no "two fingers together" class (it may say Victory or None), so rules decide it first.
   const rule = ruleBasedPose(hand, ratio, maxSpread);
   if (rule === "two_finger") return rule;

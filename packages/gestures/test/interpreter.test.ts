@@ -20,7 +20,8 @@ function hand(label: HandLabel, gesture: string, tip: { x: number; y: number }, 
   const lm: Point3[] = Array.from({ length: 21 }, () => ({ x: 0.5, y: wristY, z: 0 }));
   lm[8] = { x: tip.x, y: tip.y, z: 0 };
   lm[9] = { x: 0.5, y: wristY - 0.1, z: 0 };
-  lm[12] = { x: 0.5, y: wristY - 0.2, z: 0 }; // fingers up
+  lm[10] = { x: 0.5, y: wristY - 0.12, z: 0 }; // middle PIP
+  lm[12] = { x: 0.5, y: wristY - 0.06, z: 0 }; // middle tip folded back (real pointing hand)
   return { label, landmarks: lm, gesture: { name: gesture, score: 0.9 } };
 }
 
@@ -399,6 +400,43 @@ describe("dwell click (mouse mode)", () => {
     ]);
     expect(ofType(evs, "click")).toHaveLength(0);
     expect(ofType(evs, "point_selected")).toHaveLength(1);
+  });
+});
+
+describe("two-finger hysteresis", () => {
+  /** Glued fingers with the middle one slightly bent (ratio ≈ 1.1): MediaPipe says Pointing_Up. */
+  const bentMiddle = (x: number, y = 0.4): HandObservation => {
+    const h = twoFingersAt("Right", x, y);
+    h.landmarks[12] = { x: x + 0.005, y: y + 0.107, z: 0 };
+    h.gesture = { name: "Pointing_Up", score: 0.9 };
+    return h;
+  };
+
+  it("a slightly bent middle finger does not flip a drawing hand to the mouse", () => {
+    const it = active();
+    const evs = run(it, [
+      ...frames(0, 500, (i, n) => [twoFingersAt("Right", 0.4 + 0.05 * (i / (n - 1)), 0.4)]),
+      ...frames(500, 1500, (i, n) => [bentMiddle(0.45 + 0.1 * (i / (n - 1)))]),
+    ]);
+    expect(ofType(evs, "mouse")).toHaveLength(0);
+    expect(ofType(evs, "hand_lost")).toHaveLength(0);
+    expect(ofType(evs, "cursor_moved").length).toBeGreaterThan(50);
+  });
+
+  it("the same bent hand from scratch is one finger (mouse)", () => {
+    const it = active();
+    const evs = run(it, frames(0, 1000, (i, n) => [bentMiddle(0.45 + 0.1 * (i / (n - 1)))]));
+    expect(ofType(evs, "mouse").length).toBeGreaterThan(5);
+    expect(ofType(evs, "cursor_moved")).toHaveLength(0);
+  });
+
+  it("clearly folding the middle finger still switches to the mouse", () => {
+    const it = active();
+    const evs = run(it, [
+      ...frames(0, 500, () => [twoFingersAt("Right", 0.45, 0.4)]),
+      ...frames(500, 800, () => [hand("Right", "Pointing_Up", { x: 0.45, y: 0.4 })]),
+    ]);
+    expect(ofType(evs, "mouse").length).toBeGreaterThan(5);
   });
 });
 

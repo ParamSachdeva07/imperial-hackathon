@@ -98,7 +98,7 @@ await attachSystemMouse(gestures);   // opt-in: "mouse"/"click" events move and 
 
 ```bash
 npm run electron -w @pointy/gestures                         # use it with your camera
-POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # also show the camera window (debug)
+POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # debug window: camera + skeleton + gesture label, mini screen with cursor/trail/rings/selections
 npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
 ```
 

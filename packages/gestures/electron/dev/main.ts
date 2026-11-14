@@ -24,7 +24,10 @@ const selfTest = env("POINTY_GESTURES_SELFTEST") === "1";
 const log = (msg: string) => console.log(`[gestures] ${msg}`);
 
 function loadVisionPage(win: BrowserWindow): Promise<void> {
-  const query = selfTest ? "?selftest=1" : "";
+  const params = new URLSearchParams();
+  if (selfTest) params.set("selftest", "1");
+  if (env("POINTY_GESTURES_SHOW") === "1") params.set("show", "1");
+  const query = params.size ? `?${params.toString()}` : "";
   const devUrl = env("ELECTRON_RENDERER_URL");
   if (devUrl && !app.isPackaged) return win.loadURL(`${devUrl}/vision.html${query}`);
   return win.loadFile(join(__dirname, "../renderer/vision.html"), query ? { search: query.slice(1) } : undefined);

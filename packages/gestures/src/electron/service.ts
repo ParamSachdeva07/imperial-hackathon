@@ -58,8 +58,8 @@ export async function startGestureService(opts: GestureServiceOptions): Promise<
   const ses = session.fromPartition(opts.partition ?? "pointy-gestures");
   const win = new BrowserWindow({
     show: !!opts.showWindow,
-    width: 420,
-    height: 360,
+    width: opts.showWindow ? 1000 : 420,
+    height: opts.showWindow ? 480 : 360,
     title: "Pointy gestures (debug)",
     skipTaskbar: !opts.showWindow,
     webPreferences: {

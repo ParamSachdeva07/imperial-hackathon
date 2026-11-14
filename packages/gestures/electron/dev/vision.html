@@ -10,7 +10,10 @@
   </head>
   <body>
     <div id="status">starting…</div>
-    <div id="preview"></div>
+    <div style="display: flex; gap: 8px; padding: 0 8px">
+      <div id="preview" style="width: 480px; flex: none"></div>
+      <div id="side" style="flex: 1"></div>
+    </div>
     <script type="module" src="./vision.ts"></script>
   </body>
 </html>
