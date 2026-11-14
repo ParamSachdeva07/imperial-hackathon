@@ -50,7 +50,7 @@ const lerp = (a: number, b: number, k: number) => a + (b - a) * Math.min(1, Math
 
 /** Script step: [duration ms, hands at progress k (0..1)]. */
 const SCRIPT: [number, (k: number) => HandObservation[]][] = [
-  [600, () => []],
+  [1500, () => []], // let the launcher finish starting (mouse, feedback window)
   [1300, () => [palm(0.5, 0.5)]], // wake
   [400, () => []],
   [900, (k) => [oneFinger(lerp(0.6, 0.4, k), 0.4)]], // mouse moves

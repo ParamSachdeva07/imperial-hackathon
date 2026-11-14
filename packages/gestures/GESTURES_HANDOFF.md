@@ -14,11 +14,12 @@ Read this before touching hand tracking, gestures, the camera, or real mouse act
 - Camera capture, MediaPipe hand tracking (`@mediapipe/tasks-vision` GestureRecognizer, 2 hands)
 - Gesture interpretation: wake, finger cursor, dwell selection, circle → region, mouse mode + dwell click, fist scroll
 - An Electron gesture service (hidden vision window + IPC to main)
+- **On-screen feedback for the user's own gestures**: drawing cursor, trail, hold rings, selected point/region (transparent click-through overlay window)
 - Optional real mouse moves/clicks (nut-js)
 
 **This package does NOT own** (other teammates' parts, consumed through events):
 - The session controller (turn context, permissions, cancellation), voice / GPT Realtime / LiveKit / Anam, Jev, agent-desktop
-- The overlay / annotation renderer (Chris, `apps/desktop/src/main/overlay`). Gestures never draw on screen in the app: drawing the cursor, trail, rings and selections is the overlay's job.
+- The **AI annotation overlay** (Chris, `apps/desktop/src/main/overlay`): arrows, highlights, step badges, explainer cards drawn by the AI. Agreed split: **gestures draw only what the user is doing with their hand** (cursor, trail, rings, selection), and **the AI overlay draws what the AI shows**. They are two separate click-through windows; neither should draw the other's content.
 
 Plan mapping (Notion plan "Pointy (TBD)"): this covers the **MediaPipe worker** and **Gesture interpreter** components, and build step **3 "Local gestures and coordinates"**.
 
@@ -89,7 +90,17 @@ gestures.display;                      // { id, width, height, bounds } of the m
 gestures.dispose();
 
 const detachMouse = await attachSystemMouse(gestures);  // OPT-IN: "mouse"/"click" events move/click the real OS mouse
+
+import { startGestureFeedback } from "@pointy/gestures/electron/feedback";
+const feedback = await startGestureFeedback(gestures, {
+  preloadPath,                 // built from @pointy/gestures/electron/feedback-preload
+  loadPage: (win) => ...,      // a page whose script calls startFeedbackRenderer() from @pointy/gestures/electron/feedback-renderer
+  contentProtection?: boolean, // default true: excluded from screen captures (the AI never sees it)
+});
+feedback.clearSelection();     // when the controller ends the turn (selections otherwise fade after 4 s)
 ```
+
+Feedback window flags mirror the AI overlay's mac platform adapter: transparent, frameless, `focusable: false`, `type: "panel"` on macOS, `setAlwaysOnTop(true, "screen-saver")`, `setIgnoreMouseEvents(true)`, `setContentProtection(true)`, `showInactive()`. It covers the mapped (primary) display and clears itself when the session closes.
 
 What the service already does: hidden `BrowserWindow` with `backgroundThrottling: false`; camera permission granted **only** to that window via its own session partition (`pointy-gestures`), so the app's default session is untouched; macOS camera prompt (`askForMediaAccess`); IPC with sender check + runtime validation of every event; display-change tracking; reload once if the vision page crashes.
 
@@ -110,6 +121,7 @@ What the service already does: hidden `BrowserWindow` with `backgroundThrottling
 | `src/electron/service.ts` | Main-process service (section 3) |
 | `src/electron/preload.ts`, `api.ts` | Sandboxed preload exposing `window.pointyGestures` |
 | `src/electron/renderer.ts` | `startVisionRenderer({ wasmPath, modelPath, ... })`: camera → detector → interpreter → IPC. Timer-driven loop (hidden windows don't paint) |
+| `src/electron/feedback.ts`, `feedbackPreload.ts`, `feedbackRenderer.ts` | On-screen feedback overlay: main window, preload, drawing |
 | `src/electron/mouse.ts`, `coords.ts` | Opt-in real mouse + dwell clicks (nut-js), DIP → physical pixels on Windows |
 | `src/electron/protocol.ts` | IPC channel names, commands, validation |
 | `electron/dev/*` | Standalone launcher (mock controller, debug view, self-test). Dev only, not for the app |
@@ -124,12 +136,12 @@ What the service already does: hidden `BrowserWindow` with `backgroundThrottling
 npm install                                     # at the repo root
 npx vitest run --project gestures               # 48 gesture tests (also part of `npm test`: 468 total)
 npm run typecheck && npm run lint               # whole repo
-npm run electron:selftest -w @pointy/gestures   # real Electron, hidden window, synthetic hands → interpreter → IPC → mock controller → real mouse; exits 0/1
+npm run electron:selftest -w @pointy/gestures   # real Electron, hidden window, synthetic hands → interpreter → IPC → mock controller → real mouse + feedback overlay (checks it paints); exits 0/1
 npm run electron -w @pointy/gestures            # standalone launcher with the real camera (Windows + macOS)
 POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures   # + debug window (camera, skeleton, gesture label, mini screen)
 ```
 
-Verified on Alexandre's Windows laptop (200 % display scaling): wake, mouse, dwell click at the exact position, two-finger point selection with the window hidden, region selection with the debug window, fist scroll, ~27–30 fps. **Not yet verified on macOS** (the app's first platform).
+Verified on Alexandre's Windows laptop (200 % display scaling): wake, mouse, dwell click at the exact position, two-finger point **and region** selection with the window hidden, fist scroll, ~27–30 fps. The on-screen feedback overlay passes the self-test (empty when idle, cursor + ring painted while drawing) but has **not yet been checked by eye on Windows or macOS**. **Not yet verified on macOS** (the app's first platform).
 
 ---
 
@@ -140,8 +152,8 @@ Follow the existing conventions (`electron.vite.config.ts`, `rendererPages.ts`, 
 1. **electron.vite.config.ts**
    - `main.build.externalizeDeps.exclude`: add `"@pointy/gestures"` (workspace TS source must be bundled, like `@pointy/shared`).
    - Keep `@nut-tree-fork/nut-js` **external** (native addon): `rollupOptions.external: [/^@nut-tree-fork\//]`.
-   - `preload` inputs: add `gestures: resolve(__dirname, "src/preload/gestures.ts")` containing just `import "@pointy/gestures/electron/preload";`.
-   - `renderer` inputs: add `gestures: resolve(__dirname, "src/renderer/gestures/index.html")`.
+   - `preload` inputs: add `gestures: resolve(__dirname, "src/preload/gestures.ts")` containing just `import "@pointy/gestures/electron/preload";`, and `gestureFeedback: resolve(__dirname, "src/preload/gestureFeedback.ts")` containing `import "@pointy/gestures/electron/feedback-preload";` (keep `isolatedEntries: true`: sandboxed preloads can't load shared chunks).
+   - `renderer` inputs: add `gestures: resolve(__dirname, "src/renderer/gestures/index.html")` and `gestureFeedback: resolve(__dirname, "src/renderer/gestureFeedback/index.html")` (script: `startFeedbackRenderer()`).
 2. **Renderer page** `src/renderer/gestures/index.html` + script:
    ```ts
    import { startVisionRenderer } from "@pointy/gestures/electron/renderer";
@@ -149,15 +161,21 @@ Follow the existing conventions (`electron.vite.config.ts`, `rendererPages.ts`, 
    ```
    Keep `previewParent` set: the `<video>` must stay in the DOM even when the window is hidden (a detached video in a hidden window degraded tracking in testing).
 3. **Assets:** serve MediaPipe's wasm folder (`node_modules/@mediapipe/tasks-vision/wasm`, see `scripts/copy-wasm.mjs`) and `gesture_recognizer.task` (`npm run fetch-model -w @pointy/gestures`) with the page. **(verify)** In packaged builds pages load from `file://`, where `fetch` of the wasm/model may fail. A custom protocol or serving them from main may be needed.
-4. **rendererPages.ts:** add `"gestures"` to `RendererPage`.
+4. **rendererPages.ts:** add `"gestures"` and `"gestureFeedback"` to `RendererPage`.
 5. **main/index.ts** (one call, plus the controller wiring):
    ```ts
    const gestures = await startGestureService({
      preloadPath: join(PRELOAD_DIR, "gestures.js"),
      loadPage: (win) => loadRendererPage(win, "gestures"),
    });
-   app.on("before-quit", () => gestures.dispose());
+   const feedback = await startGestureFeedback(gestures, {
+     preloadPath: join(PRELOAD_DIR, "gestureFeedback.js"),
+     loadPage: (win) => loadRendererPage(win, "gestureFeedback"),
+     contentProtection,          // same flag as the AI overlay (POINTY_CAPTURABLE)
+   });
+   app.on("before-quit", () => { feedback.dispose(); gestures.dispose(); });
    ```
+   Subscribe the controller right after `startGestureService` resolves (the camera is already running), before other slow startup work, so an early wake isn't missed.
 6. **macOS packaging:** `NSCameraUsageDescription` in Info.plist. Accessibility permission is needed for nut-js mouse control. Test permissions from the **packaged** app.
 
 Do not reimplement gesture logic in `apps/desktop`: subscribe to events. If behaviour needs tuning, use `setConfig()` or change `DEFAULT_CONFIG`.
@@ -168,7 +186,6 @@ Do not reimplement gesture logic in `apps/desktop`: subscribe to events. If beha
 
 - **macOS untested** (developed and tested on Windows). Chris's overlay currently throws on non-macOS, so the full app only runs on Mac. The standalone launcher runs on both.
 - Single display (primary) in v1. `displayId` is in every event, so multi-display can be added without changing the contract.
-- No on-screen feedback from this package inside the app: the overlay must render the cursor (`cursor_moved`), hold rings (`dwell_progress`, `click_progress`), trail and selections. Without it, circling a region is hard (users draw blind).
 - Thresholds are tuned for one young user. Expect to raise `dwellMs`, `clickDwellMs` and `wakeHoldMs` after testing with older adults.
 - Circle detection could be made more forgiving (`closeFrac`, `minLoopLength`) at the cost of more accidental regions.
 - No "end session" gesture: closing is the controller's job (stop button / inactivity timeout).

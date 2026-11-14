@@ -36,6 +36,8 @@ export interface GestureService {
   onStatus(cb: (s: VisionStatus) => void): () => void;
   /** Open/close the session: when closed, only wake_requested can fire. */
   setSessionActive(active: boolean): void;
+  /** Notified whenever setSessionActive is called. */
+  onSession(cb: (active: boolean) => void): () => void;
   readonly sessionActive: boolean;
   setConfig(config: Partial<GestureConfig>): void;
   /** Display the gestures are mapped to (primary display), with its bounds in DIP. */
@@ -80,6 +82,7 @@ export async function startGestureService(opts: GestureServiceOptions): Promise<
   let config: Partial<GestureConfig> = { ...opts.config };
   const listeners = new Set<(e: GestureEvent) => void>();
   const statusListeners = new Set<(s: VisionStatus) => void>();
+  const sessionListeners = new Set<(active: boolean) => void>();
 
   const send = (cmd: GestureCommand) => {
     if (!win.isDestroyed()) win.webContents.send(GESTURE_IPC.command, cmd);
@@ -153,6 +156,11 @@ export async function startGestureService(opts: GestureServiceOptions): Promise<
     setSessionActive(active) {
       sessionActive = active;
       send({ type: "session", active });
+      for (const l of sessionListeners) l(active);
+    },
+    onSession(cb) {
+      sessionListeners.add(cb);
+      return () => sessionListeners.delete(cb);
     },
     get sessionActive() {
       return sessionActive;
@@ -174,6 +182,7 @@ export async function startGestureService(opts: GestureServiceOptions): Promise<
       screen.off("display-removed", onDisplaysChanged);
       listeners.clear();
       statusListeners.clear();
+      sessionListeners.clear();
       if (!win.isDestroyed()) win.destroy();
     },
   };

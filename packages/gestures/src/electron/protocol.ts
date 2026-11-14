@@ -15,7 +15,15 @@ export const GESTURE_IPC = {
   ready: "pointy-gestures:ready",
   /** main → renderer: GestureCommand */
   command: "pointy-gestures:command",
+  /** main → feedback overlay: FeedbackMessage */
+  feedback: "pointy-gestures:feedback",
 } as const;
+
+/** Messages to the on-screen feedback overlay (cursor, trail, rings, selections). */
+export type FeedbackMessage =
+  | { type: "events"; events: GestureEvent[] }
+  | { type: "session"; active: boolean }
+  | { type: "clear" };
 
 export type GestureCommand =
   | { type: "session"; active: boolean }

@@ -94,7 +94,17 @@ await attachSystemMouse(gestures);   // opt-in: "mouse"/"click" events move and 
 | `src/electron/mouse.ts` | opt-in real mouse + dwell clicks via nut-js; DIP → physical pixels on Windows |
 | `src/electron/protocol.ts` | IPC channels, commands, runtime validation of events from the renderer |
 
-**Standalone launcher** (`electron/dev/`, works on Windows and macOS): hidden vision window, a mock session controller (opens on wake, closes after 20 s without gestures) and the real mouse, with gestures logged in the terminal.
+**On-screen feedback** (`@pointy/gestures/electron/feedback`): a transparent, click-through, always-on-top window over the display that draws the user's own gestures: the drawing cursor, its trail, the hold rings (selection and dwell click) and the selected point/region (fades after 4 s). It is excluded from screen captures, so the AI's screenshots never include it. It is separate from the AI annotation overlay in `apps/desktop`.
+
+```ts
+const feedback = await startGestureFeedback(gestures, {
+  preloadPath: join(PRELOAD_DIR, "gestureFeedback.js"),     // from @pointy/gestures/electron/feedback-preload
+  loadPage: (win) => loadRendererPage(win, "gestureFeedback"), // page script: startFeedbackRenderer()
+});
+feedback.clearSelection(); // e.g. when the turn ends
+```
+
+**Standalone launcher** (`electron/dev/`, works on Windows and macOS): hidden vision window, the on-screen feedback, a mock session controller (opens on wake, closes after 20 s without gestures) and the real mouse, with gestures logged in the terminal.
 
 ```bash
 npm run electron -w @pointy/gestures                         # use it with your camera
@@ -102,7 +112,7 @@ POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # debug window: cam
 npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
 ```
 
-Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
+Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
 
 Notes:
 - Bundle `nut-js` as external (`rollupOptions.external`): it ships a native addon.
