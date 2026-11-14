@@ -15,14 +15,20 @@ export interface StepsState {
   completed: boolean;
 }
 
-export function startSteps(_total: number, _startAt: number): StepsState {
-  throw new Error("not implemented: steps.startSteps");
+export function startSteps(total: number, startAt: number): StepsState {
+  const max = Math.max(0, total - 1);
+  return { total, current: Math.min(Math.max(startAt, 0), max), completed: false };
 }
 
-export function advanceSteps(_s: StepsState): StepsState {
-  throw new Error("not implemented: steps.advanceSteps");
+export function advanceSteps(s: StepsState): StepsState {
+  if (s.completed) return s;
+  const current = s.current + 1;
+  if (current >= s.total) return { ...s, current: s.total, completed: true };
+  return { ...s, current };
 }
 
-export function statusOf(_s: StepsState, _i: number): StepStatus {
-  throw new Error("not implemented: steps.statusOf");
+export function statusOf(s: StepsState, i: number): StepStatus {
+  if (i < s.current) return "past";
+  if (i === s.current) return "current";
+  return "future";
 }

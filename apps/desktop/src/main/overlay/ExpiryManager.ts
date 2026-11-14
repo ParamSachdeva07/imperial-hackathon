@@ -15,7 +15,8 @@
  *  An expired entry is untracked automatically (onExpire fires once per entry).
  */
 import type { Expiry } from "@pointy/shared/overlay";
-import type { Clock } from "./clock";
+import type { Clock, TimerHandle } from "./clock";
+import { realClock } from "./clock";
 
 export type ExpireCause = "next_turn" | "target_selected" | "context_change" | "timer";
 
@@ -34,37 +35,72 @@ export interface ExpiryManagerOptions {
   onExpire: (id: string, cause: ExpireCause) => void;
 }
 
+interface Tracked {
+  entry: ExpiryEntry;
+  timer: TimerHandle | undefined;
+}
+
 export class ExpiryManager {
-  constructor(_opts: ExpiryManagerOptions) {}
+  private readonly clock: Clock;
+  private readonly onExpire: (id: string, cause: ExpireCause) => void;
+  private readonly entries = new Map<string, Tracked>();
+
+  constructor(opts: ExpiryManagerOptions) {
+    this.clock = opts.clock ?? realClock;
+    this.onExpire = opts.onExpire;
+  }
 
   /** Start tracking (replaces an existing entry with the same id, restarting any timer). */
-  track(_entry: ExpiryEntry): void {
-    throw new Error("not implemented: ExpiryManager.track");
+  track(entry: ExpiryEntry): void {
+    this.untrack(entry.id);
+    const tracked: Tracked = { entry: { ...entry, elementIds: [...entry.elementIds] }, timer: undefined };
+    const e = entry.expires;
+    if (typeof e === "object" && e !== null) {
+      tracked.timer = this.clock.setTimeout(() => this.expire(entry.id, "timer"), e.ms);
+    }
+    this.entries.set(entry.id, tracked);
   }
 
   /** Stop tracking without firing onExpire (used by clear / replacement / eviction). */
-  untrack(_id: string): void {
-    throw new Error("not implemented: ExpiryManager.untrack");
+  untrack(id: string): void {
+    const t = this.entries.get(id);
+    if (!t) return;
+    if (t.timer !== undefined) this.clock.clearTimeout(t.timer);
+    this.entries.delete(id);
   }
 
-  has(_id: string): boolean {
-    throw new Error("not implemented: ExpiryManager.has");
+  has(id: string): boolean {
+    return this.entries.has(id);
   }
 
   onTurnStart(_turnId: string): void {
-    throw new Error("not implemented: ExpiryManager.onTurnStart");
+    this.expireWhere((e) => e.expires === undefined || e.expires === "next_turn", "next_turn");
   }
 
   onContextChange(): void {
-    throw new Error("not implemented: ExpiryManager.onContextChange");
+    this.expireWhere((e) => e.coordinateOnly || e.expires === "context_change", "context_change");
   }
 
-  onTargetSelected(_elementId: string): void {
-    throw new Error("not implemented: ExpiryManager.onTargetSelected");
+  onTargetSelected(elementId: string): void {
+    this.expireWhere((e) => e.expires === "on_target_selected" && e.elementIds.includes(elementId), "target_selected");
   }
 
   /** Cancel all timers and forget all entries. */
   dispose(): void {
-    throw new Error("not implemented: ExpiryManager.dispose");
+    for (const t of this.entries.values()) {
+      if (t.timer !== undefined) this.clock.clearTimeout(t.timer);
+    }
+    this.entries.clear();
+  }
+
+  private expireWhere(pred: (e: ExpiryEntry) => boolean, cause: ExpireCause): void {
+    const ids = [...this.entries.values()].filter((t) => pred(t.entry)).map((t) => t.entry.id);
+    for (const id of ids) this.expire(id, cause);
+  }
+
+  private expire(id: string, cause: ExpireCause): void {
+    if (!this.entries.has(id)) return;
+    this.untrack(id);
+    this.onExpire(id, cause);
   }
 }
