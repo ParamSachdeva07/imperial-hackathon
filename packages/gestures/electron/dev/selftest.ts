@@ -9,9 +9,10 @@ import type { FrameSource } from "../../src/electron/renderer";
 
 const blank = (x: number, y: number): Point3[] => Array.from({ length: 21 }, () => ({ x, y, z: 0 }));
 
-function palm(x: number, y: number): HandObservation {
+/** Open palm; `upright = false` = fingers sideways (doesn't count as a raised hand). */
+function palm(x: number, y: number, upright = true): HandObservation {
   const lm = blank(x, y);
-  lm[12] = { x, y: y - 0.2, z: 0 };
+  lm[12] = upright ? { x, y: y - 0.2, z: 0 } : { x: x + 0.2, y, z: 0 };
   return { label: "Right", landmarks: lm, gesture: { name: "Open_Palm", score: 0.9 } };
 }
 
@@ -50,7 +51,7 @@ const lerp = (a: number, b: number, k: number) => a + (b - a) * Math.min(1, Math
 
 /** Script step: [duration ms, hands at progress k (0..1)]. */
 const SCRIPT: [number, (k: number) => HandObservation[]][] = [
-  [600, () => []],
+  [1500, () => []], // let the launcher finish starting (mouse, feedback window)
   [1300, () => [palm(0.5, 0.5)]], // wake
   [400, () => []],
   [900, (k) => [oneFinger(lerp(0.6, 0.4, k), 0.4)]], // mouse moves
@@ -60,7 +61,7 @@ const SCRIPT: [number, (k: number) => HandObservation[]][] = [
   [1300, () => [twoFingers(0.45, 0.35)]], // hold → point selected
   [400, () => []],
   [700, (k) => [fist(0.5, lerp(0.3, 0.5, k))]], // scroll
-  [600, () => [palm(0.5, 0.95)]], // open hand low (ends drag, no wake)
+  [600, () => [palm(0.5, 0.5, false)]], // hand opens where the fist was (ends drag, no wake)
   [800, () => []],
 ];
 

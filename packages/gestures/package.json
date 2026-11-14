@@ -11,7 +11,10 @@
     "./electron": "./src/electron/service.ts",
     "./electron/mouse": "./src/electron/mouse.ts",
     "./electron/preload": "./src/electron/preload.ts",
-    "./electron/renderer": "./src/electron/renderer.ts"
+    "./electron/renderer": "./src/electron/renderer.ts",
+    "./electron/feedback": "./src/electron/feedback.ts",
+    "./electron/feedback-preload": "./src/electron/feedbackPreload.ts",
+    "./electron/feedback-renderer": "./src/electron/feedbackRenderer.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

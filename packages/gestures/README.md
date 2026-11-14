@@ -31,7 +31,7 @@ The playground shows the camera with landmarks, a simulated page with the cursor
 
 | Gesture | Event | Notes |
 |---|---|---|
-| Open palm, raised, fingers up, held **still** `wakeHoldMs` (700 ms) | `wake_requested` | Fires **once per raise**, only when no session is active. A moving hand (scratching, waving) restarts the hold. Re-arms after the palm has been gone `wakeRearmMs`. |
+| Open palm, raised, fingers up, held **still** `wakeHoldMs` (700 ms) | `wake_progress` (0→1, ring around the hand), then `wake_requested` | Fires **once per raise**, only when no session is active. A moving hand (scratching, waving) restarts the hold. Re-arms after the palm has been gone `wakeRearmMs`. |
 | **Two fingers together** (index + middle) — `drawPose` | `cursor_moved` every frame | Index tip mapped from the active zone of the mirrored camera image to the display, smoothed with a One Euro filter (tremor). An open palm never drives the cursor, so one hand can wake while the other points. |
 | Draw pose, fingers still for `dwellMs` (800 ms) | `dwell_progress` (0→1), then `point_selected` | Selects once, then re-arms when the finger moves again. |
 | Closed loop drawn with the draw pose, then still for `dwellMs` | `region_selected` | Polygon (simplified) and bbox. Rejects back-and-forth scribbles with a compactness test (4πA/P²). |
@@ -53,6 +53,7 @@ Coordinates are **logical display points (Electron DIP)** relative to the displa
 
 ```ts
 { type: "wake_requested", source: "open_palm", hand: "Left", heldForMs: 712, t }
+{ type: "wake_progress",  hand: "Left", progress: 0.6, x, y, displayId, t }   // session closed only
 { type: "cursor_moved",   hand: "Right", x: 812.4, y: 390.1, displayId: 1, t }
 { type: "dwell_progress", hand: "Right", progress: 0.6, x, y, displayId, t }
 { type: "point_selected", hand: "Right", x, y, displayId, heldForMs: 800, t }
@@ -91,10 +92,20 @@ await attachSystemMouse(gestures);   // opt-in: "mouse"/"click" events move and 
 | `src/electron/service.ts` | main: hidden window, camera permission (own session partition), IPC with sender check, display tracking, `on()/onAny()/setSessionActive()/setConfig()` |
 | `src/electron/preload.ts` | sandboxed preload exposing `window.pointyGestures` (bundle with `externalizeDeps: false`) |
 | `src/electron/renderer.ts` | page logic: `startVisionRenderer({ wasmPath, modelPath })`. Timer-driven loop (hidden windows don't paint, so no requestAnimationFrame) |
-| `src/electron/mouse.ts` | opt-in real mouse + dwell clicks via nut-js; DIP → physical pixels on Windows |
+| `src/electron/mouse.ts` | opt-in real mouse, dwell clicks and fist-drag wheel scrolling via nut-js; DIP → physical pixels on Windows |
 | `src/electron/protocol.ts` | IPC channels, commands, runtime validation of events from the renderer |
 
-**Standalone launcher** (`electron/dev/`, works on Windows and macOS): hidden vision window, a mock session controller (opens on wake, closes after 20 s without gestures) and the real mouse, with gestures logged in the terminal.
+**On-screen feedback** (`@pointy/gestures/electron/feedback`): a transparent, click-through, always-on-top window over the display that draws the user's own gestures: the wake ring around the raised hand, the drawing cursor, its trail, the hold rings (selection and dwell click) and the selected point/region (fades after 4 s). It is excluded from screen captures, so the AI's screenshots never include it. It is separate from the AI annotation overlay in `apps/desktop`.
+
+```ts
+const feedback = await startGestureFeedback(gestures, {
+  preloadPath: join(PRELOAD_DIR, "gestureFeedback.js"),     // from @pointy/gestures/electron/feedback-preload
+  loadPage: (win) => loadRendererPage(win, "gestureFeedback"), // page script: startFeedbackRenderer()
+});
+feedback.clearSelection(); // e.g. when the turn ends
+```
+
+**Standalone launcher** (`electron/dev/`, works on Windows and macOS): hidden vision window, the on-screen feedback, a mock session controller (opens on wake, closes after 20 s without gestures) and the real mouse, with gestures logged in the terminal.
 
 ```bash
 npm run electron -w @pointy/gestures                         # use it with your camera
@@ -102,7 +113,7 @@ POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # debug window: cam
 npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
 ```
 
-Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
+Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen), `POINTY_GESTURES_CAMERA_FPS=60` (ask the camera for 60 fps: less latency if it supports it; the log shows what it actually delivers), `POINTY_GESTURES_HANDS=1` (track one hand only: cheaper), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
 
 Notes:
 - Bundle `nut-js` as external (`rollupOptions.external`): it ships a native addon.
@@ -119,7 +130,7 @@ In Electron, skip the bridge: on a `mouse` event the main process converts (x, y
 
 ## Calibration
 
-`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is the central 70 % × 60 % of the camera frame.
+`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is x 15–85 %, y 20–65 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
 
 ## Tuning
 

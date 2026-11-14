@@ -127,6 +127,50 @@ describe("wake", () => {
   });
 });
 
+describe("wake progress (ring around the raised hand)", () => {
+  it("fills from 0 to 1 while the palm is held still, then wake fires", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(it, frames(0, 1500, () => [palmAt("Left", 0.5, 0.5)]));
+    const prog = ofType(evs, "wake_progress").map((e) => e.progress);
+    expect(prog.length).toBeGreaterThan(10);
+    expect(prog.every((p, i) => i === 0 || p >= at(prog, i - 1))).toBe(true); // monotonic
+    expect(at(prog, prog.length - 1)).toBe(1);
+    const lastProg = ofType(evs, "wake_progress").pop()!;
+    const wake = ofType(evs, "wake_requested")[0]!;
+    expect(lastProg.t).toBeLessThanOrEqual(wake.t);
+    // palm centre maps onto the display
+    expect(lastProg.x).toBeGreaterThan(0);
+    expect(lastProg.x).toBeLessThan(DISPLAY.width);
+  });
+
+  it("a moving hand never completes the ring and the UI is told when it breaks", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(
+      it,
+      frames(0, 3000, (i) => {
+        const a = (i / 6) * 2 * Math.PI;
+        return [palmAt("Left", 0.6 + 0.06 * Math.cos(a), 0.3 + 0.06 * Math.sin(a))];
+      }),
+    );
+    const prog = ofType(evs, "wake_progress").map((e) => e.progress);
+    expect(prog.every((p) => p < 1)).toBe(true);
+    expect(ofType(evs, "wake_requested")).toHaveLength(0);
+  });
+
+  it("lowering the hand mid-hold sends a single progress 0", () => {
+    const it = new GestureInterpreter(DISPLAY);
+    const evs = run(it, [...frames(0, 450, () => [palmAt("Left", 0.5, 0.5)]), ...frames(450, 600, () => [])]);
+    const prog = ofType(evs, "wake_progress");
+    expect(at(prog, prog.length - 1).progress).toBe(0);
+    expect(prog.filter((e) => e.progress === 0)).toHaveLength(1);
+  });
+
+  it("no ring while a session is already open", () => {
+    const evs = run(active(), frames(0, 1500, () => [palmAt("Left", 0.5, 0.5)]));
+    expect(ofType(evs, "wake_progress")).toHaveLength(0);
+  });
+});
+
 describe("pointing", () => {
   it("is ignored before the session is open", () => {
     const it = new GestureInterpreter(DISPLAY);
@@ -145,9 +189,9 @@ describe("pointing", () => {
     expect(ofType(evs, "region_selected")).toHaveLength(0);
     const pts = ofType(evs, "point_selected");
     expect(pts).toHaveLength(1);
-    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.1)/0.6·900 = 450
+    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.2)/0.45·900 = 400
     expect(at(pts, 0).x).toBeCloseTo(926, -1);
-    expect(at(pts, 0).y).toBeCloseTo(450, -1);
+    expect(at(pts, 0).y).toBeCloseTo(400, -1);
     expect(at(pts, 0).displayId).toBe(1);
   });
 
@@ -194,11 +238,11 @@ describe("circling", () => {
     const regions = ofType(evs, "region_selected");
     expect(regions).toHaveLength(1);
     const { bbox, polygon } = at(regions, 0);
-    // radius 0.12 → ≈247 pt horizontally, 180 pt vertically → bbox ≈ 494 × 360
+    // radius 0.12 → ≈247 pt horizontally, 240 pt vertically → bbox ≈ 494 × 480
     expect(bbox.width).toBeGreaterThan(400);
     expect(bbox.width).toBeLessThan(560);
-    expect(bbox.height).toBeGreaterThan(290);
-    expect(bbox.height).toBeLessThan(400);
+    expect(bbox.height).toBeGreaterThan(400);
+    expect(bbox.height).toBeLessThan(540);
     expect(polygon.length).toBeGreaterThan(6);
     expect(polygon.length).toBeLessThan(60); // simplified
     // Convex hull → never self-intersecting: every turn has the same orientation.
@@ -253,6 +297,20 @@ describe("one finger → system mouse (default mousePose)", () => {
     expect(ofType(evs, "point_selected")).toHaveLength(0);
   });
 
+  it("pointing past the bottom / top edge puts the mouse right on it (taskbar, tabs)", () => {
+    const it = active();
+    // y 0.4 → 0.75 (zone bottom at 0.65) in 300 ms, then the first frames past the edge
+    const evs = run(it, [
+      ...frames(0, 500, () => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 })]),
+      ...frames(500, 300, (i, n) => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 + 0.35 * (i / (n - 1)) })]),
+    ]);
+    const m = ofType(evs, "mouse");
+    expect(at(m, m.length - 1).y).toBe(900);
+    const up = run(it, frames(800, 300, (i, n) => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.75 - 0.65 * (i / (n - 1)) })]));
+    const m2 = ofType(up, "mouse");
+    expect(at(m2, m2.length - 1).y).toBe(0);
+  });
+
   it("two fingers spread apart (V sign) neither draw nor move the mouse", () => {
     const it = active();
     const evs = run(it, frames(0, 1000, () => [twoFingersAt("Right", 0.5, 0.4, 0.08)]));
@@ -283,6 +341,36 @@ describe("one finger → system mouse (default mousePose)", () => {
     const it = new GestureInterpreter(DISPLAY);
     const evs = run(it, frames(0, 1000, () => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 })]));
     expect(evs).toHaveLength(0);
+  });
+});
+
+describe("closing the fist doesn't drag the mouse away", () => {
+  it("the index curling down (still read as Pointing_Up) doesn't move the mouse; scroll starts where it was", () => {
+    const it = active();
+    const tip = (y: number) => [hand("Right", "Pointing_Up", { x: 0.5, y })];
+    const evs = run(it, [
+      ...frames(0, 800, (i, n) => [hand("Right", "Pointing_Up", { x: 0.6 - 0.1 * (i / (n - 1)), y: 0.4 })]),
+      ...frames(800, 400, () => tip(0.4)), // still: mouse settles
+      // closing: MediaPipe still says Pointing_Up while the fingertip drops 0.15 (≈225 pt)
+      ...frames(1200, 170, (i, n) => tip(0.4 + 0.15 * (i / (n - 1)))),
+      ...frames(1370, 800, () => [fistAt("Right", 0.5, 0.55)]),
+    ]);
+    const before = ofType(evs, "mouse").filter((e) => e.t < 1200).pop()!;
+    const end = ofType(evs, "mouse").find((e) => e.phase === "end")!;
+    expect(Math.hypot(end.x - before.x, end.y - before.y)).toBeLessThan(3); // put back where it was
+    expect(ofType(evs, "scroll")[0]!.phase).toBe("start");
+  });
+
+  it("raw-pose freeze: a hand that stops looking like one finger stops moving the mouse at once", () => {
+    const it = active();
+    const evs = run(it, [
+      ...frames(0, 800, () => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 })]),
+      // the fist forms (classified Closed_Fist) while the hand drifts: before the pose is confirmed,
+      // the mouse must not follow
+      ...frames(800, 100, (i, n) => [fistAt("Right", 0.5, 0.45 + 0.1 * (i / (n - 1)))]),
+    ]);
+    const moves = ofType(evs, "mouse").filter((e) => e.t >= 800 && e.phase === "move");
+    expect(moves).toHaveLength(0);
   });
 });
 
@@ -452,10 +540,11 @@ describe("tracking robustness", () => {
         return [twoFingersAt("Right", x, 0.4, spread)];
       }),
     );
-    expect(ofType(evs, "hand_lost")).toHaveLength(0);
-    const xs = ofType(evs, "cursor_moved").map((e) => e.t);
-    const gaps = xs.slice(1).map((t, i) => t - at(xs, i));
-    expect(Math.max(...gaps)).toBeLessThan(DT * 1.5); // cursor kept moving every frame
+    expect(ofType(evs, "hand_lost")).toHaveLength(0); // one continuous stroke
+    const cur = ofType(evs, "cursor_moved");
+    // the cursor holds still while the pose is unsure (no jumps), then keeps following the hand
+    expect(cur.filter((e) => e.t > 600 && e.t < 850)).toHaveLength(0);
+    expect(cur.filter((e) => e.t >= 1000).length).toBeGreaterThan(10);
   });
 
   it("the mouse survives a brief misclassification of the index finger", () => {
@@ -505,9 +594,9 @@ describe("scroll", () => {
     expect(at(sc, 0).phase).toBe("start");
     expect(at(sc, sc.length - 1).phase).toBe("end");
     const dy = sc.filter((e) => e.phase === "move").reduce((s, e) => s + e.dy, 0);
-    // 0.2 of the frame over a 0.6-high zone on a 900-pt display ≈ 300 pt, hand moved down → dy > 0
-    expect(dy).toBeGreaterThan(250);
-    expect(dy).toBeLessThan(320);
+    // 0.2 of the frame over a 0.45-high zone on a 900-pt display = 400 pt, hand moved down → dy > 0
+    expect(dy).toBeGreaterThan(300);
+    expect(dy).toBeLessThan(422);
     expect(ofType(evs, "cursor_moved")).toHaveLength(0);
   });
 
@@ -535,9 +624,9 @@ describe("scroll", () => {
     const open = frames(500, 500, () => [palmAt("Right", 0.5, 0.5)]);
     const sc = ofType(run(it, [...drag, ...open]), "scroll");
     const dy = sc.reduce((sum, e) => sum + e.dy, 0);
-    // hand travelled 0.2 / 0.6 × 900 = 300 pt (minus what moved before the fist was confirmed)
-    expect(dy).toBeGreaterThan(260);
-    expect(dy).toBeLessThanOrEqual(301);
+    // hand travelled 0.2 / 0.45 × 900 = 400 pt (minus what moved before the fist was confirmed)
+    expect(dy).toBeGreaterThan(344);
+    expect(dy).toBeLessThanOrEqual(401);
     expect(at(sc, sc.length - 1).phase).toBe("end");
   });
 

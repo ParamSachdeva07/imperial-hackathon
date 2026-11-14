@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GestureInterpreter, type GestureEvent, type HandObservation, type Point3 } from "../src/index";
-import { toMousePoint } from "../src/electron/coords";
+import { createScrollConverter, toMousePoint } from "../src/electron/coords";
 import { isGestureEvent, isVisionStatus } from "../src/electron/protocol";
 import { startMockController } from "../electron/dev/mockController";
 import type { GestureService } from "../src/electron/service";
@@ -40,6 +40,27 @@ describe("toMousePoint", () => {
   it("Windows: converts DIP to physical pixels with the provided converter", () => {
     const scale150 = (p: { x: number; y: number }) => ({ x: p.x * 1.5, y: p.y * 1.5 });
     expect(toMousePoint(bounds, 100, 50, "win32", scale150)).toEqual({ x: 3030, y: 75 });
+  });
+});
+
+describe("scroll conversion (fist drag → OS wheel units)", () => {
+  it("drag semantics: hand down scrolls up, hand right scrolls left", () => {
+    const conv = createScrollConverter("darwin"); // pixels
+    expect(conv(0, 40)).toEqual({ up: 40, left: 0 });
+    expect(conv(-25, 0)).toEqual({ up: 0, left: -25 });
+  });
+
+  it("Windows uses wheel delta (120 per notch, 100 DIP per notch by default)", () => {
+    const conv = createScrollConverter("win32");
+    expect(conv(0, 100)).toEqual({ up: 120, left: 0 });
+    expect(conv(0, -50)).toEqual({ up: -60, left: 0 });
+  });
+
+  it("keeps the remainder so slow drags still scroll (Linux notches)", () => {
+    const conv = createScrollConverter("linux", 100);
+    let total = 0;
+    for (let i = 0; i < 10; i++) total += conv(0, 30).up; // 300 DIP in small steps
+    expect(total).toBe(3);
   });
 });
 

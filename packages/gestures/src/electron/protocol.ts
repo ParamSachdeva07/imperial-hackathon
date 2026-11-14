@@ -15,7 +15,15 @@ export const GESTURE_IPC = {
   ready: "pointy-gestures:ready",
   /** main → renderer: GestureCommand */
   command: "pointy-gestures:command",
+  /** main → feedback overlay: FeedbackMessage */
+  feedback: "pointy-gestures:feedback",
 } as const;
+
+/** Messages to the on-screen feedback overlay (cursor, trail, rings, selections). */
+export type FeedbackMessage =
+  | { type: "events"; events: GestureEvent[] }
+  | { type: "session"; active: boolean }
+  | { type: "clear" };
 
 export type GestureCommand =
   | { type: "session"; active: boolean }
@@ -24,12 +32,22 @@ export type GestureCommand =
 
 export type VisionStatus =
   | { type: "starting" }
-  | { type: "running"; fps: number; hands: number }
+  | {
+      type: "running";
+      /** Frames processed during the last second. */
+      fps: number;
+      hands: number;
+      /** Average time per frame spent in hand detection + interpretation (ms). */
+      procMs?: number;
+      /** What the camera actually delivers (it may ignore the requested frame rate). */
+      camera?: { width: number; height: number; frameRate: number };
+    }
   | { type: "error"; message: string };
 
 // Record<…, true> makes the compiler flag any event type missing from this list.
 const EVENT_TYPES: Record<GestureEventType, true> = {
   wake_requested: true,
+  wake_progress: true,
   cursor_moved: true,
   dwell_progress: true,
   point_selected: true,

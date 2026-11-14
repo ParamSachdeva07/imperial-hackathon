@@ -17,6 +17,8 @@ void startVisionRenderer({
   ...(preview ? { previewParent: preview } : {}),
   ...(show && preview && side ? { onFrame: createDebugView(preview, side) } : {}),
   ...(params.get("selftest") === "1" ? { source: selfTestSource() } : {}),
+  ...(params.has("cameraFps") ? { cameraFps: Number(params.get("cameraFps")) } : {}),
+  ...(params.get("hands") === "1" ? { numHands: 1 } : {}),
 }).catch((err: unknown) => {
   if (status) status.textContent = `error: ${String(err)}`;
 });

@@ -53,6 +53,12 @@ export interface GestureConfig {
   oneEuroMinCutoff: number;
   oneEuroBeta: number;
   oneEuroDCutoff: number;
+  /**
+   * Cursor "string" (DIP): the mouse and the drawing cursor only move once the filtered finger is
+   * more than this far from them, then follow it. Removes the residual tremor at rest (precise aim,
+   * steady dwell) so the filter itself can be lighter (less lag). 0 = off.
+   */
+  cursorDeadband: number;
 
   /* Hold / selection (flows 2 and 3) */
   /** Window used to measure cursor speed. */
@@ -88,6 +94,12 @@ export interface GestureConfig {
   handoffDecayDist: number;
   /** Keep the cursor / mouse going while its pose is briefly unrecognised (blur, fingers drifting). */
   poseGraceMs: number;
+  /**
+   * When mouse mode ends (fist, other gesture, hand gone), put the mouse back where it was this
+   * long before the hand was last seen in mouse pose: the frames just before were following the
+   * index finger as it curled or dropped.
+   */
+  mouseRewindMs: number;
 
   /* Dwell click (mouse mode) */
   clickEnabled: boolean;
@@ -113,7 +125,10 @@ export const DEFAULT_CONFIG: GestureConfig = {
   mousePose: "pointing",
 
   mirror: true,
-  activeZone: { x0: 0.15, y0: 0.1, x1: 0.85, y1: 0.7 },
+  // Top edge at 20 % of the image: reaching the top of the screen (browser tabs) mustn't
+  // require raising the hand above the head, where tracking is lost. Bottom edge at 65 %: the
+  // taskbar is reached before the wrist leaves the frame.
+  activeZone: { x0: 0.15, y0: 0.2, x1: 0.85, y1: 0.65 },
 
   recognizerMinScore: 0.6,
   fingerExtendRatio: 1.15,
@@ -129,9 +144,12 @@ export const DEFAULT_CONFIG: GestureConfig = {
   wakeUprightMin: 0.08,
   wakeMaxMotion: 0.04,
 
+  // Simulated against the previous 1.0 / 0.01 / 1.0 without deadband: a bit less lag, ~3-5x less
+  // jitter at rest, dwell more reliable when tracking is noisy, no bias once still.
   oneEuroMinCutoff: 1.0,
-  oneEuroBeta: 0.01,
-  oneEuroDCutoff: 1.0,
+  oneEuroBeta: 0.02,
+  oneEuroDCutoff: 2.0,
+  cursorDeadband: 8,
 
   speedWindowMs: 120,
   dwellSpeed: 60,
@@ -150,6 +168,7 @@ export const DEFAULT_CONFIG: GestureConfig = {
   handoffMs: 1500,
   handoffDecayDist: 250,
   poseGraceMs: 300,
+  mouseRewindMs: 250,
 
   clickEnabled: true,
   clickDwellMs: 1000,

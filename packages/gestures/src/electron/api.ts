@@ -1,6 +1,6 @@
 /** API the gesture preload exposes to the vision page as `window.pointyGestures`. */
 import type { GestureEvent } from "../events";
-import type { GestureCommand, VisionStatus } from "./protocol";
+import type { FeedbackMessage, GestureCommand, VisionStatus } from "./protocol";
 
 export interface PointyGesturesApi {
   /** Send the events of one frame to main. */
@@ -12,8 +12,13 @@ export interface PointyGesturesApi {
   ready(): void;
 }
 
+export interface PointyGestureFeedbackApi {
+  onMessage(cb: (msg: FeedbackMessage) => void): () => void;
+}
+
 declare global {
   interface Window {
     pointyGestures?: PointyGesturesApi;
+    pointyGestureFeedback?: PointyGestureFeedbackApi;
   }
 }

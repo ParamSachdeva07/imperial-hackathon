@@ -27,6 +27,20 @@ export type GestureEvent =
       heldForMs: number;
       t: number;
     }
+  /**
+   * Raised open palm being held still: wake progress (0..1) for a ring around the hand.
+   * Only while the session is closed. progress = 0 means the hold was broken.
+   * x/y = where the palm maps on the display.
+   */
+  | {
+      type: "wake_progress";
+      hand: HandLabel;
+      progress: number;
+      x: number;
+      y: number;
+      displayId: number;
+      t: number;
+    }
   /** Finger cursor position, every frame while a hand is pointing. */
   | {
       type: "cursor_moved";

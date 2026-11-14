@@ -7,6 +7,8 @@ import { at } from "./util";
 
 const WRIST = 0;
 const INDEX_TIP = 8;
+/** Time constant of the slow easing inside the cursor deadband. */
+const CURSOR_SETTLE_MS = 400;
 const MIDDLE_MCP = 9; // palm centre, used for the scroll grab
 const MIDDLE_TIP = 12;
 
@@ -25,6 +27,8 @@ interface HandState {
   palmGoneSince: number | null;
   holdStart: number | null;
   holdAnchor: Vec2 | null;
+  /** Last wake_progress sent (to send a single 0 when the hold breaks). */
+  wakeProgress: number;
 }
 
 interface PointerState {
@@ -60,6 +64,8 @@ interface MouseState {
   armAnchor: Vec2 | null;
   clickArmed: boolean;
   clickProgress: number;
+  /** Recent positions, to rewind the end position (see mouseRewindMs). */
+  hist: TimedPoint[];
 }
 
 interface EndedStroke {
@@ -154,6 +160,8 @@ export class GestureInterpreter {
     const events: GestureEvent[] = [];
     const seen = new Set<HandLabel>();
     const stablePose = new Map<HandLabel, Pose>();
+    /** This frame's pose before debouncing: changes first when the hand starts changing shape. */
+    const rawPose = new Map<HandLabel, Pose>();
 
     // 1. Per-hand pose + wake.
     for (const hand of frame.hands) {
@@ -170,19 +178,20 @@ export class GestureInterpreter {
       const [px, py] = this.toDisplay(palm.x, palm.y, false);
       st.palmHist.push({ t, x: px, y: py });
       while (st.palmHist.length && at(st.palmHist, 0).t < t - 1000) st.palmHist.shift();
-      const pose = st.tracker.update(
-        classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread, {
-          prev: st.tracker.stable,
-          stickyRatio: this.cfg.twoFingerStickyRatio,
-          stickyMaxAngle: this.cfg.twoFingerStickyMaxAngle,
-        }),
-        t,
-      );
+      const raw = classifyPose(hand, this.cfg.recognizerMinScore, this.cfg.fingerExtendRatio, this.cfg.twoFingerMaxSpread, {
+        prev: st.tracker.stable,
+        stickyRatio: this.cfg.twoFingerStickyRatio,
+        stickyMaxAngle: this.cfg.twoFingerStickyMaxAngle,
+      });
+      const pose = st.tracker.update(raw, t);
+      rawPose.set(hand.label, raw);
       stablePose.set(hand.label, pose);
       this.updateWake(st, hand, pose, t, events);
     }
     for (const [label, st] of this.hands) {
-      if (!seen.has(label)) this.notePalmGone(st, t);
+      if (seen.has(label)) continue;
+      this.notePalmGone(st, t);
+      this.breakWakeProgress(st, label, t, events);
     }
 
     if (!this.sessionActive) return events;
@@ -221,6 +230,9 @@ export class GestureInterpreter {
     if (this.mouse && (!mouseHand || mouseHand.label !== this.mouse.hand)) {
       const m = this.mouse;
       if (mouseHand || seen.has(m.hand) || t - m.lastSeen >= this.cfg.lostMs) {
+        // Put the mouse back where it was before the hand started changing shape or leaving:
+        // closing a fist (or lowering the hand) drags the index tip, which the last frames followed.
+        m.pos = this.rewound(m, m.lastSeen - this.cfg.mouseRewindMs);
         events.push(this.mouseEvent(m, "end", t));
         this.lastEnded = { hand: m.hand, kind: "mouse", pos: m.pos, t };
         this.mouse = null;
@@ -232,7 +244,12 @@ export class GestureInterpreter {
         const offset = this.handoffOffset(chosen.label, "mouse", this.anchor(chosen, this.cfg.drawPose), t);
         this.pointer = this.newPointer(chosen.label, offset);
       }
-      this.updatePointer(this.pointer, chosen, t, events);
+      // While the hand is changing shape (raw pose ≠ draw pose), hold the cursor still.
+      if (rawPose.get(chosen.label) === this.cfg.drawPose || this.pointer.lastSeen === 0) {
+        this.updatePointer(this.pointer, chosen, t, events);
+      } else {
+        this.pointer.lastSeen = t;
+      }
     }
     if (mouseHand) {
       const raw = this.anchor(mouseHand, this.cfg.mousePose);
@@ -243,15 +260,29 @@ export class GestureInterpreter {
           hand: mouseHand.label, filter: this.newFilter(), pos: raw, offset,
           lastRawAnchor: null, lastSeen: t, unsureSince: null,
           recent: [], restStart: null, armAnchor: null, clickArmed: false, clickProgress: 0,
+          hist: [],
         };
       }
       const m = this.mouse;
+      // While the hand is changing shape (raw pose ≠ mouse pose, e.g. closing into a fist),
+      // hold the mouse still instead of following the curling index finger.
+      const settled = rawPose.get(mouseHand.label) === this.cfg.mousePose;
+      if (!settled && !isNew) {
+        m.lastSeen = t;
+      } else {
       m.lastRawAnchor = this.decayOffset(m.offset, m.lastRawAnchor, raw);
-      const [sx, sy] = this.clampToDisplay([raw[0] + m.offset[0], raw[1] + m.offset[1]]);
-      m.pos = m.filter.filter(sx, sy, t / 1000);
+      const target: Vec2 = [raw[0] + m.offset[0], raw[1] + m.offset[1]];
+      const [sx, sy] = this.clampToDisplay(target);
+      m.pos = this.snapToEdges(
+        this.follow(isNew ? null : m.pos, m.filter.filter(sx, sy, t / 1000), t - m.lastSeen),
+        target,
+      );
       m.lastSeen = t;
+      m.hist.push({ t, x: m.pos[0], y: m.pos[1] });
+      while (m.hist.length > 1 && at(m.hist, 0).t < t - 1000) m.hist.shift();
       events.push(this.mouseEvent(m, isNew ? "start" : "move", t));
       if (this.cfg.clickEnabled) this.updateDwellClick(m, t, events);
+      }
     }
 
     // 4. Fist = grab and drag the page.
@@ -296,6 +327,7 @@ export class GestureInterpreter {
         palmGoneSince: null,
         holdStart: null,
         holdAnchor: null,
+        wakeProgress: 0,
       };
       this.hands.set(label, st);
     }
@@ -313,6 +345,7 @@ export class GestureInterpreter {
       st.holdStart = null;
       st.holdAnchor = null;
       this.notePalmGone(st, t);
+      this.breakWakeProgress(st, hand.label, t, events);
       return;
     }
 
@@ -323,10 +356,29 @@ export class GestureInterpreter {
       st.holdAnchor = [wrist.x, wrist.y];
     }
     const held = t - st.holdStart;
-    if (st.wakeArmed && !this.sessionActive && held >= c.wakeHoldMs) {
+    if (!st.wakeArmed || this.sessionActive) {
+      this.breakWakeProgress(st, hand.label, t, events);
+      return;
+    }
+    const progress = Math.min(1, held / c.wakeHoldMs);
+    if (progress > 0 || st.wakeProgress > 0) {
+      const palm = at(hand.landmarks, MIDDLE_MCP);
+      const [x, y] = this.toDisplay(palm.x, palm.y);
+      events.push({ type: "wake_progress", hand: hand.label, progress, x: round1(x), y: round1(y), displayId: this.display.id, t });
+      st.wakeProgress = progress;
+    }
+    if (held >= c.wakeHoldMs) {
       st.wakeArmed = false;
+      st.wakeProgress = 0;
       events.push({ type: "wake_requested", source: "open_palm", hand: hand.label, heldForMs: Math.round(held), t });
     }
+  }
+
+  /** The wake hold was interrupted: tell the UI once (progress 0) so it hides the ring. */
+  private breakWakeProgress(st: HandState, hand: HandLabel, t: number, events: GestureEvent[]): void {
+    if (st.wakeProgress <= 0) return;
+    st.wakeProgress = 0;
+    events.push({ type: "wake_progress", hand, progress: 0, x: 0, y: 0, displayId: this.display.id, t });
   }
 
   /** Screen point a finger pose designates: index tip, or the midpoint of index + middle tips. */
@@ -335,6 +387,13 @@ export class GestureInterpreter {
     if (pose === "pointing") return this.toDisplay(a.x, a.y);
     const b = at(hand.landmarks, MIDDLE_TIP);
     return this.toDisplay((a.x + b.x) / 2, (a.y + b.y) / 2);
+  }
+
+  /** Mouse position at time `t` (latest recorded at or before it), or the current one. */
+  private rewound(m: MouseState, t: number): Vec2 {
+    let best: TimedPoint | null = null;
+    for (const q of m.hist) if (q.t <= t) best = q;
+    return best ? [best.x, best.y] : m.pos;
   }
 
   private mouseEvent(m: MouseState, phase: "start" | "move" | "end", t: number): GestureEvent {
@@ -352,6 +411,22 @@ export class GestureInterpreter {
   private notePalmGone(st: HandState, t: number): void {
     if (st.palmGoneSince === null) st.palmGoneSince = t;
     if (t - st.palmGoneSince >= this.cfg.wakeRearmMs) st.wakeArmed = true;
+  }
+
+  /**
+   * Deadband ("string"): stay put until the target is more than cursorDeadband away, then trail it.
+   * Inside the band the cursor eases slowly onto the target (no bias at rest, no visible jitter).
+   */
+  private follow(prev: Vec2 | null, target: Vec2, dtMs: number): Vec2 {
+    const r = this.cfg.cursorDeadband;
+    if (!prev || r <= 0) return target;
+    const dx = target[0] - prev[0];
+    const dy = target[1] - prev[1];
+    const d = Math.hypot(dx, dy);
+    // Trail by r, then ease the remaining gap (otherwise the cursor would stay exactly r short).
+    const pull = d > r ? (d - r) / d : 0;
+    const k = pull + (1 - pull) * Math.min(1, Math.max(0, dtMs) / CURSOR_SETTLE_MS);
+    return [prev[0] + dx * k, prev[1] + dy * k];
   }
 
   private newFilter(): OneEuroFilter2D {
@@ -395,6 +470,18 @@ export class GestureInterpreter {
       if (Math.hypot(offset[0], offset[1]) < 0.5) offset[0] = offset[1] = 0;
     }
     return raw;
+  }
+
+  /**
+   * Screen edges are "infinitely deep" targets (taskbar, browser tabs): once the finger points
+   * past an edge, put the mouse right on it at once instead of waiting for the smoothing to
+   * creep there, which can take long enough for tracking to drop with the hand that low/high.
+   */
+  private snapToEdges(pos: Vec2, target: Vec2): Vec2 {
+    const { width, height } = this.display;
+    const x = target[0] <= 0 ? 0 : target[0] >= width ? width : pos[0];
+    const y = target[1] <= 0 ? 0 : target[1] >= height ? height : pos[1];
+    return [x, y];
   }
 
   private clampToDisplay([x, y]: Vec2): Vec2 {
@@ -523,7 +610,7 @@ export class GestureInterpreter {
     const raw = this.anchor(hand, c.drawPose);
     p.lastRawAnchor = this.decayOffset(p.offset, p.lastRawAnchor, raw);
     const [sx, sy] = this.clampToDisplay([raw[0] + p.offset[0], raw[1] + p.offset[1]]);
-    const [x, y] = p.filter.filter(sx, sy, t / 1000);
+    const [x, y] = this.follow(p.lastSeen === 0 ? null : p.pos, p.filter.filter(sx, sy, t / 1000), t - p.lastSeen);
     p.pos = [x, y];
     p.lastSeen = t;
     events.push({ type: "cursor_moved", hand: p.hand, x: round1(x), y: round1(y), displayId, t });

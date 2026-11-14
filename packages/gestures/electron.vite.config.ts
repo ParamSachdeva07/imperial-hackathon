@@ -20,9 +20,16 @@ export default defineConfig({
   preload: {
     build: {
       outDir: "out/preload",
-      // Sandboxed preloads cannot require() packages: bundle everything.
+      // Sandboxed preloads cannot require() packages or shared chunks: bundle each entry fully.
       externalizeDeps: false,
-      rollupOptions: { input: { gestures: resolve(__dirname, "src/electron/preload.ts") }, output: cjs },
+      isolatedEntries: true,
+      rollupOptions: {
+        input: {
+          gestures: resolve(__dirname, "src/electron/preload.ts"),
+          feedback: resolve(__dirname, "src/electron/feedbackPreload.ts"),
+        },
+        output: cjs,
+      },
     },
   },
   renderer: {
@@ -30,7 +37,12 @@ export default defineConfig({
     publicDir: resolve(__dirname, ".cache/public"),
     build: {
       outDir: "out/renderer",
-      rollupOptions: { input: { vision: resolve(__dirname, "electron/dev/vision.html") } },
+      rollupOptions: {
+        input: {
+          vision: resolve(__dirname, "electron/dev/vision.html"),
+          feedback: resolve(__dirname, "electron/dev/feedback.html"),
+        },
+      },
     },
   },
 });
