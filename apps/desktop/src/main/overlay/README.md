@@ -6,6 +6,8 @@ cards drawn over the real desktop. The team contract is `packages/shared/src/ove
 
 ## Wire it in
 
+Full guide, written so another AI agent can follow it: [`POINTY_OVERLAY_INTEGRATION.md`](../../../../../POINTY_OVERLAY_INTEGRATION.md).
+
 ```ts
 import { createOverlayControl, exportToolDefinitions } from "./overlay";
 

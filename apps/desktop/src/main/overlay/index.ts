@@ -3,6 +3,8 @@
  */
 export { createOverlayControl, DEFAULT_BROKER_URL, type CreateOverlayOptions, type OverlayHandle } from "./createOverlayControl";
 export type { OverlayDebug, ScreenSource } from "./ports";
+/** imagePrompts that have pre-generated pictures in assetsDir → exportToolDefinitions({ pregeneratedImagePrompts }). */
+export { readManifestPrompts } from "./explainer/manifest";
 export {
   exportToolDefinitions,
   type AvoidRectsProvider,
