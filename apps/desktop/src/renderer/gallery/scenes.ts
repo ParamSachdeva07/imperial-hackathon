@@ -13,6 +13,8 @@ import type {
   StepsItem,
 } from "@pointy/shared/overlay/render";
 import { measureCard, measureLabel } from "@pointy/shared/overlay/measure";
+import { applyGestureEvents, initialGestureState, type GestureState } from "../overlay/gesture/gestureFeedback";
+import type { GestureFeedback } from "@pointy/shared/overlay/render";
 import type { ExplainerSpec, IconName, Point, Rect, Tone } from "@pointy/shared/overlay/schemas";
 
 export const DISPLAY = { id: "display-1", bounds: { x: 0, y: 0, width: 1280, height: 800 }, scaleFactor: 2 };
@@ -28,6 +30,8 @@ export interface GalleryScene {
   title: string;
   targets: FakeTarget[];
   scene: RenderScene;
+  /** Static gesture-feedback layer state drawn above the scene (see gestureScene). */
+  gesture?: { state: GestureState; now: number };
 }
 
 const rect = (x: number, y: number, width: number, height: number): Rect => ({ x, y, width, height });
@@ -506,6 +510,38 @@ const CHECK_SPECS: { name: string; title: string; body: ExplainerBody; spec: Exp
   },
 ];
 
+/** Builds a frozen gesture layer state by replaying events, 33 ms apart (trail points age with them). */
+function gestureScene(name: string, title: string, events: GestureFeedback[], targets: FakeTarget[] = []): GalleryScene {
+  let state = applyGestureEvents(initialGestureState, [{ kind: "session", active: true }], 0);
+  events.forEach((e, i) => {
+    state = applyGestureEvents(state, [e], (i + 1) * 33);
+  });
+  return { name, title, targets, scene: scene([]), gesture: { state, now: (events.length + 1) * 33 } };
+}
+
+const circle = (cx: number, cy: number, r: number, n = 24): Point[] =>
+  Array.from({ length: n + 1 }, (_, i) => ({ x: cx + r * Math.cos((i / n) * 2 * Math.PI - Math.PI / 2), y: cy + r * Math.sin((i / n) * 2 * Math.PI - Math.PI / 2) }));
+
+const DRAW_PATH = circle(640, 400, 110, 18).slice(0, 14);
+
+const GESTURE_SCENES: GalleryScene[] = [
+  gestureScene("gesture-draw-trail", "Drawing: hand cursor, trail, dwell ring", [
+    ...DRAW_PATH.map((at): GestureFeedback => ({ kind: "cursor", at, mode: "draw" })),
+    { kind: "progress", at: DRAW_PATH[DRAW_PATH.length - 1]!, value: 0.6, progressKind: "dwell" },
+  ]),
+  gestureScene("gesture-mouse-click", "Mouse mode: two-finger cursor, click ring", [
+    { kind: "cursor", at: { x: 620, y: 300 }, mode: "mouse" },
+    { kind: "progress", at: { x: 620, y: 300 }, value: 0.45, progressKind: "click" },
+  ], [{ rect: rect(540, 270, 160, 60), text: "Send" }]),
+  gestureScene("gesture-region", "Region selected (flash + glyph)", [
+    { kind: "selected_region", points: circle(640, 400, 130, 14), bounds: rect(510, 270, 260, 260) },
+  ]),
+  gestureScene("gesture-point-click", "Point selected and click flashes", [
+    { kind: "selected_point", at: { x: 400, y: 300 } },
+    { kind: "click", at: { x: 800, y: 500 } },
+  ]),
+];
+
 export const CHECK_SCENES: GalleryScene[] = [
   { name: "check-labels", title: "Label measure stress (glyph)", targets: [], scene: checkLabels(true) },
   { name: "check-labels-plain", title: "Label measure stress (plain)", targets: [], scene: checkLabels(false) },
@@ -519,5 +555,5 @@ export const CHECK_SCENES: GalleryScene[] = [
   ),
 ];
 
-export const ALL_SCENES = [...SCENES, ...CHECK_SCENES];
+export const ALL_SCENES = [...SCENES, ...GESTURE_SCENES, ...CHECK_SCENES];
 export const findScene = (name: string) => ALL_SCENES.find((s) => s.name === name);

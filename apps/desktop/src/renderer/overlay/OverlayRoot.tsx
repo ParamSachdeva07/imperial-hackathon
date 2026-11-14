@@ -4,6 +4,7 @@ import type { RenderItem, RenderScene } from "@pointy/shared/overlay/render";
 import type { Rect } from "@pointy/shared/overlay/schemas";
 import { intersects } from "@pointy/shared/overlay/geometry";
 import { rehydrateImages } from "@pointy/shared/overlay/sceneImages";
+import { GestureLayer } from "./gesture/GestureLayer";
 import { OverlayScene } from "./OverlayScene";
 
 function usePrefersReducedMotion(): boolean {
@@ -97,6 +98,12 @@ export function OverlayRoot() {
     };
   }, [scene?.seq, scene?.display.bounds]); // eslint-disable-line react-hooks/exhaustive-deps -- re-run per scene, not per image
 
-  if (!scene) return <div data-items={0} />;
-  return <OverlayScene scene={scene} reduceMotion={scene.reduceMotion || prefersReduced} />;
+  // Gesture feedback is its own stream (never part of the scene) and stays mounted across scenes.
+  const reduceMotion = Boolean(scene?.reduceMotion) || prefersReduced;
+  return (
+    <>
+      {scene ? <OverlayScene scene={scene} reduceMotion={reduceMotion} /> : <div data-items={0} />}
+      <GestureLayer display={scene?.display.bounds ?? null} reduceMotion={reduceMotion} />
+    </>
+  );
 }

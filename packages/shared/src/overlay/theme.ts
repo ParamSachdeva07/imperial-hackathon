@@ -54,6 +54,22 @@ export const theme = {
     cardEnterScale: 0.96,
   },
   pointerSize: 96,
+  /** Hand-gesture feedback layer (cursor, hold ring, trail, selection flashes). Colours come from `colors`. */
+  gesture: {
+    /** Hand cursor box (px); its fingertip hotspot sits exactly on the gesture point. */
+    cursorSize: 56,
+    /** Hold-ring radius (px) around the fingertip. */
+    ringRadius: 42,
+    ringStroke: 8,
+    trailWidth: 10,
+    /** A trail point disappears this long after it arrived. */
+    trailMs: 1600,
+    trailMaxPoints: 150,
+    /** Selection / click confirmation flash; gentle, never a strobe. */
+    flashMs: 1100,
+    /** Scroll badge size (px). */
+    scrollBadgeSize: 64,
+  },
   /** Diameter (px) of the small, faint "next step" hint on step guides (one step at a time). */
   stepHintSize: 32,
   cardMaxWidth: 520,

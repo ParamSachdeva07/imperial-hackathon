@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PaintedMessage, RenderItem, RenderScene, StepsItem } from "@pointy/shared/overlay/render";
+import type { GestureFeedback, PaintedMessage, RenderItem, RenderScene, StepsItem } from "@pointy/shared/overlay/render";
 import { OverlayRoot } from "./OverlayRoot";
 import { OverlayScene } from "./OverlayScene";
 import { calloutDot } from "./explainer/AnatomyTemplate";
@@ -8,6 +8,7 @@ import { ImageSlotView } from "./explainer/ImageSlot";
 import { SCENES, DISPLAY } from "../gallery/scenes";
 import { ICON_NAMES } from "./icons/Icon";
 import { IconName } from "@pointy/shared/overlay/schemas";
+import { theme } from "@pointy/shared/overlay/theme";
 
 const scene = (name: string): RenderScene => SCENES.find((s) => s.name === name)!.scene;
 afterEach(cleanup);
@@ -212,5 +213,114 @@ describe("image decode failures reach main", () => {
     const imgs = container.querySelectorAll("img");
     fireEvent.error(imgs[1]!);
     expect(imageFailed).toHaveBeenCalledWith({ overlayId: base.items[0]!.id, panel: 1 });
+  });
+});
+
+describe("OverlayRoot gesture feedback", () => {
+  let pushGesture: (events: GestureFeedback[]) => void = () => {};
+  let now = 0;
+  let rafQueue: FrameRequestCallback[] = [];
+  const frame = () => {
+    const q = rafQueue;
+    rafQueue = [];
+    for (const cb of q) cb(now);
+  };
+  beforeEach(() => {
+    now = 1000;
+    rafQueue = [];
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => rafQueue.push(cb));
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    window.pointyOverlay = {
+      onScene: (cb) => {
+        cb({ ...scene("ring-labeled"), items: [], display: { ...DISPLAY, bounds: { x: 100, y: 50, width: 1280, height: 800 } } });
+        return () => {};
+      },
+      onImage: () => () => {},
+      onImageDrop: () => () => {},
+      onGesture: (cb) => {
+        pushGesture = (events) => cb({ events });
+        return () => {};
+      },
+      imageFailed: vi.fn(),
+      painted: vi.fn(),
+      ready: vi.fn(),
+    };
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders nothing until the session is active", () => {
+    const { container } = render(<OverlayRoot />);
+    act(() => pushGesture([{ kind: "cursor", at: { x: 300, y: 200 }, mode: "draw" }]));
+    expect(container.querySelector("[data-gesture-cursor]")).toBeNull();
+  });
+
+  it("draws the cursor, ring, trail, then a flash that disappears after its lifetime", () => {
+    const { container } = render(<OverlayRoot />);
+    act(() => pushGesture([{ kind: "session", active: true }]));
+    act(() => pushGesture([{ kind: "cursor", at: { x: 300, y: 200 }, mode: "draw" }]));
+    now += 33;
+    act(() => pushGesture([{ kind: "cursor", at: { x: 320, y: 210 }, mode: "draw" }, { kind: "progress", at: { x: 320, y: 210 }, value: 0.25, progressKind: "dwell" }]));
+
+    const root = container.querySelector<HTMLElement>(".gesture-root")!;
+    expect(root.style.transform).toBe("translate(-100px, -50px)");
+    const cursor = container.querySelector<HTMLElement>("[data-gesture-cursor]")!;
+    expect(cursor.getAttribute("data-gesture-cursor")).toBe("draw");
+    const k = theme.gesture.cursorSize / 48;
+    expect(parseFloat(cursor.style.left)).toBeCloseTo(320 - 20 * k);
+    expect(parseFloat(cursor.style.top)).toBeCloseTo(210 - 4 * k);
+    expect(container.querySelector(".gesture-ring-arc")!.getAttribute("stroke-dashoffset")).toBe("0.75");
+    expect(container.querySelector(".gesture-trail-line")!.getAttribute("d")).toMatch(/^M300 200 L320 210$/);
+
+    act(() => pushGesture([{ kind: "selected_point", at: { x: 320, y: 210 } }]));
+    expect(container.querySelector("[data-gesture-flash='point']")).not.toBeNull();
+    expect(container.querySelector("[data-glyph-badge]")).not.toBeNull();
+    expect(container.querySelector("[data-gesture-trail]")).toBeNull(); // selection cleared the trail
+
+    now += theme.gesture.flashMs - 1;
+    act(frame);
+    expect(container.querySelector("[data-gesture-flash]")).not.toBeNull();
+    now += 2;
+    act(frame);
+    expect(container.querySelector("[data-gesture-flash]")).toBeNull();
+    expect(rafQueue).toHaveLength(0); // loop stopped
+  });
+
+  it("does not run a rAF loop for a bare cursor, and clears on lost", () => {
+    const { container } = render(<OverlayRoot />);
+    act(() => pushGesture([{ kind: "session", active: true }, { kind: "cursor", at: { x: 1, y: 1 }, mode: "mouse" }]));
+    expect(container.querySelector("[data-gesture-cursor='mouse']")).not.toBeNull();
+    expect(rafQueue).toHaveLength(0);
+    act(() => pushGesture([{ kind: "lost" }]));
+    expect(container.querySelector("[data-gesture-cursor]")).toBeNull();
+  });
+
+  it("session off hides the live layer but lets a flash in flight finish", () => {
+    const { container } = render(<OverlayRoot />);
+    act(() => pushGesture([{ kind: "session", active: true }, { kind: "cursor", at: { x: 1, y: 1 }, mode: "draw" }, { kind: "click", at: { x: 1, y: 1 } }]));
+    act(() => pushGesture([{ kind: "session", active: false }]));
+    expect(container.querySelector("[data-gesture-cursor]")).toBeNull();
+    expect(container.querySelector("[data-gesture-flash='click']")).not.toBeNull();
+  });
+
+  it("reduce motion: trail keeps full strength (no fade), region flash uses the polygon", () => {
+    window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    const { container } = render(<OverlayRoot />);
+    act(() => pushGesture([{ kind: "session", active: true }, { kind: "cursor", at: { x: 1, y: 1 }, mode: "draw" }]));
+    now += 800;
+    act(() => pushGesture([{ kind: "cursor", at: { x: 40, y: 40 }, mode: "draw" }]));
+    expect(container.querySelector(".gesture-root")!.classList.contains("reduce")).toBe(true);
+    expect((container.querySelector(".gesture-trail-seg") as HTMLElement).style.opacity).toBe("1");
+    act(() =>
+      pushGesture([{ kind: "selected_region", points: [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 60 }], bounds: { x: 0, y: 0, width: 60, height: 60 } }]),
+    );
+    expect(container.querySelector("[data-gesture-flash='region'] .shape-stroke")!.getAttribute("d")).toContain("L");
+    // cursor/ring stay in reduce motion (they are information)
+    expect(container.querySelector("[data-gesture-cursor]")).not.toBeNull();
+    // @ts-expect-error test cleanup
+    delete window.matchMedia;
   });
 });

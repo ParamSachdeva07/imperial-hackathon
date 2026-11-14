@@ -187,6 +187,8 @@ export const IPC = {
   imageDrop: "overlay:image-drop",
   /** overlay renderer → main: ImageFailedMessage — a "ready" picture failed to decode */
   imageFailed: "overlay:image-failed",
+  /** main → overlay renderer: GestureFeedbackMessage (~30 fps stream; deliberately NOT part of the scene) */
+  gesture: "overlay:gesture",
   /** fixture renderer → main: FixtureBoundsMessage */
   fixtureBounds: "fixture:bounds",
 } as const;
@@ -207,4 +209,34 @@ export interface ElementRect {
 /** Fixture window → main: element rects relative to the window's content (viewport) origin, DIP. */
 export interface FixtureBoundsMessage {
   elements: ElementRect[];
+}
+
+/**
+ * Hand-gesture feedback (cursor, hold rings, trail, selections). It travels beside the scene, never
+ * through it: a ~30 fps stream published as scenes would re-render every item and stall paint acks.
+ * Every coordinate is **global DIP** (main converts from the gesture service's display-relative
+ * coordinates); each overlay window clips via its own translate, exactly like scene items.
+ */
+export type GestureFeedback =
+  /** The fingertip cursor. `draw` = the drawing/pointing hand, `mouse` = the system-mouse hand (they can be two different hands at once). */
+  | { kind: "cursor"; at: Point; mode: "draw" | "mouse" }
+  /** Hold ring around the cursor. `value` 0..1; 0 = the hold was broken (ring disappears). */
+  | { kind: "progress"; at: Point; value: number; progressKind: "dwell" | "click" }
+  /**
+   * A hand disappeared / changed pose. `mode` says which hand's cursor ended (draw: also drops its
+   * trail and the hold ring); omitted = everything.
+   */
+  | { kind: "lost"; mode?: "draw" | "mouse" }
+  /** A dwell click happened at `at`. */
+  | { kind: "click"; at: Point }
+  | { kind: "selected_point"; at: Point }
+  | { kind: "selected_region"; points: Point[]; bounds: Rect }
+  /** Gesture session opened/closed (set by the controller, not derived from events). */
+  | { kind: "session"; active: boolean }
+  /** Closed-fist page scroll in progress. */
+  | { kind: "scroll"; phase: "start" | "move" | "end" };
+
+/** One batch of feedback events (everything that arrived within a microtask), in order. */
+export interface GestureFeedbackMessage {
+  events: GestureFeedback[];
 }

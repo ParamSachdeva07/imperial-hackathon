@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { IPC, type PaintedMessage, type RenderScene } from "@pointy/shared/overlay/render";
+import { IPC, type GestureFeedbackMessage, type PaintedMessage, type RenderScene } from "@pointy/shared/overlay/render";
 import type { PointyOverlayApi } from "./api";
 
 const api: PointyOverlayApi = {
@@ -17,6 +17,11 @@ const api: PointyOverlayApi = {
     const listener = (_e: IpcRendererEvent, msg: { keys: string[] }) => cb(msg);
     ipcRenderer.on(IPC.imageDrop, listener);
     return () => ipcRenderer.removeListener(IPC.imageDrop, listener);
+  },
+  onGesture(cb) {
+    const listener = (_e: IpcRendererEvent, msg: GestureFeedbackMessage) => cb(msg);
+    ipcRenderer.on(IPC.gesture, listener);
+    return () => ipcRenderer.removeListener(IPC.gesture, listener);
   },
   imageFailed(msg) {
     ipcRenderer.send(IPC.imageFailed, msg);
