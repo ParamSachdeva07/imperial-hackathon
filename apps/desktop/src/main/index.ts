@@ -16,6 +16,13 @@
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
  *   POINTY_REDUCE_MOTION=1  force reduce-motion
  *   POINTY_PROBE=1          overlay windows draw a fixed ring only (canvas check)
+ *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
+ *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
+ *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
+ *   POINTY_GESTURES_MOUSE=1 let gestures drive the real OS mouse/clicks, only while the session is open
+ *   POINTY_GESTURES_IDLE_MS gesture session idle timeout (default 20000)
+ *   (no flag needed to simulate gestures without a camera: dev server POST /gesture, CLI
+ *   `pointy-draw gesture ...`; the overlay's gesture feedback layer is always attached in dev)
  *   POINTY_DEV_PORT / POINTY_DEV_FILE   dev server port / connection file (isolated test runs)
  */
 import { join, resolve } from "node:path";
@@ -29,11 +36,18 @@ import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
 import { MockScreenCaptureProvider } from "./overlay/mocks/MockScreenCaptureProvider";
 import { ElectronScreen, OverlayWindowManager } from "./overlay/OverlayWindowManager";
 import { getOverlayPlatform } from "./overlay/platform";
+import { registerGestureAssetScheme, startGestures, type GesturesHandle } from "./gestures/startGestures";
 import { PRELOAD_DIR } from "./rendererPages";
 import { installDevLogging, startDevHarness } from "../dev/devHarness";
 
 const repoRoot = resolve(__dirname, "../../../..");
 const env = (name: string) => process.env[name];
+
+// Privileged schemes must be registered before app ready.
+registerGestureAssetScheme();
+
+/** Gesture layer (null unless POINTY_GESTURES=1). */
+let gestures: GesturesHandle | null = null;
 
 const PROBE_HTML = `<!doctype html><html><body style="margin:0;background:transparent">
 <svg width="100%" height="100%" style="position:fixed;inset:0">
@@ -85,7 +99,17 @@ async function main(): Promise<void> {
       forceReduceMotion: env("POINTY_REDUCE_MOTION") === "1",
     },
   });
+  gestures = await startGestures({ repoRoot });
+  // Gesture feedback: the real service feeds the overlay bridge; the session controller's open/close
+  // is mirrored into it. Quit order: detach from the service first, then dispose the service.
+  const detachGestures: (() => void)[] = [];
+  if (gestures) {
+    detachGestures.push(overlay.gestures.attach(gestures.service));
+    detachGestures.push(gestures.session.onChange((active) => overlay.gestures.setSessionActive(active)));
+  }
   app.on("before-quit", () => {
+    for (const d of detachGestures.splice(0)) d();
+    gestures?.dispose();
     anam?.dispose();
     overlay.dispose();
   });
@@ -98,6 +122,7 @@ async function main(): Promise<void> {
       assetsDir,
       openFixture: env("POINTY_NO_FIXTURE") !== "1",
       openVoice: env("POINTY_VOICE") === "1",
+      gestureSession: gestures?.session ?? null,
     });
   }
   console.log(`[pointy] overlay ready (contentProtection=${contentProtection})`);

@@ -2,7 +2,7 @@
 import { join } from "node:path";
 import { app, type BrowserWindow } from "electron";
 
-export type RendererPage = "overlay" | "fixture" | "gallery" | "voice";
+export type RendererPage = "overlay" | "fixture" | "gallery" | "voice" | "gestures";
 
 /** Built preload scripts (electron-vite: out/preload next to out/main). */
 export const PRELOAD_DIR = join(__dirname, "../preload");

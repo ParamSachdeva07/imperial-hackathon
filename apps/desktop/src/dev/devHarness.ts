@@ -8,8 +8,10 @@ import { delay } from "@pointy/shared/node/env";
 import { readManifestPrompts } from "../main/overlay/explainer/manifest";
 import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
 import type { OverlayHandle, ScreenSource } from "../main/overlay";
+import { SimGestureSource } from "../main/gestures/SimGestureSource";
 import { loadRendererPage, PRELOAD_DIR } from "../main/rendererPages";
 import { startDevServer } from "./devServer";
+import { GestureBody, GestureSessionBody } from "./gestureSchema";
 import { openFixtureWindow } from "./fixtureWindow";
 import { openVoiceWindow } from "./realtime/voiceWindow";
 
@@ -20,6 +22,8 @@ export interface DevHarnessOptions {
   assetsDir: string;
   openFixture: boolean;
   openVoice: boolean;
+  /** The real gesture session controller (POINTY_GESTURES=1), else null: /gesture/session then drives the overlay directly. */
+  gestureSession?: { open(): void; close(): void } | null;
 }
 
 /**
@@ -85,6 +89,14 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
 
   overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
 
+  // Camera-free gestures: replayed into the overlay's gesture bridge (always attached in dev).
+  const sim = new SimGestureSource();
+  const detachSim = overlay.gestures.attach(sim);
+  app.on("before-quit", () => {
+    detachSim();
+    sim.dispose();
+  });
+
   // A dev-server problem (e.g. port in use) must not stop the overlay or the voice window.
   const server = await startDevServer({
     control: overlay.control,
@@ -96,6 +108,21 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
       "/fixture": async () => {
         await ensureFixture();
         return { ok: true, elements: boundsProvider.listElementIds().length };
+      },
+      "/gesture": async (body) => {
+        const b = GestureBody.parse(body);
+        void sim.play(b.events, b.intervalMs);
+        return { ok: true, count: b.events.length };
+      },
+      "/gesture/session": async (body) => {
+        const { active } = GestureSessionBody.parse(body);
+        if (opts.gestureSession) {
+          if (active) opts.gestureSession.open();
+          else opts.gestureSession.close();
+        } else {
+          overlay.gestures.setSessionActive(active);
+        }
+        return { ok: true, active, real: Boolean(opts.gestureSession) };
       },
     },
   }).catch((err: unknown) => {
