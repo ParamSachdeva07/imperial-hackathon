@@ -10,7 +10,9 @@
  *   POINTY_ELEMENTS=path    extra element rects (JSON) for MockBoundsProvider
  *   POINTY_REDUCE_MOTION=1  force reduce-motion
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
+ *   POINTY_VOICE=1          open the GPT Realtime test window (needs OPENAI_API_KEY in .env)
  */
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { app, screen, type BrowserWindow } from "electron";
 import { createOverlayControl } from "./overlay/createOverlayControl";
@@ -21,8 +23,9 @@ import { ElectronScreen, OverlayWindowManager } from "./overlay/OverlayWindowMan
 import { getOverlayPlatform } from "./overlay/platform";
 import { startDevServer } from "../dev/devServer";
 import { openFixtureWindow } from "../dev/fixtureWindow";
+import { openVoiceWindow } from "../dev/realtime/voiceWindow";
 
-export type RendererPage = "overlay" | "fixture" | "gallery";
+export type RendererPage = "overlay" | "fixture" | "gallery" | "voice";
 
 /** Load one of the renderer pages: Vite dev server in `electron-vite dev`, built files otherwise. */
 export function loadRendererPage(win: BrowserWindow, page: RendererPage, query = ""): Promise<void> {
@@ -51,6 +54,9 @@ function startProbe(): void {
 }
 
 async function main(): Promise<void> {
+  // Dev builds read secrets (OPENAI_API_KEY for the voice test) from the gitignored repo-root .env.
+  const envFile = join(repoRoot, ".env");
+  if (!app.isPackaged && existsSync(envFile)) process.loadEnvFile(envFile);
   await app.whenReady();
   const contentProtection = process.env.POINTY_CAPTURABLE !== "1";
   if (process.env.POINTY_PROBE === "1") {
@@ -91,6 +97,23 @@ async function main(): Promise<void> {
     });
     console.log(`[pointy] dev server on 127.0.0.1:${server.port}`);
     app.on("before-quit", () => void server.close());
+  }
+  if (!app.isPackaged && process.env.POINTY_VOICE === "1") {
+    openVoiceWindow({
+      control: overlay.control,
+      apiKey: process.env.OPENAI_API_KEY,
+      preloadDir,
+      loadPage: (win) => loadRendererPage(win, "voice"),
+      ctx: {
+        listElements: () =>
+          boundsProvider.listElementIds().flatMap((id) => {
+            const b = boundsProvider.getBoundsSync(id);
+            return b ? [{ id, rect: b.rect }] : [];
+          }),
+        getDisplays: () => electronScreen.getDisplays(),
+        primaryDisplayId: () => electronScreen.getPrimaryDisplayId(),
+      },
+    });
   }
   overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
   app.on("before-quit", () => overlay.dispose());

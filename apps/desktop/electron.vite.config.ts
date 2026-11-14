@@ -21,6 +21,7 @@ export default defineConfig({
         input: {
           overlay: resolve(__dirname, "src/preload/overlay.ts"),
           fixture: resolve(__dirname, "src/preload/fixture.ts"),
+          voice: resolve(__dirname, "src/preload/voice.ts"),
         },
       },
     },
@@ -34,6 +35,7 @@ export default defineConfig({
           overlay: resolve(__dirname, "src/renderer/overlay/index.html"),
           fixture: resolve(__dirname, "src/renderer/fixture/index.html"),
           gallery: resolve(__dirname, "src/renderer/gallery/index.html"),
+          voice: resolve(__dirname, "src/renderer/voice/index.html"),
         },
       },
     },

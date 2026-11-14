@@ -17,7 +17,9 @@
     "broker": "npm run start -w @pointy/explainer-broker",
     "gen:tools": "tsx packages/shared/scripts/export-tools.ts",
     "pregen": "tsx scripts/pregen-demo-images.ts",
-    "postinstall": "node node_modules/electron/install.js"
+    "postinstall": "node node_modules/electron/install.js",
+    "voice": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_VOICE=1 npx electron .",
+    "app": "npm run build -w @pointy/desktop && cd apps/desktop && npx electron ."
   },
   "engines": {
     "node": ">=22"
