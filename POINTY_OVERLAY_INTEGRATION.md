@@ -476,8 +476,30 @@ function hitTest(els: readonly AxElement[], p: { x: number; y: number }): AxElem
 | `region_selected` | Give the model the circled region (`regionTarget(e)`). It can call `show_explainer` with `spec.kind: "anatomy"` and that region. |
 | `click` (dwell click) | Hit-test **before** dispatching the OS click (the UI may change after it), dispatch the click, then `onTargetSelected(id)`. This advances step guides. |
 | `scroll` (`phase: "end"`) | `onContextChange()`. |
-| `cursor_moved`, `mouse`, `dwell_progress`, `click_progress`, `hand_lost` | Nothing for the overlay. |
+| `cursor_moved`, `mouse`, `dwell_progress`, `click_progress`, `hand_lost` | Nothing for you to call: the gesture feedback layer draws them (see below). |
 | Session closed (stop/timeout) | `interp.setSessionActive(false)` **and** `handleTool("clear", { overlayId: "all" }, { caller: "controller" })`. |
+
+### Gesture feedback (hand cursor, hold ring, trail, flashes)
+
+The overlay draws the hand-gesture feedback itself; the controller never calls a tool for it. Attach the
+gesture service once and mirror the session state:
+
+```ts
+const detach = overlay.gestures.attach(gestureService); // anything with { onAny(cb) }
+overlay.gestures.setSessionActive(true); // in step with gestureService.setSessionActive(...)
+```
+
+Events are converted from display-relative DIP to global DIP in main (`GestureFeedbackBridge`) and sent
+over `overlay:gesture`. Draw cursor = one finger, mouse cursor = two fingers, plus a hold ring
+(`dwell_progress` / `click_progress`), a fading trail, point/region/click flashes and a scroll badge.
+Nothing is recorded while the session is inactive; closing it clears the feedback.
+
+Dev env flags (see the header of `apps/desktop/src/main/index.ts`): `POINTY_GESTURES=1` starts the camera
+layer (`npm run gestures:assets` once, then `npm run app:gestures`), `POINTY_GESTURES_SHOW=1` shows the
+vision window, `POINTY_GESTURES_MOUSE=1` lets gestures drive the real OS mouse while the session is open,
+`POINTY_GESTURES_IDLE_MS` sets the session idle timeout. No camera needed to test the visuals:
+`npx pointy-draw gesture session on`, then `gesture circle --center 700,450 --radius 150`,
+`gesture dwell 500,300`, `gesture point x,y`, `gesture lost`.
 
 ## 11. Testing your integration without a model
 

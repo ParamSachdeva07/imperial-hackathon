@@ -74,6 +74,15 @@ the background (serialized, at most one per 1.5 s, never affecting the tool resu
   (`explainer.image_ready` / `explainer.image_failed`). Cards keep text at full size: they first
   try smaller pictures, then a corner with a connector, before shrinking.
 
+## Gesture feedback
+
+`handle.gestures.attach(source)` takes anything with `onAny(cb)` (the `GestureService`, or the dev
+`SimGestureSource`) and returns a detach function; `handle.gestures.setSessionActive(bool)` mirrors the
+session. `GestureFeedbackBridge` maps events to global-DIP `GestureFeedback`, batches per microtask and
+`OverlayWindowManager` sends them on `overlay:gesture` to ready windows (no scene seq bump). The renderer
+layer lives in `renderer/overlay/gesture/`. In dev, `POST /gesture` and `pointy-draw gesture ...` replay
+events without a camera; `POINTY_GESTURES=1` uses the real camera layer.
+
 ## Dev only
 
 - `npm run app` — overlay + fake mail app + dev server. `npm run voice` — plus the GPT Realtime test
