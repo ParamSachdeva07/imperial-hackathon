@@ -2,9 +2,10 @@
  * One transparent, click-through, always-on-top overlay window per display (spec §5.1).
  * Rebuilds windows when displays are added, removed or change metrics.
  */
-import { BrowserWindow, ipcMain, screen, type Display, type IpcMainEvent } from "electron";
+import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from "electron";
 import { IPC, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
 import type { DisplayInfo, Rect } from "@pointy/shared/overlay";
+import { toDisplayInfo } from "./coords";
 import type { OverlayPlatform } from "./platform";
 import type { SceneSink, ScreenSource } from "./ports";
 
@@ -26,14 +27,10 @@ interface OverlayWindow {
 /** Composition latency to wait for after changing window opacity/visibility (spec §5.1 note). */
 const COMPOSITION_SETTLE_MS = 60;
 
-export function toDisplayInfo(d: Display): DisplayInfo {
-  return { id: String(d.id), bounds: { ...d.bounds }, workArea: { ...d.workArea }, scaleFactor: d.scaleFactor };
-}
-
 /** Electron `screen` as a ScreenSource. */
 export class ElectronScreen implements ScreenSource {
   getDisplays(): DisplayInfo[] {
-    return screen.getAllDisplays().map(toDisplayInfo);
+    return screen.getAllDisplays().map((d) => toDisplayInfo(d));
   }
   getPrimaryDisplayId(): string {
     return String(screen.getPrimaryDisplay().id);

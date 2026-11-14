@@ -1,6 +1,5 @@
 /**
  * Anatomy crop math (spec §7.2). Pure.
- * STUB (Phase 0): implemented by the logic track.
  *
  *  1. planCrop: pad the region by `padFraction` (15%) of its width/height on every side, clamp to
  *     the display bounds, and compute the physical-pixel crop rect relative to the display origin

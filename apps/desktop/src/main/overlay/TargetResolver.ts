@@ -1,6 +1,5 @@
 /**
  * TargetResolver (spec §5.3). Turns a Target into global-DIP bounds + drawing shape.
- * STUB (Phase 0): implemented by the logic track.
  *
  *  - element → BoundsProvider.getBounds(elementId). null (or a rejected promise) →
  *    { ok:false, reason:"target_not_found" }.

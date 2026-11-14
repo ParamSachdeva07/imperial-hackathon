@@ -121,3 +121,22 @@ describe("OverlayRoot", () => {
     expect(screen).toBeDefined();
   });
 });
+
+describe("tone glyph badge placement", () => {
+  it("moves to another corner when the preferred one is off the display", async () => {
+    const { badgeCentre } = await import("./HighlightView");
+    const display = { x: 0, y: 0, width: 1000, height: 800 };
+    const item = {
+      kind: "highlight" as const,
+      id: "h",
+      state: "visible" as const,
+      style: "ring" as const,
+      tone: "warning" as const,
+      target: { bounds: { x: 900, y: 2, width: 90, height: 30 }, shape: { kind: "rect" as const } },
+      label: null,
+    };
+    const p = badgeCentre(item, display);
+    expect(p.x + 24).toBeLessThanOrEqual(1000);
+    expect(p.y - 24).toBeGreaterThanOrEqual(0);
+  });
+});

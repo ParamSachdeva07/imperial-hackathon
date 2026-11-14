@@ -283,6 +283,13 @@ describe("pointerPlacement", () => {
     expect(containsRect(display, p.body)).toBe(true);
   });
 
+  it("does not enter across a neighbouring display", () => {
+    const left = r(-1000, 0, 1000, 800);
+    const p = pointerPlacement(r(150, 380, 100, 40), display, 96, [left]); // nearest edge (left) borders `left`
+    expect(containsPoint(left, p.entry)).toBe(false);
+    expect(p.angle).not.toBe(0);
+  });
+
   it("works on a display with a negative origin", () => {
     const neg = r(-1920, -200, 1920, 1080);
     const target = r(-1750, 0, 100, 50);

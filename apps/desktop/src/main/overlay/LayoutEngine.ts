@@ -18,6 +18,7 @@ import type { Point, Rect, Segment, Size } from "@pointy/shared/overlay";
 import {
   bottomOf,
   center,
+  containsPoint,
   containsRect,
   distance,
   intersects,
@@ -200,6 +201,8 @@ export function pointerPlacement(
   target: Rect,
   displayBounds: Rect,
   pointerSize: number = theme.pointerSize,
+  /** Other displays' bounds: an entry point on a neighbouring display would glide across it. */
+  otherDisplays: Rect[] = [],
 ): PointerPlacement {
   const tap = center(target);
   const edges = [
@@ -212,7 +215,13 @@ export function pointerPlacement(
   // Nearest edge first, but only where the resting pointer stays fully on the display (a target
   // hugging the left edge gets its pointer from another side instead of resting off-screen).
   const candidates = edges.map((e) => placeFrom(e.entry, tap, target, pointerSize));
-  return candidates.find((c) => containsRect(displayBounds, c.body)) ?? candidates[0]!;
+  const onScreen = (c: PointerPlacement) => containsRect(displayBounds, c.body);
+  const clearOfNeighbours = (c: PointerPlacement) => !otherDisplays.some((d) => containsPoint(d, c.entry));
+  return (
+    candidates.find((c) => onScreen(c) && clearOfNeighbours(c)) ??
+    candidates.find(onScreen) ??
+    candidates[0]!
+  );
 }
 
 function placeFrom(entry: Point, tap: Point, target: Rect, pointerSize: number): PointerPlacement {

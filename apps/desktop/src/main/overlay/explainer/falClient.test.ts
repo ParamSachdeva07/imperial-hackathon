@@ -109,3 +109,14 @@ describe("FalClient", () => {
     expect(await p).toEqual({ ok: false, error: "timeout" });
   });
 });
+
+describe("promptSimilarity / fuzzy asset match", () => {
+  it("scores reworded prompts high and unrelated ones low", async () => {
+    const { promptSimilarity } = await import("./falClient");
+    const base = "a crumpled envelope with a fishing hook coming out of it";
+    expect(promptSimilarity(base, base)).toBe(1);
+    expect(promptSimilarity(base, "a crumpled envelope with a fishing hook coming out")).toBeGreaterThanOrEqual(0.6);
+    expect(promptSimilarity(base, "a neat envelope with a green tick seal")).toBeLessThan(0.6);
+    expect(promptSimilarity(base, "")).toBe(0);
+  });
+});

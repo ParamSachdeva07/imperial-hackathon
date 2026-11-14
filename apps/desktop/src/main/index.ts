@@ -12,7 +12,7 @@
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
  *   POINTY_VOICE=1          open the GPT Realtime test window (needs OPENAI_API_KEY in .env)
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { app, screen, type BrowserWindow } from "electron";
 import { createOverlayControl } from "./overlay/createOverlayControl";
@@ -41,6 +41,15 @@ const PROBE_HTML = `<!doctype html><html><body style="margin:0;background:transp
 </svg></body></html>`;
 
 const preloadDir = join(__dirname, "../preload");
+
+function readManifestPrompts(file: string): string[] {
+  try {
+    const m = JSON.parse(readFileSync(file, "utf8")) as { entries?: { prompt?: unknown }[] };
+    return (m.entries ?? []).flatMap((e) => (typeof e.prompt === "string" ? [e.prompt] : []));
+  } catch {
+    return [];
+  }
+}
 const repoRoot = resolve(__dirname, "../../../..");
 
 function startProbe(): void {
@@ -112,6 +121,7 @@ async function main(): Promise<void> {
           }),
         getDisplays: () => electronScreen.getDisplays(),
         primaryDisplayId: () => electronScreen.getPrimaryDisplayId(),
+        pregeneratedImagePrompts: () => readManifestPrompts(join(repoRoot, "assets/explainers/manifest.json")),
       },
     });
   }

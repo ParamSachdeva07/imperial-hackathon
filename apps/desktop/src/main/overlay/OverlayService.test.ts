@@ -449,7 +449,7 @@ describe("OverlayService", () => {
       bounds.gate = null;
       release();
       const r = await pending;
-      expect(r).toEqual({ ok: true, visible: false });
+      expect(r).toEqual({ ok: false, visible: false, reason: "replaced" });
       expect(sink.items).toHaveLength(0);
     });
 

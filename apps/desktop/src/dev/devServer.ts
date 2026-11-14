@@ -25,7 +25,7 @@ export const DEV_SERVER_FILE = process.env.POINTY_DEV_FILE ?? join(homedir(), ".
 const MAX_BODY = 256 * 1024;
 
 export interface DevServerDeps {
-  control: OverlayControl & { debugState?: () => unknown };
+  control: OverlayControl & { debugState?: () => unknown; debugAnatomyImage?: (id: string) => string | null };
   sim: {
     simMove(elementId: string, dx: number, dy: number): void;
     simRemove(elementId: string): void;
@@ -92,6 +92,8 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
           return send(res, 200, { primary: deps.getPrimaryDisplayId(), displays: deps.getDisplays() });
         case "/elements":
           return send(res, 200, deps.sim.listElementIds());
+        case "/debug/anatomy":
+          return send(res, 200, { src: deps.control.debugAnatomyImage?.(url.searchParams.get("id") ?? "") ?? null });
       }
       return send(res, 404, { error: "not found" });
     }

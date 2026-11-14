@@ -1,6 +1,5 @@
 /**
  * Step-guide state machine (show_steps / advance_step). Pure.
- * STUB (Phase 0): implemented by the logic track.
  *
  *  - startSteps(total, startAt): current = clamp(startAt, 0, total - 1), completed = false.
  *  - advanceSteps(s): no-op when completed; otherwise current + 1; when that reaches `total`,

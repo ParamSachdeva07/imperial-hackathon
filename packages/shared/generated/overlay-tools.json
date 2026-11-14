@@ -725,7 +725,7 @@
   {
     "type": "function",
     "name": "show_explainer",
-    "description": "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side; `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
+    "description": "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
     "parameters": {
       "type": "object",
       "properties": {

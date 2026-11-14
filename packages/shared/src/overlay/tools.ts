@@ -70,7 +70,7 @@ export const TOOLS = {
   show_explainer: {
     name: "show_explainer",
     description:
-      "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side; `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
+      "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
     input: ShowExplainerInput,
     tier: "mvp",
     audience: "model",
@@ -118,6 +118,11 @@ export interface FunctionToolDefinition {
 export interface ExportOptions {
   /** Include stretch tools and the `cue` field (default false). */
   includeStretch?: boolean;
+  /**
+   * imagePrompts that already have pre-generated images (assets/explainers/manifest.json). They are
+   * listed in show_explainer's description so the model reuses them verbatim: instant, offline images.
+   */
+  pregeneratedImagePrompts?: string[];
   /** Include controller-only tools such as `preview_action` (default false). */
   includeControllerTools?: boolean;
 }
@@ -172,7 +177,10 @@ export function exportToolDefinitions(opts: ExportOptions = {}): FunctionToolDef
     .map((t) => ({
       type: "function" as const,
       name: t.name,
-      description: t.description,
+      description:
+        t.name === "show_explainer" && opts.pregeneratedImagePrompts?.length
+          ? `${t.description} These pictures are ready instantly; reuse one of these imagePrompts word for word when it fits: ${opts.pregeneratedImagePrompts.map((p) => JSON.stringify(p)).join("; ")}.`
+          : t.description,
       parameters: toolJsonSchema(t.name, opts),
     }));
 }

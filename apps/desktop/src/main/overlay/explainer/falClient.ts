@@ -51,6 +51,21 @@ interface ManifestEntry {
 class BrokerError extends Error {}
 class TimeoutError extends Error {}
 
+const FUZZY_MIN = 0.6;
+const STOP = new Set("a an the of with and in on at to for from its it is are be by as or".split(" "));
+const words = (s: string) =>
+  new Set(s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 1 && !STOP.has(w)));
+
+/** Jaccard similarity of the prompts' content words (0..1). */
+export function promptSimilarity(a: string, b: string): number {
+  const wa = words(a);
+  const wb = words(b);
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let inter = 0;
+  for (const w of wa) if (wb.has(w)) inter += 1;
+  return inter / (wa.size + wb.size - inter);
+}
+
 export class FalClient implements ImageSource {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -111,7 +126,15 @@ export class FalClient implements ImageSource {
   }
 
   private async fromAssets(prompt: string, styleId: string): Promise<string | null> {
-    const entry = (await this.loadManifest()).find((e) => e.prompt.trim() === prompt && e.styleId === styleId);
+    const entries = (await this.loadManifest()).filter((e) => e.styleId === styleId);
+    // Exact match first; otherwise a conservative fuzzy match so a lightly reworded prompt from a
+    // live model still uses the pre-generated image (the demo must not depend on fal responding).
+    const entry =
+      entries.find((e) => e.prompt.trim() === prompt) ??
+      entries
+        .map((e) => ({ e, score: promptSimilarity(e.prompt, prompt) }))
+        .filter((c) => c.score >= FUZZY_MIN)
+        .sort((a, b) => b.score - a.score)[0]?.e;
     if (!entry) return null;
     const root = path.resolve(this.opts.assetsDir);
     const file = path.resolve(root, entry.file);

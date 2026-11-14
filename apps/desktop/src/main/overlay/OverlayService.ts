@@ -194,11 +194,15 @@ export class OverlayService implements OverlayControl {
   onTargetSelected(elementId: string): void {
     for (const l of [...this.live.values()]) {
       if (l.ended || !l.elements.has(elementId)) continue;
-      this.emit({ type: "overlay.target_selected", overlayId: l.id });
-      if (l.steps && !l.steps.completed) {
-        const current = l.slots.get(`step:${l.steps.current}`);
-        if (current?.kind === "element" && current.elementId === elementId) this.advance(l.id);
+      if (l.steps) {
+        // A guide is only "selected" through its current step (which also advances it).
+        const current = l.steps.completed ? undefined : l.slots.get(`step:${l.steps.current}`);
+        if (current?.kind !== "element" || current.elementId !== elementId) continue;
+        this.emit({ type: "overlay.target_selected", overlayId: l.id });
+        this.advance(l.id);
+        continue;
       }
+      this.emit({ type: "overlay.target_selected", overlayId: l.id });
     }
     this.expiry.onTargetSelected(elementId);
   }
@@ -218,6 +222,13 @@ export class OverlayService implements OverlayControl {
 
   withOverlayHidden<T>(fn: () => Promise<T>): Promise<T> {
     return this.deps.sink.withHidden(fn);
+  }
+
+  /** Dev/debug: the data URL of an explainer's anatomy crop (or null), to verify capture exclusion. */
+  debugAnatomyImage(id: string): string | null {
+    const item = this.live.get(id)?.item;
+    if (item?.kind !== "explainer" || item.body.kind !== "anatomy" || item.body.image.status !== "ready") return null;
+    return item.body.image.src;
   }
 
   /** Debug snapshot (dev server). */
@@ -240,7 +251,7 @@ export class OverlayService implements OverlayControl {
     const epoch = this.epoch;
     const results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
     // clear("all") or a new turn arrived while we were resolving: this call is stale.
-    if (epoch !== this.epoch) return { ok: true, visible: false };
+    if (epoch !== this.epoch) return { ok: false, visible: false, reason: "replaced" };
     for (const [slot, r] of results) {
       if (r.ok) {
         resolved.set(slot, r.target);
@@ -629,7 +640,8 @@ export class OverlayService implements OverlayControl {
       const t = target("target");
       if (!t) return this.keepGeometry(l, state);
       const display = this.displayOf(l.resolved.get("target"));
-      const p = pointerPlacement(t.bounds, display.bounds, theme.pointerSize);
+      const others = this.displays().filter((d) => d.id !== display.id).map((d) => d.bounds);
+      const p = pointerPlacement(t.bounds, display.bounds, theme.pointerSize, others);
       const drag = i.motion === "drag_to" ? target("dragTo") : null;
       l.item = {
         kind: "pointer",
@@ -658,8 +670,15 @@ export class OverlayService implements OverlayControl {
         const badge = badgePlacement(r.bounds, display.workArea, theme.stepBadgeSize);
         const half = theme.stepBadgeSize / 2;
         const badgeRect = { x: badge.x - half, y: badge.y - half, width: theme.stepBadgeSize, height: theme.stepBadgeSize };
+        // The current step's label must not cover the guide's other steps either.
+        const ownOthers = i.steps.flatMap((_, j) => {
+          const o = j === idx ? null : l.resolved.get(`step:${j}`);
+          return o ? [o.bounds] : [];
+        });
         const labelBox =
-          status === "current" ? this.placeLabel(s.label, undefined, union(r.bounds, badgeRect), display, avoid) : null;
+          status === "current"
+            ? this.placeLabel(s.label, undefined, union(r.bounds, badgeRect), display, [...avoid, ...ownOthers])
+            : null;
         return { index: idx, label: s.label, status, target: { bounds: r.bounds, shape: r.shape }, badge, labelBox };
       });
       l.item = { kind: "steps", id: l.id, state, current: l.steps.current, completed: l.steps.completed, steps };

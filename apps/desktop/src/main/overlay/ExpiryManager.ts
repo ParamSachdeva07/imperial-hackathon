@@ -1,6 +1,5 @@
 /**
  * ExpiryManager (spec §5.5). Decides when annotations expire; does not render or emit events.
- * STUB (Phase 0): implemented by the logic track.
  *
  * Rules:
  *  - "next_turn" (the default when `expires` is undefined): expires on onTurnStart().

@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OverlayControl } from "@pointy/shared/overlay";
-import { DEV_SERVER_FILE, startDevServer, type DevServer } from "./devServer";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { DevServer } from "./devServer";
+
+// Never touch a running dev session's ~/.pointy/dev-server.json.
+process.env.POINTY_DEV_FILE = join(mkdtempSync(join(tmpdir(), "pointy-devserver-")), "dev-server.json");
+const { DEV_SERVER_FILE, startDevServer } = await import("./devServer");
 
 describe("devServer", () => {
   let server: DevServer;

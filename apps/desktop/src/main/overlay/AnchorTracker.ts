@@ -1,6 +1,5 @@
 /**
  * AnchorTracker (spec §5.4). Keeps element-anchored annotations attached to their elements.
- * STUB (Phase 0): implemented by the logic track.
  *
  *  - Every `intervalMs` (default 300) while at least one anchor is tracked, and immediately when
  *    BoundsProvider.onChange fires, re-resolve every tracked element id (each distinct id once per

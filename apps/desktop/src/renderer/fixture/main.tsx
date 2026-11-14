@@ -110,7 +110,7 @@ function App() {
             </div>
           ))}
         </section>
-        <section className="reader">
+        <section className="reader" data-scroll>
           <h1 data-element-id="fixture.emailSubject">{email.subject}</h1>
           <p data-element-id="fixture.emailSender" className="sender">From: {email.from}</p>
           <p data-element-id="fixture.emailBody">

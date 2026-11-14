@@ -16,6 +16,8 @@ export interface HarnessContext {
   listElements(): { id: string; rect: { x: number; y: number; width: number; height: number } }[];
   getDisplays(): DisplayInfo[];
   primaryDisplayId(): string;
+  /** imagePrompts with pre-generated images (instant, offline). */
+  pregeneratedImagePrompts(): string[];
 }
 
 export function buildInstructions(ctx: HarnessContext): string {
@@ -52,7 +54,7 @@ export async function mintClientSecret(apiKey: string, ctx: HarnessContext): Pro
           input: { transcription: { model: "gpt-4o-transcribe" } },
           output: { voice: "marin" },
         },
-        tools: exportToolDefinitions(),
+        tools: exportToolDefinitions({ pregeneratedImagePrompts: ctx.pregeneratedImagePrompts() }),
         tool_choice: "auto",
       },
     }),

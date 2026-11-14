@@ -1,6 +1,5 @@
 /**
  * OverlayManager (spec §5.2): annotation state, visibility rules and history. No rendering.
- * STUB (Phase 0): implemented by the logic track.
  *
  * Rules applied when an annotation becomes visible (add without pending, or reveal):
  *  1. A new `highlight` replaces every visible/pending highlight → dismissed reason "replaced".

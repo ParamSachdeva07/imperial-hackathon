@@ -63,3 +63,12 @@ describe("parseToolInput", () => {
     expect(ok.success && ok.data).toMatchObject({ style: "ring", tone: "info" });
   });
 });
+
+describe("pre-generated image prompts", () => {
+  it("are listed in show_explainer's description only when given", () => {
+    const plain = exportToolDefinitions().find((t) => t.name === "show_explainer")!;
+    expect(plain.description).not.toContain("ready instantly");
+    const withImages = exportToolDefinitions({ pregeneratedImagePrompts: ["a red umbrella"] }).find((t) => t.name === "show_explainer")!;
+    expect(withImages.description).toContain('"a red umbrella"');
+  });
+});
