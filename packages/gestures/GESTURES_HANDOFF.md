@@ -189,6 +189,7 @@ Do not reimplement gesture logic in `apps/desktop`: subscribe to events. If beha
 - **macOS untested** (developed and tested on Windows). Chris's overlay currently throws on non-macOS, so the full app only runs on Mac. The standalone launcher runs on both.
 - Single display (primary) in v1. `displayId` is in every event, so multi-display can be added without changing the contract.
 - The camera area mapped to the screen (`activeZone`, default x 15–85 %, y 20–70 % of the image) assumes a laptop webcam above the screen; other setups may need calibration (`computeActiveZone`, playground flow) or `POINTY_GESTURES_ZONE` in the launcher. An onboarding calibration step would help in the app.
+- Latency/precision: each camera frame is processed as soon as it arrives (4 ms polling), the cursor uses a One Euro filter plus an 8 DIP deadband with slow easing (`cursorDeadband`), and the launcher logs fps, processing time per frame and the real camera mode. `startVisionRenderer` takes `cameraFps` (default 30) and `numHands` (default 2) to trade latency/CPU.
 - Thresholds are tuned for one young user. Expect to raise `dwellMs`, `clickDwellMs` and `wakeHoldMs` after testing with older adults.
 - Circle detection could be made more forgiving (`closeFrac`, `minLoopLength`) at the cost of more accidental regions.
 - No "end session" gesture: closing is the controller's job (stop button / inactivity timeout).

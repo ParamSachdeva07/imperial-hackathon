@@ -113,7 +113,7 @@ POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # debug window: cam
 npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
 ```
 
-Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
+Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen), `POINTY_GESTURES_CAMERA_FPS=60` (ask the camera for 60 fps: less latency if it supports it; the log shows what it actually delivers), `POINTY_GESTURES_HANDS=1` (track one hand only: cheaper), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
 
 Notes:
 - Bundle `nut-js` as external (`rollupOptions.external`): it ships a native addon.

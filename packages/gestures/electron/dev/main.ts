@@ -57,6 +57,10 @@ function loadVisionPage(win: BrowserWindow): Promise<void> {
   const params = new URLSearchParams();
   if (selfTest) params.set("selftest", "1");
   if (env("POINTY_GESTURES_SHOW") === "1") params.set("show", "1");
+  const cameraFps = Number(env("POINTY_GESTURES_CAMERA_FPS"));
+  if (cameraFps >= 5 && cameraFps <= 120) params.set("cameraFps", String(cameraFps));
+  const hands = env("POINTY_GESTURES_HANDS");
+  if (hands === "1" || hands === "2") params.set("hands", hands);
   return loadPage(win, "vision", params.size ? `?${params.toString()}` : "");
 }
 
@@ -76,7 +80,16 @@ async function main(): Promise<void> {
   // Subscribe right away: the camera is already running, a wake must not be missed.
   let lastStatus = "";
   service.onStatus((s) => {
-    const line = s.type === "running" ? `camera running (${s.fps} fps)` : s.type === "error" ? `ERROR: ${s.message}` : s.type;
+    if (s.type === "running") {
+      // Logged on change of the rounded figures only, to keep the terminal readable.
+      const cam = s.camera ? `, camera ${s.camera.width}×${s.camera.height} @ ${s.camera.frameRate} fps` : "";
+      const line = `camera running (${s.fps} fps, ${s.procMs ?? "?"} ms per frame${cam})`;
+      const key = `${Math.round(s.fps / 5)}|${Math.round((s.procMs ?? 0) / 5)}|${cam}`;
+      if (key !== lastStatus) log(line);
+      lastStatus = key;
+      return;
+    }
+    const line = s.type === "error" ? `ERROR: ${s.message}` : s.type;
     if (line !== lastStatus) log(line);
     lastStatus = line;
   });

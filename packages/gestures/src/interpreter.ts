@@ -7,6 +7,8 @@ import { at } from "./util";
 
 const WRIST = 0;
 const INDEX_TIP = 8;
+/** Time constant of the slow easing inside the cursor deadband. */
+const CURSOR_SETTLE_MS = 400;
 const MIDDLE_MCP = 9; // palm centre, used for the scroll grab
 const MIDDLE_TIP = 12;
 
@@ -270,7 +272,7 @@ export class GestureInterpreter {
       } else {
       m.lastRawAnchor = this.decayOffset(m.offset, m.lastRawAnchor, raw);
       const [sx, sy] = this.clampToDisplay([raw[0] + m.offset[0], raw[1] + m.offset[1]]);
-      m.pos = m.filter.filter(sx, sy, t / 1000);
+      m.pos = this.follow(isNew ? null : m.pos, m.filter.filter(sx, sy, t / 1000), t - m.lastSeen);
       m.lastSeen = t;
       m.hist.push({ t, x: m.pos[0], y: m.pos[1] });
       while (m.hist.length > 1 && at(m.hist, 0).t < t - 1000) m.hist.shift();
@@ -405,6 +407,22 @@ export class GestureInterpreter {
   private notePalmGone(st: HandState, t: number): void {
     if (st.palmGoneSince === null) st.palmGoneSince = t;
     if (t - st.palmGoneSince >= this.cfg.wakeRearmMs) st.wakeArmed = true;
+  }
+
+  /**
+   * Deadband ("string"): stay put until the target is more than cursorDeadband away, then trail it.
+   * Inside the band the cursor eases slowly onto the target (no bias at rest, no visible jitter).
+   */
+  private follow(prev: Vec2 | null, target: Vec2, dtMs: number): Vec2 {
+    const r = this.cfg.cursorDeadband;
+    if (!prev || r <= 0) return target;
+    const dx = target[0] - prev[0];
+    const dy = target[1] - prev[1];
+    const d = Math.hypot(dx, dy);
+    // Trail by r, then ease the remaining gap (otherwise the cursor would stay exactly r short).
+    const pull = d > r ? (d - r) / d : 0;
+    const k = pull + (1 - pull) * Math.min(1, Math.max(0, dtMs) / CURSOR_SETTLE_MS);
+    return [prev[0] + dx * k, prev[1] + dy * k];
   }
 
   private newFilter(): OneEuroFilter2D {
@@ -576,7 +594,7 @@ export class GestureInterpreter {
     const raw = this.anchor(hand, c.drawPose);
     p.lastRawAnchor = this.decayOffset(p.offset, p.lastRawAnchor, raw);
     const [sx, sy] = this.clampToDisplay([raw[0] + p.offset[0], raw[1] + p.offset[1]]);
-    const [x, y] = p.filter.filter(sx, sy, t / 1000);
+    const [x, y] = this.follow(p.lastSeen === 0 ? null : p.pos, p.filter.filter(sx, sy, t / 1000), t - p.lastSeen);
     p.pos = [x, y];
     p.lastSeen = t;
     events.push({ type: "cursor_moved", hand: p.hand, x: round1(x), y: round1(y), displayId, t });

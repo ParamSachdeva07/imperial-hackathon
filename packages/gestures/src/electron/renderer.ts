@@ -20,8 +20,16 @@ export interface VisionRendererOptions {
   modelPath: string;
   /** Used if modelPath can't be fetched (dev convenience; bundle the model for real builds). */
   fallbackModelUrl?: string;
-  /** Detection rate. Timers (not requestAnimationFrame) drive the loop: hidden windows don't paint. */
+  /**
+   * Upper bound on frames processed per second (default 60). Every new camera frame is picked up
+   * within a few ms: a fast timer polls for it (timers, not requestAnimationFrame: hidden windows
+   * don't paint).
+   */
   fps?: number;
+  /** Frame rate asked of the camera (default 30). Higher = less latency if the camera supports it. */
+  cameraFps?: number;
+  /** Hands tracked at once (default 2). 1 is cheaper: MediaPipe skips palm detection while tracking. */
+  numHands?: number;
   /** Replace camera + MediaPipe, e.g. with synthetic frames for a self-test. */
   source?: FrameSource;
   /** Element to show the camera preview in (only visible if the window is shown for debugging). */
@@ -48,9 +56,15 @@ async function firstReachable(urls: string[]): Promise<string> {
 }
 
 /** Camera + MediaPipe frame source. */
-async function cameraSource(opts: VisionRendererOptions): Promise<FrameSource> {
+type CameraInfo = { width: number; height: number; frameRate: number };
+
+async function cameraSource(opts: VisionRendererOptions, onInfo: (c: CameraInfo) => void): Promise<FrameSource> {
   const { HandDetector } = await import("../detector");
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: opts.cameraFps ?? 30 } },
+  });
+  const settings = stream.getVideoTracks()[0]?.getSettings();
+  if (settings) onInfo({ width: settings.width ?? 0, height: settings.height ?? 0, frameRate: Math.round(settings.frameRate ?? 0) });
   const video = document.createElement("video");
   video.muted = true;
   video.playsInline = true;
@@ -67,12 +81,13 @@ async function cameraSource(opts: VisionRendererOptions): Promise<FrameSource> {
   }
   await video.play();
 
+  const numHands = opts.numHands ?? 2;
   const modelPath = await firstReachable([opts.modelPath, opts.fallbackModelUrl ?? DEFAULT_MODEL_URL]);
   let detector;
   try {
-    detector = await HandDetector.create({ wasmPath: opts.wasmPath, modelPath, delegate: "GPU" });
+    detector = await HandDetector.create({ wasmPath: opts.wasmPath, modelPath, delegate: "GPU", numHands });
   } catch {
-    detector = await HandDetector.create({ wasmPath: opts.wasmPath, modelPath, delegate: "CPU" });
+    detector = await HandDetector.create({ wasmPath: opts.wasmPath, modelPath, delegate: "CPU", numHands });
   }
 
   let lastVideoTime = -1;
@@ -118,38 +133,55 @@ export async function startVisionRenderer(opts: VisionRendererOptions): Promise<
   api.ready();
 
   let source: FrameSource;
+  let camera: CameraInfo | undefined;
   try {
-    source = opts.source ?? (await cameraSource(opts));
+    source = opts.source ?? (await cameraSource(opts, (c) => (camera = c)));
   } catch (err) {
     api.status({ type: "error", message: err instanceof Error ? err.message : String(err) });
     return;
   }
 
-  const interval = 1000 / (opts.fps ?? 30);
+  // Poll often and process each new camera frame as soon as it exists. A 33 ms timer would add
+  // ~16 ms of waiting on average (and sometimes skip a frame) on top of the camera's own delay.
+  const POLL_MS = 4;
+  const minInterval = (1000 / (opts.fps ?? 60)) * 0.8;
+  let lastProcessed = -Infinity;
   let frames = 0;
   let hands = 0;
+  let procTotal = 0;
   let windowStart = performance.now();
 
   const tick = () => {
     const t = performance.now();
-    try {
-      const obs = source(t);
-      if (obs && interp && display) {
-        frames++;
-        hands = obs.hands.length;
-        const events = interp.process(obs);
-        api.emit(events);
-        opts.onFrame?.(obs, events, display);
+    if (t - lastProcessed >= minInterval) {
+      try {
+        const obs = source(t);
+        if (obs && interp && display) {
+          lastProcessed = t;
+          frames++;
+          hands = obs.hands.length;
+          const events = interp.process(obs);
+          procTotal += performance.now() - t;
+          api.emit(events);
+          opts.onFrame?.(obs, events, display);
+        }
+      } catch (err) {
+        api.status({ type: "error", message: err instanceof Error ? err.message : String(err) });
       }
-    } catch (err) {
-      api.status({ type: "error", message: err instanceof Error ? err.message : String(err) });
     }
     if (t - windowStart >= 1000) {
-      api.status({ type: "running", fps: Math.round((frames * 1000) / (t - windowStart)), hands });
+      api.status({
+        type: "running",
+        fps: Math.round((frames * 1000) / (t - windowStart)),
+        hands,
+        procMs: frames ? Math.round(procTotal / frames) : 0,
+        ...(camera ? { camera } : {}),
+      });
       frames = 0;
+      procTotal = 0;
       windowStart = t;
     }
-    setTimeout(tick, Math.max(0, interval - (performance.now() - t)));
+    setTimeout(tick, POLL_MS);
   };
   tick();
 }

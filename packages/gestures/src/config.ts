@@ -53,6 +53,12 @@ export interface GestureConfig {
   oneEuroMinCutoff: number;
   oneEuroBeta: number;
   oneEuroDCutoff: number;
+  /**
+   * Cursor "string" (DIP): the mouse and the drawing cursor only move once the filtered finger is
+   * more than this far from them, then follow it. Removes the residual tremor at rest (precise aim,
+   * steady dwell) so the filter itself can be lighter (less lag). 0 = off.
+   */
+  cursorDeadband: number;
 
   /* Hold / selection (flows 2 and 3) */
   /** Window used to measure cursor speed. */
@@ -137,9 +143,12 @@ export const DEFAULT_CONFIG: GestureConfig = {
   wakeUprightMin: 0.08,
   wakeMaxMotion: 0.04,
 
+  // Simulated against the previous 1.0 / 0.01 / 1.0 without deadband: a bit less lag, ~3-5x less
+  // jitter at rest, dwell more reliable when tracking is noisy, no bias once still.
   oneEuroMinCutoff: 1.0,
-  oneEuroBeta: 0.01,
-  oneEuroDCutoff: 1.0,
+  oneEuroBeta: 0.02,
+  oneEuroDCutoff: 2.0,
+  cursorDeadband: 8,
 
   speedWindowMs: 120,
   dwellSpeed: 60,

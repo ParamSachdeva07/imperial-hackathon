@@ -32,7 +32,16 @@ export type GestureCommand =
 
 export type VisionStatus =
   | { type: "starting" }
-  | { type: "running"; fps: number; hands: number }
+  | {
+      type: "running";
+      /** Frames processed during the last second. */
+      fps: number;
+      hands: number;
+      /** Average time per frame spent in hand detection + interpretation (ms). */
+      procMs?: number;
+      /** What the camera actually delivers (it may ignore the requested frame rate). */
+      camera?: { width: number; height: number; frameRate: number };
+    }
   | { type: "error"; message: string };
 
 // Record<…, true> makes the compiler flag any event type missing from this list.
