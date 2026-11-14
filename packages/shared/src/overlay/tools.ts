@@ -55,7 +55,7 @@ export const TOOLS = {
   show_steps: {
     name: "show_steps",
     description:
-      "Show a short numbered path (max 5) across real on-screen controls, for multi-step tasks. Only the current step is emphasised.",
+      "Show a short numbered path (max 5) across real on-screen controls, for multi-step tasks. Only the current step is emphasised. The guide stays across turns until every step is done or you call `clear` (unless you pass `expires`).",
     input: ShowStepsInput,
     tier: "mvp",
     audience: "model",

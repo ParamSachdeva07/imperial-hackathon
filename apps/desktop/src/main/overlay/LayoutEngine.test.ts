@@ -141,6 +141,16 @@ describe("placeBeside: shrink and corner fallbacks", () => {
     expect(res.rect).toEqual(r(456, 24, 520, 340));
   });
 
+  it("never picks a corner covering the target when a target-free corner exists", () => {
+    // Target fills the left half; the avatar avoid rect fills the right half, so no side fits and
+    // every corner either covers the target (left) or the avatar (right). Covering the avatar wins:
+    // never cover the thing being explained.
+    const half = r(0, 0, 500, 800);
+    const res = placeBeside({ target: half, size: { width: 250, height: 200 }, workArea: wa, allowShrink: false, avoid: [r(520, 0, 480, 800)] });
+    expect(res.placement).toBe("corner");
+    expect(res.rect).toEqual(r(726, 24, 250, 200));
+  });
+
   it("insets corners by the gap", () => {
     const res = placeBeside({
       target: r(0, 0, 1000, 800),

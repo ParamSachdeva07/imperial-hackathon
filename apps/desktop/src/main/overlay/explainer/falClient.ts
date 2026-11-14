@@ -14,7 +14,7 @@
  * `file` is relative to assetsDir. Entries match by exact trimmed prompt + styleId ("default" when
  * styleId is omitted).
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 export type ImageResult =
@@ -54,7 +54,8 @@ class TimeoutError extends Error {}
 export class FalClient implements ImageSource {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
-  private manifest: Promise<ManifestEntry[]> | null = null;
+  /** Parsed manifest, keyed by its mtime so running `npm run pregen` while the app runs takes effect. */
+  private manifest: { mtimeMs: number; entries: Promise<ManifestEntry[]> } | null = null;
 
   constructor(private readonly opts: FalClientOptions) {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -76,23 +77,37 @@ export class FalClient implements ImageSource {
     }
   }
 
-  private loadManifest(): Promise<ManifestEntry[]> {
-    this.manifest ??= readFile(path.join(this.opts.assetsDir, "manifest.json"), "utf8")
-      .then((text) => {
-        const parsed: unknown = JSON.parse(text);
-        const list = (parsed as { entries?: unknown }).entries;
-        if (!Array.isArray(list)) return [];
-        return list.filter(
-          (e): e is ManifestEntry =>
-            typeof e === "object" &&
-            e !== null &&
-            typeof (e as ManifestEntry).prompt === "string" &&
-            typeof (e as ManifestEntry).styleId === "string" &&
-            typeof (e as ManifestEntry).file === "string",
-        );
-      })
-      .catch(() => []);
-    return this.manifest;
+  private async loadManifest(): Promise<ManifestEntry[]> {
+    const file = path.join(this.opts.assetsDir, "manifest.json");
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(file)).mtimeMs;
+    } catch {
+      this.manifest = null; // missing now; re-check next time (never memoise a failure)
+      return [];
+    }
+    if (this.manifest?.mtimeMs !== mtimeMs) {
+      const entries = readFile(file, "utf8")
+        .then((text) => {
+          const parsed: unknown = JSON.parse(text);
+          const list = (parsed as { entries?: unknown }).entries;
+          if (!Array.isArray(list)) return [];
+          return list.filter(
+            (e): e is ManifestEntry =>
+              typeof e === "object" &&
+              e !== null &&
+              typeof (e as ManifestEntry).prompt === "string" &&
+              typeof (e as ManifestEntry).styleId === "string" &&
+              typeof (e as ManifestEntry).file === "string",
+          );
+        })
+        .catch(() => {
+          this.manifest = null;
+          return [] as ManifestEntry[];
+        });
+      this.manifest = { mtimeMs, entries };
+    }
+    return this.manifest?.entries ?? [];
   }
 
   private async fromAssets(prompt: string, styleId: string): Promise<string | null> {

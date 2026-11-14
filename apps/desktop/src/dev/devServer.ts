@@ -37,7 +37,7 @@ export interface DevServerDeps {
   extraRoutes?: Record<string, (body: unknown) => Promise<unknown>>;
 }
 
-const ToolBody = z.object({ name: z.string(), input: z.unknown() });
+const ToolBody = z.object({ name: z.string(), input: z.unknown(), caller: z.enum(["user", "model", "controller"]).optional() });
 const ControlBody = z.discriminatedUnion("op", [
   z.object({ op: z.literal("turnStart"), arg: z.string().min(1) }),
   z.object({ op: z.literal("contextChange") }),
@@ -102,7 +102,7 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
     switch (url.pathname) {
       case "/tool": {
         const b = ToolBody.parse(body);
-        return send(res, 200, { requestedAt: Date.now(), result: await deps.control.handleTool(b.name, b.input) });
+        return send(res, 200, { requestedAt: Date.now(), result: await deps.control.handleTool(b.name, b.input, b.caller ? { caller: b.caller } : {}) });
       }
       case "/control": {
         const b = ControlBody.parse(body);

@@ -36,7 +36,12 @@ export interface AvoidRectsProvider {
 
 /** Calls the controller makes into the overlay. */
 export interface OverlayControl {
-  handleTool(name: string, input: unknown): Promise<ToolResult>;
+  /**
+   * Run a tool call. `opts.caller` (additive, optional; default "model") says who issued it, and is
+   * reported as `by` on the resulting `overlay.dismissed` events (e.g. the controller's
+   * `clear("all")` on stop/cancel).
+   */
+  handleTool(name: string, input: unknown, opts?: { caller?: "user" | "model" | "controller" }): Promise<ToolResult>;
   onTurnStart(turnId: string): void;
   onContextChange(): void;
   onTargetSelected(elementId: string): void;

@@ -34,7 +34,7 @@ import {
 } from "@pointy/shared/overlay";
 import { AnchorTracker } from "./AnchorTracker";
 import { realClock, type Clock, type TimerHandle } from "./clock";
-import { findDisplay } from "./coords";
+import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, type ExpireCause } from "./ExpiryManager";
 import { ExplainerService, type ExplainerState } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
@@ -62,7 +62,8 @@ export interface OverlayServiceDeps {
   hideDuringCapture?: boolean;
 }
 
-type Slot = "target" | "dragTo" | "anchor" | `step:${number}`;
+/** Placement slots + "region" (anatomy crop region: avoided by the card, never required). */
+type Slot = "target" | "dragTo" | "anchor" | "region" | `step:${number}`;
 
 /** Service-side state for one annotation. */
 interface Live {
@@ -84,6 +85,15 @@ interface Live {
 }
 
 const EXIT_MARGIN_MS = 50;
+
+type Caller = "user" | "model" | "controller";
+export interface ToolCallOptions {
+  caller?: Caller;
+}
+
+/** Targets that position the annotation (the anatomy crop region doesn't). */
+const placementTargets = (slots: Map<Slot, Target>): Target[] =>
+  [...slots].filter(([slot]) => slot !== "region").map(([, t]) => t);
 
 const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResult> = {}): ToolResult => ({
   ok: true,
@@ -137,12 +147,16 @@ export class OverlayService implements OverlayControl {
 
   // ---------------------------------------------------------------- OverlayControl
 
-  async handleTool(name: string, input: unknown): Promise<ToolResult> {
+  /**
+   * @param opts.caller who issued the call (default "model"): reported as `by` on
+   *   overlay.dismissed for `clear` (e.g. the controller's clear("all") on stop/cancel).
+   */
+  async handleTool(name: string, input: unknown, opts: ToolCallOptions = {}): Promise<ToolResult> {
     const parsed = parseToolInput(name, input);
     if (!parsed.success) return { ok: false, visible: false, reason: "invalid_input" };
     switch (parsed.name) {
       case "clear":
-        return this.clear((parsed.data as { overlayId: string }).overlayId);
+        return this.clear((parsed.data as { overlayId: string }).overlayId, opts.caller ?? "model");
       case "advance_step":
         return this.advance((parsed.data as { stepsId: string }).stepsId);
       case "highlight":
@@ -265,7 +279,7 @@ export class OverlayService implements OverlayControl {
       expires: this.expiryFor(toolName, input),
       // Step guides advance on selection instead of expiring on it.
       elementIds: toolName === "show_steps" ? [] : [...elements.keys()],
-      coordinateOnly: [...slots.values()].every(isCoordinateOnly),
+      coordinateOnly: placementTargets(slots).length > 0 && placementTargets(slots).every(isCoordinateOnly),
     });
     if (elements.size) {
       const initial = new Map<string, ElementBounds>();
@@ -297,6 +311,7 @@ export class OverlayService implements OverlayControl {
     } else {
       const e = input as ShowExplainerInput;
       if (e.anchor) slots.set("anchor", e.anchor);
+      if (e.spec.kind === "anatomy") slots.set("region", e.spec.region);
     }
     return slots;
   }
@@ -322,14 +337,14 @@ export class OverlayService implements OverlayControl {
 
   // ---------------------------------------------------------------- clear / steps
 
-  private clear(overlayId: string): ToolResult {
+  private clear(overlayId: string, by: Caller): ToolResult {
     if (overlayId === "all") {
-      for (const l of [...this.live.values()]) if (!l.ended) this.dismiss(l.id, "model", "cleared");
+      for (const l of [...this.live.values()]) if (!l.ended) this.dismiss(l.id, by, "cleared");
       return { ok: true, visible: false };
     }
     const l = this.live.get(overlayId);
     if (!l || l.ended) return { ok: false, visible: false, reason: "unknown_overlay" };
-    this.dismiss(overlayId, "model", "cleared");
+    this.dismiss(overlayId, by, "cleared");
     return { ok: true, overlayId, visible: false };
   }
 
@@ -417,8 +432,12 @@ export class OverlayService implements OverlayControl {
   private handleAnchorMoved(id: string, elementId: string, bounds: ElementBounds): void {
     const l = this.live.get(id);
     if (!l || l.ended) return;
+    // Same rules as TargetResolver: the display is the one containing the element; an element
+    // moved fully off every display counts as lost.
+    const display = displayForRect(bounds.rect, this.displays());
+    if (!display) return this.handleAnchorLost(id, elementId);
     for (const slot of l.elements.get(elementId) ?? []) {
-      l.resolved.set(slot, { bounds: bounds.rect, displayId: bounds.displayId, shape: { kind: "rect" }, elementId });
+      l.resolved.set(slot, { bounds: bounds.rect, displayId: display.id, shape: { kind: "rect" }, elementId });
     }
     this.manager.update(id, { resolvedBounds: this.primaryBounds(l) ?? null, displayId: this.primaryResolved(l)?.displayId ?? null });
     this.layout(l);
@@ -621,7 +640,10 @@ export class OverlayService implements OverlayControl {
       if (prev && l.ended) {
         placement = { rect: prev.card, scale: prev.scale, connector: prev.connector };
       } else if (anchor) {
-        const res = placeBeside({ target: anchor.bounds, size: designSize, workArea: display.workArea, avoid });
+        // Never cover the thing being explained: an anatomy card also avoids its crop region.
+        const region = l.resolved.get("region");
+        const cardAvoid = region ? [...avoid, region.bounds] : avoid;
+        const res = placeBeside({ target: anchor.bounds, size: designSize, workArea: display.workArea, avoid: cardAvoid });
         placement = { rect: res.rect, scale: res.scale, connector: res.connector };
       } else {
         const res = placeCentredRight(designSize, display.workArea, avoid);
@@ -655,6 +677,9 @@ export class OverlayService implements OverlayControl {
       if (!l?.item) continue;
       items.push(l.item);
     }
+    // Spotlight dims render underneath everything else, so pointers, labels and cards stay bright.
+    const isSpotlight = (i: RenderItem) => i.kind === "highlight" && i.style === "spotlight";
+    items.sort((a, b) => Number(isSpotlight(b)) - Number(isSpotlight(a)));
     const reduceMotion = this.deps.reduceMotion?.() ?? theme.reduceMotion;
     this.deps.sink.publish(items, { reduceMotion });
   }

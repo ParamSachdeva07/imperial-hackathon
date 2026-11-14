@@ -165,8 +165,10 @@ export class OverlayWindowManager implements SceneSink {
       this.opts.platform.showWithoutFocus(win);
       win.setBounds(d.bounds);
     });
+    // A crashed overlay renderer is reloaded; the scene is resent on its next `overlay:ready`.
     win.webContents.on("render-process-gone", () => {
       entry.ready = false;
+      if (!win.isDestroyed()) void this.opts.loadPage(win);
     });
     void this.opts.loadPage(win);
     return entry;

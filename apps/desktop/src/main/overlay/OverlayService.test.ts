@@ -331,4 +331,112 @@ describe("OverlayService", () => {
     expect(await svc.withOverlayHidden(async () => 7)).toBe(7);
     expect(sink.hiddenCalls).toBe(1);
   });
+
+  describe("review round 1 regressions", () => {
+    it("an explainer without an anchor survives context changes", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        title: "Compare",
+        spec: { kind: "compare", left: { title: "A", points: ["x"] }, right: { title: "B", points: ["y"] } },
+      });
+      svc.onContextChange();
+      expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+      expect(types()).not.toContain("overlay.expired");
+    });
+
+    it("an element moved onto another display is laid out on that display", async () => {
+      const r = await svc.handleTool("highlight", { target: el("send"), label: "Here" });
+      bounds.set("send", { rect: rect(-1800, 300), displayId: "1" }); // provider reports the wrong display
+      bounds.fireChange();
+      await flushPromises();
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "highlight") throw new Error();
+      expect(item.target.bounds.x).toBe(-1800);
+      expect(item.label!.rect.x).toBeLessThan(0); // label stays on the left display
+      expect(item.label!.rect.x).toBeGreaterThanOrEqual(LEFT.workArea.x);
+    });
+
+    it("an element moved off every display fades out with target_lost", async () => {
+      const r = await svc.handleTool("highlight", { target: el("send") });
+      bounds.set("send", { rect: rect(9000, 9000), displayId: "1" });
+      bounds.fireChange();
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+      expect(sink.byId(r.overlayId!)?.state).toBe("exiting");
+    });
+
+    it("an anatomy card never covers the region it explains", async () => {
+      bounds.set("toolbar", { rect: rect(100, 300, 1200, 60), displayId: "1" });
+      const r = await svc.handleTool("show_explainer", {
+        anchor: el("attach"),
+        title: "These buttons",
+        spec: { kind: "anatomy", region: el("toolbar"), callouts: [{ target: el("attach"), label: "Attach" }] },
+      });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "explainer") throw new Error();
+      const c = item.card;
+      const overlapsToolbar = c.x < 1300 && c.x + c.width > 100 && c.y < 360 && c.y + c.height > 300;
+      expect(overlapsToolbar).toBe(false);
+    });
+
+    it("spotlights render underneath other annotations", async () => {
+      const p = await svc.handleTool("point_at", { target: el("attach") });
+      const h = await svc.handleTool("highlight", { target: el("send"), style: "spotlight" });
+      expect(sink.items.map((i) => i.id)).toEqual([h.overlayId, p.overlayId]);
+    });
+
+    it("clear reports who cleared", async () => {
+      const a = await svc.handleTool("highlight", { target: el("send") });
+      await svc.handleTool("clear", { overlayId: "all" }, { caller: "controller" });
+      expect(events).toContainEqual({ type: "overlay.dismissed", overlayId: a.overlayId, by: "controller", reason: "cleared" });
+    });
+
+    it("loads compare images per side", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        title: "Compare",
+        spec: {
+          kind: "compare",
+          left: { title: "Real", points: ["a"], imagePrompt: "a tidy envelope" },
+          right: { title: "Scam", points: ["b"], imagePrompt: "this will fail" },
+        },
+      });
+      clock.advance(50);
+      await flushPromises();
+      expect(events).toContainEqual({ type: "explainer.image_ready", overlayId: r.overlayId, panel: 0 });
+      expect(events).toContainEqual({ type: "explainer.image_failed", overlayId: r.overlayId, panel: 1 });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "explainer" || item.body.kind !== "compare") throw new Error();
+      expect(item.body.left.image?.status).toBe("ready");
+      expect(item.body.right.image?.status).toBe("failed");
+    });
+
+    it("anatomy capture failure shows a fallback and reports image_failed", async () => {
+      const failing = new OverlayService({
+        boundsProvider: bounds,
+        captureProvider: { captureRegion: async () => Promise.reject(new Error("no permission")) },
+        screen,
+        sink,
+        clock,
+      });
+      const evs: OverlayEvent[] = [];
+      failing.onEvent((e) => evs.push(e));
+      const r = await failing.handleTool("show_explainer", {
+        title: "Parts",
+        spec: { kind: "anatomy", region: { kind: "rect", displayId: "1", rect: rect(250, 380, 500, 100) }, callouts: [{ target: el("attach"), label: "Attach" }] },
+      });
+      await flushPromises();
+      expect(evs).toContainEqual({ type: "explainer.image_failed", overlayId: r.overlayId, panel: 0 });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "explainer" || item.body.kind !== "anatomy") throw new Error();
+      expect(item.body.image.status).toBe("failed");
+      failing.dispose();
+    });
+
+    it("a removed display fades out annotations whose coordinates are no longer on screen", async () => {
+      const r = await svc.handleTool("highlight", { target: { kind: "rect", displayId: "2", rect: rect(-1800, 300) }, expires: "manual" });
+      screen.displays = [PRIMARY];
+      screen.change();
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+  });
 });

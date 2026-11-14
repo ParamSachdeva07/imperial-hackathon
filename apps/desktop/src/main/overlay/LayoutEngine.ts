@@ -104,7 +104,13 @@ export function placeBeside(input: LayoutInput): LayoutResult {
   const ranked = corners(scaled(size, scale), workArea, gap)
     .map((rect) => ({ rect, d: distance(center(rect), tc) }))
     .sort((a, b) => b.d - a.d);
-  const best = ranked.find((c) => !overlapsAny(c.rect, avoid)) ?? ranked[0]!;
+  // Prefer a corner clear of both the target and the avoid rects, then one clear of the target
+  // (never cover what's being explained), then one clear of the avoid rects, then the farthest.
+  const best =
+    ranked.find((c) => !intersects(c.rect, target) && !overlapsAny(c.rect, avoid)) ??
+    ranked.find((c) => !intersects(c.rect, target)) ??
+    ranked.find((c) => !overlapsAny(c.rect, avoid)) ??
+    ranked[0]!;
   return { rect: best.rect, placement: "corner", scale, connector: connectorBetween(best.rect, target) };
 }
 

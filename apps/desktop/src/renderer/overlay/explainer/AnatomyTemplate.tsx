@@ -5,7 +5,7 @@ import { ImageSlotView } from "./ImageSlot";
 
 type Body = Extract<ExplainerBody, { kind: "anatomy" }>;
 
-const DOT = 36;
+const DOT = 40;
 
 /** Where a callout's number dot sits inside the image box: top-left corner of its bounds. */
 export function calloutDot(c: AnatomyCallout, aspect: number): { x: number; y: number } {
