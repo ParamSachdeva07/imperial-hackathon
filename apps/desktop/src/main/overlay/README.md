@@ -1,0 +1,77 @@
+# Pointy overlay
+
+The drawing layer from `POINTY_OVERLAY_SPEC.md`: pointers, highlights, step guides and explainer
+cards drawn over the real desktop. The team contract is `packages/shared/src/overlay/schemas.ts`
+(ask before changing it); the interfaces you implement or call are in `interfaces.ts` next to it.
+
+## Wire it in
+
+Full guide, written so another AI agent can follow it: [`POINTY_OVERLAY_INTEGRATION.md`](../../../../../POINTY_OVERLAY_INTEGRATION.md).
+
+```ts
+import { createOverlayControl, exportToolDefinitions } from "./overlay";
+
+const overlay = createOverlayControl({
+  boundsProvider,                 // you: where elements are         (BoundsProvider)
+  captureProvider,                // you: screen crops for anatomy    (ScreenCaptureProvider, rect in GLOBAL DIP)
+  avoidRects: { getAvoidRects: () => [avatarWindow.getBounds()] },   // optional
+  assetsDir: join(appRoot, "assets/explainers"),                     // optional: enables pictures
+});
+
+realtime.registerTools(exportToolDefinitions());   // or packages/shared/generated/overlay-tools.json
+realtime.onToolCall((name, args) => overlay.control.handleTool(name, args));  // → ToolResult for the model
+overlay.control.onEvent((event) => realtime.tell(event));                    // OverlayEvent stream
+// on quit: overlay.dispose()
+```
+
+The build already places the overlay page and preload where `createOverlayControl` expects them.
+
+## Calls the controller makes
+
+| When | Call |
+| --- | --- |
+| a new user turn begins | `onTurnStart(turnId)` |
+| focus changed, scrolled, window moved | `onContextChange()` |
+| the user clicked / gestured at an element | `onTargetSelected(elementId)` |
+| stop / cancel | `handleTool("clear", { overlayId: "all" }, { caller: "controller" })` |
+| before taking your own screenshot | `getOverlayWindowIds()` → exclude them in your ScreenCaptureKit filter, or wrap the capture in `withOverlayHidden(fn)` |
+
+## What `ToolResult` tells the model
+
+| `ok` / `visible` | `reason` | Meaning |
+| --- | --- | --- |
+| true / true | — | Drawn. `overlayId` identifies it; `resolvedBounds` is its target. |
+| true / false | `target_not_found`, `target_offscreen`, `display_not_found` | Couldn't see the target; nothing drawn. |
+| true / true | same reasons, on `show_explainer` | The card is shown centred-right because its anchor wasn't found. |
+| false / false | `invalid_input` | Arguments didn't validate (or a stretch tool that isn't enabled). |
+| false / false | `unknown_overlay` | `clear` / `advance_step` with an id that doesn't exist. |
+| false / false | `cancelled` | The call was overtaken (cleared, new turn, context change) before it could draw. |
+
+## Behaviour
+
+- At most 3 annotations are visible (a step guide counts as one). A new highlight replaces the
+  previous highlight; a new step guide replaces the previous one; otherwise the oldest goes.
+  Leavers fade out and emit `overlay.dismissed` with `reason: "replaced" | "evicted" | "cleared"`.
+- Lifetime defaults to `next_turn`. Multi-turn step guides use `expires: "on_target_selected"`
+  (the model is told so): for a guide that means "until completed". Coordinate targets
+  (`rect` / `point` / `polygon`) always expire on `onContextChange()`.
+- Element targets follow their element (polled every 300 ms and on `BoundsProvider.onChange`).
+  If the element a drawing depends on is missing twice in a row it fades with
+  `overlay.target_lost` (for a step guide: only the *current* step's element counts).
+- Step guides show one step at a time: a ring and "Step i of n · label" on the current control and a
+  faint hint on the next one; the ring glides on as steps are done; "✓ All done" at the end.
+- Explainer cards appear immediately; pictures and anatomy crops arrive later
+  (`explainer.image_ready` / `explainer.image_failed`). Cards keep text at full size: they first
+  try smaller pictures, then a corner with a connector, before shrinking.
+
+## Dev only
+
+- `npm run app` — overlay + fake mail app + dev server. `npm run voice` — plus the GPT Realtime test
+  window (`OPENAI_API_KEY` in `.env`); running it while the app is up opens the window in that app.
+- `npx pointy-draw --help` — every tool from the terminal; `npx pointy-draw fixture` reopens the
+  fake mail app.
+- `npm run e2e` — every CLI command against the fake mail app. `npm run eval:voice` — the real model
+  choosing tools for typed requests, drawn live.
+- `npm run broker` / `npm run pregen` — fal.ai image broker / pre-generate pictures (`FAL_KEY`).
+- `npm run capture:gallery -w @pointy/desktop` — screenshots of every visual state.
+- Env flags are listed at the top of `apps/desktop/src/main/index.ts`.

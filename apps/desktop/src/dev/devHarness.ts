@@ -1,0 +1,110 @@
+/**
+ * DEV-ONLY harness around the overlay: the fake mail app (fixture), the localhost dev server for
+ * `pointy-draw`, the GPT Realtime voice test window, the second-instance hand-off and console logging.
+ * Kept out of the production composition in main/index.ts.
+ */
+import { app, type BrowserWindow } from "electron";
+import { delay } from "@pointy/shared/node/env";
+import { readManifestPrompts } from "../main/overlay/explainer/manifest";
+import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
+import type { OverlayHandle, ScreenSource } from "../main/overlay";
+import { loadRendererPage, PRELOAD_DIR } from "../main/rendererPages";
+import { startDevServer } from "./devServer";
+import { openFixtureWindow } from "./fixtureWindow";
+import { openVoiceWindow } from "./realtime/voiceWindow";
+
+export interface DevHarnessOptions {
+  overlay: OverlayHandle;
+  boundsProvider: MockBoundsProvider;
+  screen: ScreenSource;
+  assetsDir: string;
+  openFixture: boolean;
+  openVoice: boolean;
+}
+
+/**
+ * Renderer errors/warnings in the terminal, with the page they came from. Install at startup,
+ * before any window exists (web-contents-created doesn't fire for windows created earlier).
+ */
+export function installDevLogging(): void {
+  app.on("web-contents-created", (_e, wc) => {
+    wc.on("console-message", (details) => {
+      if (details.level === "error" || details.level === "warning") {
+        const page = wc.getURL().split("/").slice(-2).join("/").split("?")[0];
+        console.log(`[renderer ${details.level}] ${page}: ${details.message}`);
+      }
+    });
+  });
+}
+
+export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
+  const { overlay, boundsProvider, screen } = opts;
+
+  // The fake mail app is the test surface: reopenable (CLI `pointy-draw fixture`, the voice
+  // window's button, and automatically when a voice session starts).
+  let fixtureWindow: BrowserWindow | null = null;
+  const ensureFixture = async (): Promise<void> => {
+    if (fixtureWindow && !fixtureWindow.isDestroyed()) {
+      if (fixtureWindow.isMinimized()) fixtureWindow.restore();
+      fixtureWindow.show();
+    } else {
+      fixtureWindow = openFixtureWindow(boundsProvider, (win) => loadRendererPage(win, "fixture"), PRELOAD_DIR);
+    }
+    // Wait (briefly) until its elements have been reported, so targets resolve right away.
+    for (let i = 0; i < 30 && boundsProvider.listElementIds().length === 0; i++) await delay(100);
+  };
+  if (opts.openFixture) void ensureFixture();
+
+  let voiceWindow: BrowserWindow | null = null;
+  const openVoice = () => {
+    if (voiceWindow && !voiceWindow.isDestroyed()) {
+      voiceWindow.show();
+      voiceWindow.focus();
+      return;
+    }
+    voiceWindow = openVoiceWindow({
+      control: overlay.control,
+      apiKey: process.env.OPENAI_API_KEY,
+      preloadDir: PRELOAD_DIR,
+      loadPage: (win) => loadRendererPage(win, "voice"),
+      ensureFixture,
+      ctx: {
+        listElements: () => boundsProvider.listElementRects(),
+        getDisplays: () => screen.getDisplays(),
+        primaryDisplayId: () => screen.getPrimaryDisplayId(),
+        pregeneratedImagePrompts: () => readManifestPrompts(opts.assetsDir),
+      },
+    });
+    console.log("[pointy] voice test window opened");
+  };
+  if (opts.openVoice) openVoice();
+  // `npm run voice` while Pointy is already running: open the voice window in this instance.
+  app.on("second-instance", (_e, _argv, _cwd, data) => {
+    if ((data as { voice?: boolean } | undefined)?.voice) openVoice();
+  });
+
+  overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
+
+  // A dev-server problem (e.g. port in use) must not stop the overlay or the voice window.
+  const server = await startDevServer({
+    control: overlay.control,
+    debug: overlay.debug,
+    sim: boundsProvider,
+    getDisplays: () => screen.getDisplays(),
+    getPrimaryDisplayId: () => screen.getPrimaryDisplayId(),
+    routes: {
+      "/fixture": async () => {
+        await ensureFixture();
+        return { ok: true, elements: boundsProvider.listElementIds().length };
+      },
+    },
+  }).catch((err: unknown) => {
+    console.error(`[pointy] dev server not started (pointy-draw unavailable): ${String(err)}`);
+    return null;
+  });
+  if (server) {
+    console.log(`[pointy] dev server on 127.0.0.1:${server.port}`);
+    app.on("before-quit", () => void server.close());
+  }
+}
+

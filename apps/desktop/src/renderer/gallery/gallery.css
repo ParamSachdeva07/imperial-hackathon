@@ -1,0 +1,16 @@
+html, body { margin: 0; background: #888; font-family: system-ui, sans-serif; }
+.desktop { position: relative; width: 1280px; height: 800px; overflow: hidden; }
+.desktop-light { background: linear-gradient(135deg, #dbe4f0, #f4efe6); color: #111827; }
+.desktop-dark { background: linear-gradient(135deg, #0b1020, #1b2433); color: #e5e7eb; }
+.menubar { position: absolute; inset: 0 0 auto 0; height: 28px; display: flex; gap: 22px; align-items: center; padding: 0 16px; font-size: 14px; background: rgba(128, 128, 128, 0.25); }
+.fake-window { position: absolute; left: 60px; top: 60px; right: 60px; bottom: 60px; border-radius: 14px; background: #fff; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25); overflow: hidden; }
+.desktop-dark .fake-window { background: #1f2937; }
+.fake-titlebar { height: 36px; background: rgba(128, 128, 128, 0.2); display: flex; gap: 8px; align-items: center; padding: 0 14px; }
+.fake-titlebar i { width: 14px; height: 14px; border-radius: 50%; display: block; }
+.fake-lines { padding: 24px 40px; display: flex; flex-direction: column; gap: 22px; }
+.fake-lines div { height: 14px; border-radius: 7px; background: rgba(128, 128, 128, 0.25); }
+.fake-btn { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: #e5e7eb; color: #111827; border: 2px solid #9ca3af; font-size: 22px; font-weight: 600; }
+.desktop-dark .fake-btn { background: #374151; color: #f3f4f6; border-color: #6b7280; }
+.index a { display: block; padding: 6px 12px; color: #fff; }
+.check-out { position: fixed; left: 0; top: 0; width: 1280px; height: 800px; background: #222; color: #ddd; font: 12px monospace; white-space: pre; overflow: auto; z-index: 9; }
+.check-stage { position: absolute; left: 0; top: 0; width: 1280px; height: 800px; overflow: hidden; }

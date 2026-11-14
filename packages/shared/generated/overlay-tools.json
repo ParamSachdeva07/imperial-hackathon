@@ -1,0 +1,1382 @@
+[
+  {
+    "type": "function",
+    "name": "point_at",
+    "description": "Animate a large pointer onto one thing the user should click or look at. Use when telling the user *what to press next*. Prefer `kind: element` targets.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "element"
+                },
+                "elementId": {
+                  "type": "string"
+                },
+                "snapshotRevision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "elementId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "rect"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "rect": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "rect"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "point"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "point"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "polygon"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "points": {
+                  "minItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "points"
+              ]
+            }
+          ]
+        },
+        "motion": {
+          "default": "tap",
+          "type": "string",
+          "enum": [
+            "tap",
+            "double_tap",
+            "drag_to"
+          ]
+        },
+        "dragTo": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "element"
+                },
+                "elementId": {
+                  "type": "string"
+                },
+                "snapshotRevision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "elementId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "rect"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "rect": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "rect"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "point"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "point"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "polygon"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "points": {
+                  "minItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "points"
+              ]
+            }
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "next_turn",
+                "on_target_selected",
+                "context_change",
+                "manual"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 120000
+                }
+              },
+              "required": [
+                "ms"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "highlight",
+    "description": "Mark something on screen. `spotlight` dims everything else; use it when the user asks where something is. `underline` for text. Use `tone: warning` for anything risky (suspicious links, delete buttons). Only one highlight at a time; a new one replaces the old.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "element"
+                },
+                "elementId": {
+                  "type": "string"
+                },
+                "snapshotRevision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "elementId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "rect"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "rect": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "rect"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "point"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "point"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "polygon"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "points": {
+                  "minItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "points"
+              ]
+            }
+          ]
+        },
+        "style": {
+          "default": "ring",
+          "type": "string",
+          "enum": [
+            "ring",
+            "spotlight",
+            "underline"
+          ]
+        },
+        "tone": {
+          "default": "info",
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "success"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "next_turn",
+                "on_target_selected",
+                "context_change",
+                "manual"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 120000
+                }
+              },
+              "required": [
+                "ms"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "target"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "show_steps",
+    "description": "Show a short numbered path (max 5) across real on-screen controls, for multi-step tasks. Only the current step is emphasised. When the user will do the steps over several turns, pass `expires: 'on_target_selected'`: the guide then stays across turns until its last step is done (or you call `clear`); move it on with `advance_step`.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "steps": {
+          "minItems": 1,
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "element"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "snapshotRevision": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "elementId"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "rect"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "rect": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          },
+                          "width": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "height": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "rect"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "point"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "point": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "point"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "polygon"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "points": {
+                        "minItems": 3,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "points"
+                    ]
+                  }
+                ]
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 40
+              }
+            },
+            "required": [
+              "target",
+              "label"
+            ]
+          }
+        },
+        "startAt": {
+          "default": 0,
+          "type": "integer",
+          "minimum": 0
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "next_turn",
+                "on_target_selected",
+                "context_change",
+                "manual"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 120000
+                }
+              },
+              "required": [
+                "ms"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "steps"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "advance_step",
+    "description": "Move a step guide forward when the user has done the current step.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "stepsId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stepsId"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "show_explainer",
+    "description": "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "element"
+                },
+                "elementId": {
+                  "type": "string"
+                },
+                "snapshotRevision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "elementId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "rect"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "rect": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "rect"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "point"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "point"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "polygon"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "points": {
+                  "minItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "points"
+              ]
+            }
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "next_turn",
+                "on_target_selected",
+                "context_change",
+                "manual"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 120000
+                }
+              },
+              "required": [
+                "ms"
+              ]
+            }
+          ]
+        },
+        "spec": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "concept"
+                },
+                "panels": {
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "caption": {
+                        "type": "string",
+                        "maxLength": 90
+                      },
+                      "imagePrompt": {
+                        "type": "string",
+                        "maxLength": 300
+                      }
+                    },
+                    "required": [
+                      "caption",
+                      "imagePrompt"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "panels"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "sequence"
+                },
+                "steps": {
+                  "minItems": 2,
+                  "maxItems": 5,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "icon": {
+                        "type": "string",
+                        "enum": [
+                          "click",
+                          "type",
+                          "folder",
+                          "file",
+                          "photo",
+                          "email",
+                          "attach",
+                          "send",
+                          "search",
+                          "settings",
+                          "wifi",
+                          "cloud",
+                          "lock",
+                          "warning",
+                          "check",
+                          "trash",
+                          "download",
+                          "printer",
+                          "phone",
+                          "video",
+                          "person"
+                        ]
+                      },
+                      "caption": {
+                        "type": "string",
+                        "maxLength": 60
+                      }
+                    },
+                    "required": [
+                      "icon",
+                      "caption"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "steps"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "compare"
+                },
+                "left": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "maxLength": 30
+                    },
+                    "points": {
+                      "maxItems": 4,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 60
+                      }
+                    },
+                    "imagePrompt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "points"
+                  ]
+                },
+                "right": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "maxLength": 30
+                    },
+                    "points": {
+                      "maxItems": 4,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 60
+                      }
+                    },
+                    "imagePrompt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "points"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "left",
+                "right"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "anatomy"
+                },
+                "region": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "element"
+                        },
+                        "elementId": {
+                          "type": "string"
+                        },
+                        "snapshotRevision": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "elementId"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "rect"
+                        },
+                        "displayId": {
+                          "type": "string"
+                        },
+                        "rect": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            },
+                            "width": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "height": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y",
+                            "width",
+                            "height"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "displayId",
+                        "rect"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "point"
+                        },
+                        "displayId": {
+                          "type": "string"
+                        },
+                        "point": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "displayId",
+                        "point"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "polygon"
+                        },
+                        "displayId": {
+                          "type": "string"
+                        },
+                        "points": {
+                          "minItems": 3,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "x": {
+                                "type": "number"
+                              },
+                              "y": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "x",
+                              "y"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "displayId",
+                        "points"
+                      ]
+                    }
+                  ]
+                },
+                "callouts": {
+                  "minItems": 1,
+                  "maxItems": 6,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "target": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "element"
+                              },
+                              "elementId": {
+                                "type": "string"
+                              },
+                              "snapshotRevision": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "elementId"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "rect"
+                              },
+                              "displayId": {
+                                "type": "string"
+                              },
+                              "rect": {
+                                "type": "object",
+                                "properties": {
+                                  "x": {
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "type": "number"
+                                  },
+                                  "width": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  },
+                                  "height": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "x",
+                                  "y",
+                                  "width",
+                                  "height"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "displayId",
+                              "rect"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "point"
+                              },
+                              "displayId": {
+                                "type": "string"
+                              },
+                              "point": {
+                                "type": "object",
+                                "properties": {
+                                  "x": {
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "x",
+                                  "y"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "displayId",
+                              "point"
+                            ]
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "polygon"
+                              },
+                              "displayId": {
+                                "type": "string"
+                              },
+                              "points": {
+                                "minItems": 3,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "x": {
+                                      "type": "number"
+                                    },
+                                    "y": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "x",
+                                    "y"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "displayId",
+                              "points"
+                            ]
+                          }
+                        ]
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 40
+                      }
+                    },
+                    "required": [
+                      "target",
+                      "label"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "region",
+                "callouts"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "title",
+        "spec"
+      ]
+    }
+  },
+  {
+    "type": "function",
+    "name": "clear",
+    "description": "Remove annotations. Call with `all` when the user says 'got it', 'okay' or changes topic.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "overlayId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "const": "all"
+            }
+          ]
+        }
+      },
+      "required": [
+        "overlayId"
+      ]
+    }
+  }
+]
