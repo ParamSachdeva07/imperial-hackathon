@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+backend/.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.pyc
+test-results/
+.DS_Store
