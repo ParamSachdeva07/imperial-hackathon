@@ -128,7 +128,7 @@ export class ExplainerService {
     const result = this.opts.imageSource
       ? await this.opts.imageSource.getImage(prompt).catch(() => ({ ok: false as const }))
       : ({ ok: false } as const);
-    apply(result.ok ? { status: "ready", src: result.dataUrl } : failed(hint));
+    apply(result.ok ? { status: "ready", src: result.dataUrl, fallbackIcon: nearestIcon(hint) } : failed(hint));
     hooks.onUpdate();
     hooks.onImage(panel, result.ok);
   }

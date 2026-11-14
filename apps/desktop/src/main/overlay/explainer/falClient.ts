@@ -66,6 +66,15 @@ export function promptSimilarity(a: string, b: string): number {
   return inter / (wa.size + wb.size - inter);
 }
 
+/** Image MIME type from magic bytes (PNG, JPEG, WebP, GIF), or null when it isn't an image. */
+export function sniffImageType(b: Uint8Array): string | null {
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 12 && String.fromCharCode(...b.slice(0, 4)) === "RIFF" && String.fromCharCode(...b.slice(8, 12)) === "WEBP") return "image/webp";
+  if (b.length >= 6 && String.fromCharCode(...b.slice(0, 4)) === "GIF8") return "image/gif";
+  return null;
+}
+
 export class FalClient implements ImageSource {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -143,7 +152,9 @@ export class FalClient implements ImageSource {
     if (!mime) return null;
     try {
       const bytes = await readFile(file);
-      return `data:${mime};base64,${bytes.toString("base64")}`;
+      const sniffed = sniffImageType(bytes);
+      if (!sniffed) return null; // corrupt asset: fall through to the broker
+      return `data:${sniffed};base64,${bytes.toString("base64")}`;
     } catch {
       return null; // missing asset file: fall through to the broker
     }
@@ -178,9 +189,11 @@ export class FalClient implements ImageSource {
     if (typeof body.url !== "string") throw new BrokerError();
     const img = await this.fetchImpl(body.url, { signal });
     if (!img.ok) throw new BrokerError();
-    const type = (img.headers.get("content-type") ?? "image/png").split(";")[0]?.trim() ?? "image/png";
-    if (!type.startsWith("image/")) throw new BrokerError();
     const bytes = Buffer.from(await img.arrayBuffer());
+    // Trust the bytes, not the header: anything that isn't a real image becomes image_failed
+    // (fallback icon) instead of a broken picture reported as ready.
+    const type = sniffImageType(bytes);
+    if (!type) throw new BrokerError();
     return `data:${type};base64,${bytes.toString("base64")}`;
   }
 }

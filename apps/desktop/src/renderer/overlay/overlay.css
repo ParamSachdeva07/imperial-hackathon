@@ -34,11 +34,18 @@ body,
   width: 0;
   height: 0;
 }
+/* Opacity TRANSITIONS (not keyframes): an item cleared mid-entrance fades out from wherever it is,
+   never jumping back to full brightness first (no flash). @starting-style gives the fade-in. */
 .item.visible {
-  animation: fade-in var(--enter-ms) var(--easing) both;
+  opacity: 1;
+  transition: opacity var(--enter-ms) var(--easing);
+}
+@starting-style {
+  .item.visible { opacity: 0; }
 }
 .item.exiting {
-  animation: fade-out var(--exit-ms) var(--easing) forwards;
+  opacity: 0;
+  transition: opacity var(--exit-ms) var(--easing);
 }
 @keyframes fade-in {
   from { opacity: 0; }
@@ -250,7 +257,6 @@ body,
   transition: left var(--move-ms) linear, top var(--move-ms) linear;
   animation: card-in var(--enter-ms) var(--easing) both;
 }
-.item.exiting .card-wrap { animation: none; }
 @keyframes card-in {
   from { opacity: 0; transform: scale(var(--card-enter-scale)); }
   to { opacity: 1; transform: scale(1); }
@@ -422,9 +428,11 @@ body,
 .reduce .shimmer { animation: none; background: rgba(255, 255, 255, 0.06); }
 .reduce .card-wrap { animation: fade-in var(--enter-ms) var(--easing) both; }
 .reduce .label-late { animation: fade-in var(--enter-ms) var(--easing) both; }
-.reduce .item.exiting .card-wrap { animation: none; }
 .reduce *,
 .reduce *::before { transition-duration: 0s !important; }
+/* …except the fades themselves: reduce-motion still fades in and out (spec §3). */
+.reduce .item.visible { transition-duration: var(--enter-ms) !important; }
+.reduce .item.exiting { transition-duration: var(--exit-ms) !important; }
 @media (prefers-reduced-motion: reduce) {
   .overlay-root:not(.reduce) .ptr-body { animation: none; }
 }

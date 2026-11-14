@@ -108,10 +108,8 @@ function pointerBodyRect(rest: { x: number; y: number }, angle: number): Rect {
 const hasImages = (spec: ShowExplainerInput["spec"]): boolean =>
   spec.kind === "concept" || spec.kind === "anatomy" || (spec.kind === "compare" && Boolean(spec.left.imagePrompt || spec.right.imagePrompt));
 
-const lastStepElement = (input: ShowStepsInput): string[] => {
-  const last = input.steps[input.steps.length - 1]?.target;
-  return last?.kind === "element" ? [last.elementId] : [];
-};
+const calloutTargets = (input: Live["input"]): Target[] =>
+  "spec" in input && input.spec.kind === "anatomy" ? input.spec.callouts.map((c) => c.target) : [];
 export interface ToolCallOptions {
   caller?: Caller;
 }
@@ -136,6 +134,8 @@ export class OverlayService implements OverlayControl {
   private readonly disposers: (() => void)[] = [];
   /** Bumped by clear("all") and new turns: tool calls still resolving targets are then dropped. */
   private epoch = 0;
+  /** Bumped by new turns: calls still resolving that would expire at this turn are dropped. */
+  private turnEpoch = 0;
   /** Bumped on context change: calls with coordinate targets still resolving are then stale. */
   private contextEpoch = 0;
 
@@ -200,7 +200,7 @@ export class OverlayService implements OverlayControl {
   }
 
   onTurnStart(turnId: string): void {
-    this.epoch += 1;
+    this.turnEpoch += 1;
     this.expiry.onTurnStart(turnId);
     for (const id of this.manager.endTurn()) this.endLive(id);
   }
@@ -268,12 +268,17 @@ export class OverlayService implements OverlayControl {
     const resolved = new Map<Slot, ResolvedTarget | null>();
     const failures = new Map<Slot, ResolveFailureReason>();
     const epoch = this.epoch;
+    const turnEpoch = this.turnEpoch;
     const contextEpoch = this.contextEpoch;
     const results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
     // clear("all") or a new turn arrived while we were resolving: this call is stale.
     if (epoch !== this.epoch) return { ok: false, visible: false, reason: "replaced" };
+    // A turn started mid-resolution: a next_turn annotation would already have expired.
+    if (turnEpoch !== this.turnEpoch && this.expiryFor(toolName, input) === "next_turn") {
+      return { ok: false, visible: false, reason: "replaced" };
+    }
     // A context change mid-resolution makes coordinate targets stale (spec §5.4).
-    if (contextEpoch !== this.contextEpoch && [...slots.values()].some(isCoordinateOnly)) {
+    if (contextEpoch !== this.contextEpoch && [...slots.values(), ...calloutTargets(input)].some(isCoordinateOnly)) {
       return { ok: false, visible: false, reason: "replaced" };
     }
     for (const [slot, r] of results) {
@@ -331,11 +336,12 @@ export class OverlayService implements OverlayControl {
       id,
       expires: this.expiryFor(toolName, input),
       // Step guides advance on selection instead of expiring on it.
-      // A step guide "selected" means its LAST step was selected (earlier selections advance it).
-      elementIds: toolName === "show_steps" ? lastStepElement(input as ShowStepsInput) : [...elements.keys()],
+      // Step guides advance on selection; "on_target_selected" for a guide means it was completed
+      // (see advance()), so no element ids are registered here.
+      elementIds: toolName === "show_steps" ? [] : [...elements.keys()],
       // Any coordinate target goes stale on a context change (spec §5.4), even next to element targets.
-      // (includes an anatomy region: its crop and callouts are a snapshot of that context)
-      coordinateOnly: [...slots.values()].some(isCoordinateOnly),
+      // (includes an anatomy region and callouts: the crop is a snapshot of that context)
+      coordinateOnly: [...slots.values(), ...calloutTargets(input)].some(isCoordinateOnly),
     });
     if (elements.size) {
       const initial = new Map<string, ElementBounds>();
@@ -388,12 +394,9 @@ export class OverlayService implements OverlayControl {
     return false; // explainer: anchor optional (card falls back to centred-right)
   }
 
-  private expiryFor(toolName: Live["toolName"], input: Live["input"]): Expiry {
-    const given = (input as { expires?: Expiry }).expires;
-    if (given) return given;
-    // A step guide spans several turns (advance_step comes in a later turn), so by default it
-    // lasts until it is completed or cleared.
-    return toolName === "show_steps" ? "manual" : DEFAULT_EXPIRY;
+  /** The contract default (spec §4) applies to every tool; multi-turn step guides pass "manual". */
+  private expiryFor(_toolName: Live["toolName"], input: Live["input"]): Expiry {
+    return (input as { expires?: Expiry }).expires ?? DEFAULT_EXPIRY;
   }
 
   // ---------------------------------------------------------------- clear / steps
@@ -548,23 +551,16 @@ export class OverlayService implements OverlayControl {
     }
   }
 
+  /** Displays changed: re-resolve every slot (elements too — their display may be gone or back). */
   private async relayoutAll(): Promise<void> {
-    for (const l of this.live.values()) {
+    for (const l of [...this.live.values()]) {
       if (l.ended) continue;
       for (const [slot, target] of l.slots) {
-        if (target.kind === "element") {
-          // Element bounds may be unchanged while their display went away: re-check the display.
-          const cur = l.resolved.get(slot);
-          if (!cur) continue;
-          const d = displayForRect(cur.bounds, this.displays());
-          l.resolved.set(slot, d ? { ...cur, displayId: d.id } : null);
-          continue;
-        }
         const r = await this.resolver.resolve(target);
         l.resolved.set(slot, r.ok ? r.target : null);
       }
-      const primary = this.primaryResolved(l);
-      if (!primary && l.toolName !== "show_explainer") {
+      if (l.ended) continue;
+      if (this.lostCriticalSlot(l)) {
         this.emit({ type: "overlay.target_lost", overlayId: l.id });
         this.fadeOut(l.id);
         continue;
@@ -572,6 +568,13 @@ export class OverlayService implements OverlayControl {
       this.layout(l);
     }
     this.publish();
+  }
+
+  /** The annotation can't be drawn meaningfully any more (its main target(s) are gone). */
+  private lostCriticalSlot(l: Live): boolean {
+    if (l.steps) return !l.steps.completed && !l.resolved.get(`step:${l.steps.current}`);
+    if (l.toolName === "show_explainer") return false; // falls back to centred-right
+    return [...l.slots.keys()].some((s) => (s === "target" || s === "dragTo") && !l.resolved.get(s));
   }
 
   // ---------------------------------------------------------------- explainer async
@@ -719,7 +722,12 @@ export class OverlayService implements OverlayControl {
         const status = statusOf(l.steps!, idx);
         if (!r) return { index: idx, label: s.label, status, target: null, badge: null, labelBox: null };
         const display = this.displayOf(r);
-        const badge = badgePlacement(r.bounds, display.workArea, theme.stepBadgeSize);
+        // Never cover a neighbouring step's control (adjacent toolbar buttons).
+        const otherTargets = i.steps.flatMap((_, j) => {
+          const o = j === idx ? null : l.resolved.get(`step:${j}`);
+          return o ? [o.bounds] : [];
+        });
+        const badge = badgePlacement(r.bounds, display.workArea, theme.stepBadgeSize, otherTargets);
         const half = theme.stepBadgeSize / 2;
         const badgeRect = { x: badge.x - half, y: badge.y - half, width: theme.stepBadgeSize, height: theme.stepBadgeSize };
         // The current step's label must not cover the guide's other steps either.

@@ -36,8 +36,10 @@ ScreenCaptureKit exclusion filter; `withOverlayHidden(fn)` hides them for the du
 - Max 3 visible annotations (a step set counts as one); a new highlight replaces the previous
   highlight; a new step set replaces the previous one; the oldest non-step annotation is evicted.
   Old ones fade out and emit `overlay.dismissed` with `reason: "replaced" | "evicted"`.
-- Default lifetime is `next_turn`, except step guides, which last until completed or cleared
-  (the user says "done" in a later turn and the model calls `advance_step`).
+- Default lifetime is `next_turn` for every tool (spec §4). Multi-turn step guides use
+  `expires: "on_target_selected"` (the model-facing description says so): for a guide that means
+  "when completed" — it survives turns, shows all ✓ briefly when done, then ends. `manual` guides
+  stay until `clear`.
 - Coordinate targets (`rect`/`point`/`polygon`) always expire on `onContextChange()`.
 - Element targets are re-resolved every 300 ms and on `BoundsProvider.onChange`; two misses in a
   row → fade out + `overlay.target_lost` (for steps: only when the *current* step's element is lost).

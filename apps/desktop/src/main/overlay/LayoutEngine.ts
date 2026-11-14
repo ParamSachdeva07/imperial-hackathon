@@ -253,7 +253,13 @@ function placeFrom(entry: Point, tap: Point, target: Rect, pointerSize: number):
  * (vertically centred, 8 DIP gap) if it fits in the work area, else right, else above, else below.
  * When none fits, the left position is clamped into the work area.
  */
-export function badgePlacement(target: Rect, workArea: Rect, badgeSize: number = theme.stepBadgeSize): Point {
+export function badgePlacement(
+  target: Rect,
+  workArea: Rect,
+  badgeSize: number = theme.stepBadgeSize,
+  /** Other controls (e.g. the guide's other steps) the badge must not cover, when possible. */
+  avoid: Rect[] = [],
+): Point {
   const c = center(target);
   const off = badgeSize / 2 + BADGE_GAP;
   const candidates: Point[] = [
@@ -262,9 +268,9 @@ export function badgePlacement(target: Rect, workArea: Rect, badgeSize: number =
     { x: c.x, y: target.y - off },
     { x: c.x, y: bottomOf(target) + off },
   ];
-  const fits = (p: Point): boolean =>
-    containsRect(workArea, { x: p.x - badgeSize / 2, y: p.y - badgeSize / 2, width: badgeSize, height: badgeSize });
-  const found = candidates.find(fits);
+  const box = (p: Point): Rect => ({ x: p.x - badgeSize / 2, y: p.y - badgeSize / 2, width: badgeSize, height: badgeSize });
+  const fits = (p: Point): boolean => containsRect(workArea, box(p));
+  const found = candidates.find((p) => fits(p) && !overlapsAny(box(p), avoid)) ?? candidates.find(fits);
   if (found) return found;
   const h = badgeSize / 2;
   return {

@@ -349,6 +349,14 @@ describe("placeBeside: oversized boxes", () => {
 });
 
 describe("badgePlacement", () => {
+  it("does not cover a neighbouring control when another side is free", () => {
+    const left = r(100, 300, 80, 40);
+    const me = r(190, 300, 80, 40); // a badge on my left would cover `left`
+    const p = badgePlacement(me, wa, 40, [left]);
+    const box = r(p.x - 20, p.y - 20, 40, 40);
+    expect(intersects(box, left)).toBe(false);
+  });
+
   it("left of the target, vertically centred, 8 DIP gap", () => {
     const p = badgePlacement(r(200, 300, 100, 50), wa, 40);
     expect(p).toEqual({ x: 200 - 8 - 20, y: 325 });

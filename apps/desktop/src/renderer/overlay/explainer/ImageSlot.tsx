@@ -17,7 +17,7 @@ export function ImageSlotView({
   // A ready image that fails to decode (corrupt file / bad response) falls back like a failed one.
   const [broken, setBroken] = useState<string | null>(null);
   const effective: Slot =
-    slot.status === "ready" && broken === slot.src ? { status: "failed", fallbackIcon: "photo" } : slot;
+    slot.status === "ready" && broken === slot.src ? { status: "failed", fallbackIcon: slot.fallbackIcon ?? "photo" } : slot;
   return (
     <div className={`slot slot-${effective.status}`} data-slot={effective.status} style={style}>
       {effective.status === "ready" ? (

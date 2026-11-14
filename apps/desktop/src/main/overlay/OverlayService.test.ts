@@ -216,6 +216,7 @@ describe("OverlayService", () => {
         { target: el("later"), label: "Appears later" },
         { target: el("send"), label: "Send" },
       ],
+      expires: "on_target_selected", // multi-turn guide that ends when completed (as the description asks)
     });
     expect(r).toMatchObject({ ok: true, visible: true });
     let item = sink.byId(r.overlayId!);
@@ -224,7 +225,7 @@ describe("OverlayService", () => {
     expect(item.steps[1]!.target).toBeNull();
     expect(item.steps[0]!.labelBox?.text).toBe("Attach");
 
-    svc.onTurnStart("t2"); // step guides survive turns by default
+    svc.onTurnStart("t2"); // survives turns
     svc.onTargetSelected("attach");
     expect(events).toContainEqual({ type: "steps.advanced", stepsId: r.overlayId, index: 1 });
     // step 2 appears
@@ -621,5 +622,73 @@ describe("OverlayService", () => {
     svc.dispose();
     clock.advance(5000);
     expect(types()).not.toContain("overlay.target_lost");
+  });
+
+  describe("review round 3 (codex) regressions", () => {
+    it("a drag demo whose destination's display is removed is lost, not silently turned into a tap", async () => {
+      const r = await svc.handleTool("point_at", {
+        target: el("attach"),
+        motion: "drag_to",
+        dragTo: { kind: "rect", displayId: "2", rect: rect(-1500, 300) },
+        expires: "manual",
+      });
+      screen.displays = [PRIMARY];
+      screen.change();
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("an anatomy card with a coordinate callout expires on context change", async () => {
+      bounds.set("toolbar", { rect: rect(100, 300, 900, 60), displayId: "1" });
+      const r = await svc.handleTool("show_explainer", {
+        title: "Parts",
+        spec: {
+          kind: "anatomy",
+          region: el("toolbar"),
+          callouts: [{ target: { kind: "point", displayId: "1", point: { x: 150, y: 320 } }, label: "Here" }],
+        },
+      });
+      svc.onContextChange();
+      expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
+    });
+
+    it("on_target_selected: clicking the LAST step's control early does not end an unfinished guide", async () => {
+      const r = await svc.handleTool("show_steps", {
+        steps: [
+          { target: el("attach"), label: "Attach" },
+          { target: el("send"), label: "Send" },
+        ],
+        expires: "on_target_selected",
+      });
+      svc.onTargetSelected("send"); // not the current step
+      expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+      expect(types()).not.toContain("overlay.expired");
+    });
+
+    it("a new turn does not cancel an in-flight call that outlives turns", async () => {
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((res) => (release = res));
+      const pending = svc.handleTool("highlight", { target: el("send"), expires: "manual" });
+      svc.onTurnStart("t2");
+      bounds.gate = null;
+      release();
+      expect(await pending).toMatchObject({ ok: true, visible: true });
+    });
+
+    it("a new turn does cancel an in-flight next_turn call", async () => {
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((res) => (release = res));
+      const pending = svc.handleTool("highlight", { target: el("send") });
+      svc.onTurnStart("t2");
+      bounds.gate = null;
+      release();
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+    });
+
+    it("step guides default to the contract's next_turn lifetime", async () => {
+      const r = await svc.handleTool("show_steps", { steps: [{ target: el("attach"), label: "Attach" }] });
+      svc.onTurnStart("t2");
+      expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
+    });
   });
 });

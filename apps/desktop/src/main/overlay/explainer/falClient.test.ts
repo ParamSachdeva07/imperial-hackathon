@@ -13,7 +13,8 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const BYTES = Buffer.from([1, 2, 3, 4]);
+// A real PNG signature (FalClient validates magic bytes) followed by filler.
+const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 
 function brokerFetch(): typeof fetch {
   return vi.fn(async (input: string | URL | Request) => {
@@ -118,5 +119,29 @@ describe("promptSimilarity / fuzzy asset match", () => {
     expect(promptSimilarity(base, "a crumpled envelope with a fishing hook coming out")).toBeGreaterThanOrEqual(0.6);
     expect(promptSimilarity(base, "a neat envelope with a green tick seal")).toBeLessThan(0.6);
     expect(promptSimilarity(base, "")).toBe(0);
+  });
+});
+
+describe("sniffImageType", () => {
+  it("recognises real image bytes and rejects everything else", async () => {
+    const { sniffImageType } = await import("./falClient");
+    expect(sniffImageType(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe("image/png");
+    expect(sniffImageType(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
+    expect(sniffImageType(new TextEncoder().encode("RIFF1234WEBPVP8 "))).toBe("image/webp");
+    expect(sniffImageType(new TextEncoder().encode("<html>error</html>"))).toBeNull();
+    expect(sniffImageType(new Uint8Array())).toBeNull();
+  });
+});
+
+describe("corrupt images", () => {
+  it("a broker response that is not an image is a failure, not a ready picture", async () => {
+    const { FalClient } = await import("./falClient");
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("/explainer/image")
+        ? new Response(JSON.stringify({ url: "http://127.0.0.1:1/explainer/files/x.png" }), { status: 200 })
+        : new Response("<html>oops</html>", { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const client = new FalClient({ brokerUrl: "http://127.0.0.1:1", assetsDir: "/nonexistent", fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await client.getImage("a cat")).toEqual({ ok: false, error: "broker_error" });
   });
 });

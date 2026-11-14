@@ -103,7 +103,7 @@ export interface StepsItem extends ItemBase {
 
 export type ImageSlot =
   | { status: "loading"; fallbackIcon: IconName }
-  | { status: "ready"; src: string }
+  | { status: "ready"; src: string; /** shown if the image fails to decode */ fallbackIcon?: IconName }
   | { status: "failed"; fallbackIcon: IconName };
 
 export interface CompareSideBody {
