@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { realClock } from "../clock";
 import { AnamAvatarClient, ANAM_TOKEN_HEADER, type AnamState } from "./AnamAvatarClient";
 
 const WA = { x: 0, y: 25, width: 1440, height: 875 };
@@ -191,5 +192,100 @@ describe("AnamAvatarClient", () => {
     await new Promise((r) => setTimeout(r, 80));
     expect(s.requests.length).toBeLessThanOrEqual(n + 1); // at most the one already in flight
     expect(client.getBounds()).toBeNull();
+  });
+
+  it("recovers from a 401 when Anam restarts on the SAME port with a new token", async () => {
+    const first = await stub("old", expanded());
+    publish(first, "old");
+    client = new AnamAvatarClient({ controlFile: file, timeoutMs: 300 });
+    await client.refresh();
+    const port = first.port;
+    await close(first.server);
+    stubs.shift();
+    const second = { state: expanded({ bounds: { ...BOUNDS, x: 7 } }), moves: [], requests: [], moveStatus: 200, moveReason: "" } as unknown as Stub;
+    second.server = createServer((req, res) => {
+      second.requests.push({ method: req.method ?? "", url: req.url ?? "", token: req.headers[ANAM_TOKEN_HEADER] as string | undefined, origin: undefined });
+      res.writeHead(req.headers[ANAM_TOKEN_HEADER] === "new" ? 200 : 401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, state: second.state }));
+    });
+    await new Promise<void>((r) => second.server.listen(port, "127.0.0.1", r));
+    second.port = port;
+    stubs.push(second);
+    writeFileSync(file, JSON.stringify({ port, token: "new", pid: 1 }));
+    await client.refresh();
+    expect(client.getBounds()).toEqual({ ...BOUNDS, x: 7 });
+  });
+
+  it("on 401 with an unchanged discovery file, drops the cached connection so the next poll re-reads", async () => {
+    const s = await stub("tok", expanded());
+    publish(s, "wrong");
+    client = new AnamAvatarClient({ controlFile: file });
+    await client.refresh();
+    expect(client.getBounds()).toBeNull();
+    publish(s, "tok");
+    await client.refresh();
+    expect(client.getBounds()).toEqual(BOUNDS);
+  });
+
+  it("treats a dead pid (ESRCH) as no connection and never contacts the port", async () => {
+    const s = await stub("tok", expanded());
+    publish(s, "tok");
+    let alive = false;
+    client = new AnamAvatarClient({ controlFile: file, isProcessAlive: () => alive });
+    await client.refresh();
+    expect(s.requests).toEqual([]);
+    expect(client.getBounds()).toBeNull();
+    alive = true;
+    await client.refresh();
+    expect(client.getBounds()).toEqual(BOUNDS);
+    alive = false; // crash after caching the connection
+    await client.refresh();
+    expect(s.requests.length).toBe(1);
+  });
+
+  it("keeps the last good state through a transient failure for the grace period, then nulls it", async () => {
+    const s = await stub("tok", expanded());
+    publish(s, "tok");
+    let now = 1000;
+    client = new AnamAvatarClient({ controlFile: file, timeoutMs: 200, clock: { ...realClock, now: () => now } });
+    await client.refresh();
+    await close(s.server);
+    stubs.pop();
+    now += 1500;
+    await client.refresh();
+    expect(client.getBounds()).toEqual(BOUNDS);
+    expect(client.hasLiveState()).toBe(true);
+    now += 600;
+    await client.refresh();
+    expect(client.getBounds()).toBeNull();
+    expect(client.hasLiveState()).toBe(false);
+  });
+
+  it("a definitive no_window answer clears immediately even inside the grace period", async () => {
+    const s = await stub("tok", expanded());
+    publish(s, "tok");
+    client = new AnamAvatarClient({ controlFile: file });
+    await client.refresh();
+    s.state = null;
+    await client.refresh();
+    expect(client.hasLiveState()).toBe(false);
+  });
+
+  it("dispose() during an in-flight refresh leaves the state null; start() is idempotent and restartable", async () => {
+    const s = await stub("tok", expanded());
+    publish(s, "tok");
+    client = new AnamAvatarClient({ controlFile: file, intervalMs: 1000 });
+    const p = client.refresh();
+    client.dispose();
+    await p;
+    expect(client.getBounds()).toBeNull();
+    client.start();
+    client.start();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(s.requests.length).toBe(2); // 1 from the disposed refresh + 1 first poll (one loop only)
+    client.dispose();
+    client.start();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(client.getBounds()).toEqual(BOUNDS);
   });
 });

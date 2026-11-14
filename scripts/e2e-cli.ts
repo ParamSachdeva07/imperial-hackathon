@@ -44,7 +44,7 @@ const sleep = delay;
 
 async function main() {
   rmSync(devFile, { force: true });
-  const app = spawn(electron, ["."], { cwd: join(root, "apps/desktop"), env: { ...process.env, POINTY_AVATAR_RECT: "none" }, stdio: "ignore" });
+  const app = spawn(electron, ["."], { cwd: join(root, "apps/desktop"), env: { ...process.env, POINTY_AVATAR_RECT: "none", POINTY_AVATAR: "mock" }, stdio: "ignore" });
   try {
     for (let i = 0; i < 60 && !existsSync(devFile); i++) await sleep(250);
     check("app started and dev server is up", existsSync(devFile));

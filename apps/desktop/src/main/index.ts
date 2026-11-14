@@ -8,22 +8,22 @@
  *   POINTY_NO_FIXTURE=1     don't open the fake mail app
  *   POINTY_ELEMENTS=path    extra element rects (JSON) for MockBoundsProvider
  *   POINTY_AVATAR_RECT=x,y,w,h | none   where the (mock) avatar window is, for layout avoidance
- *   POINTY_AVATAR=anam      use the real Anam voice avatar (control API) for avoidance, move_avatar and
- *                           auto-dodge instead of the mock rect. Also enabled automatically when the
- *                           discovery file exists at startup (ANAM_CONTROL_FILE, default
- *                           ~/.pointy/anam-control.json)
+ *   POINTY_AVATAR=anam|mock  anam (default): always watch for the real Anam voice avatar (control API,
+ *                           ANAM_CONTROL_FILE, default ~/.pointy/anam-control.json) whichever app starts
+ *                           first; while it is reachable it drives avoidance, move_avatar and auto-dodge,
+ *                           otherwise the mock rect (POINTY_AVATAR_RECT) is used. mock: never talk to Anam.
  *   POINTY_CAPTURABLE=1     disable content protection (dev screenshots of the overlay itself)
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
  *   POINTY_REDUCE_MOTION=1  force reduce-motion
  *   POINTY_PROBE=1          overlay windows draw a fixed ring only (canvas check)
  *   POINTY_DEV_PORT / POINTY_DEV_FILE   dev server port / connection file (isolated test runs)
  */
-import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { app, dialog, screen } from "electron";
 import { loadRepoEnv } from "@pointy/shared/node/env";
 import { createOverlayControl } from "./overlay";
-import { AnamAvatarClient, anamControlFile } from "./overlay/avatar/AnamAvatarClient";
+import { AnamAvatarClient } from "./overlay/avatar/AnamAvatarClient";
+import { CompositeAvoidRects } from "./overlay/avatar/CompositeAvoidRects";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
 import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
 import { MockScreenCaptureProvider } from "./overlay/mocks/MockScreenCaptureProvider";
@@ -68,14 +68,14 @@ async function main(): Promise<void> {
   if (elementsFile) boundsProvider.loadJsonFile(elementsFile);
   const assetsDir = join(repoRoot, "assets", "explainers");
 
-  // The real Anam avatar when asked for (or when it is already running); otherwise a mock rect.
-  const anam = env("POINTY_AVATAR") === "anam" || existsSync(anamControlFile()) ? new AnamAvatarClient() : null;
+  // Always watch for the real Anam avatar (it may start after us); the mock rect is the fallback.
+  const anam = env("POINTY_AVATAR") === "mock" ? null : new AnamAvatarClient();
   anam?.start();
 
   const overlay = createOverlayControl({
     boundsProvider,
     captureProvider: new MockScreenCaptureProvider(() => displays.getDisplays()),
-    avoidRects: anam ?? new MockAvoidRects(primary),
+    avoidRects: anam ? new CompositeAvoidRects(anam, new MockAvoidRects(primary)) : new MockAvoidRects(primary),
     ...(anam ? { avatar: anam } : {}),
     assetsDir,
     screen: displays,

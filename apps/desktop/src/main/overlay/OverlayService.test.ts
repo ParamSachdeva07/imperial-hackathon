@@ -1063,6 +1063,108 @@ describe("OverlayService avatar (move_avatar and auto-dodge)", () => {
     expect(avatar.moves.at(-1)).toEqual({ x: 24, y: 49 });
   });
 
+  it("auto-dodge: advance_step onto a covered control moves the avatar", async () => {
+    const r = await svc.handleTool("show_steps", { steps: [{ target: el("clear"), label: "A" }, { target: el("under"), label: "B" }] });
+    await flushPromises();
+    expect(avatar.moves).toEqual([]);
+    await svc.handleTool("advance_step", { stepsId: r.overlayId });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+  });
+
+  it("auto-dodge: selecting the current step's control (advancing the guide) moves the avatar", async () => {
+    await svc.handleTool("show_steps", { steps: [{ target: el("clear"), label: "A" }, { target: el("under"), label: "B" }] });
+    await flushPromises();
+    expect(avatar.moves).toEqual([]);
+    svc.onTargetSelected("clear");
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+  });
+
+  it("auto-dodge: a check inside the rate window runs once, trailing, at the window end", async () => {
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    avatar.bounds = TOP_RIGHT;
+    clock.advance(500);
+    await svc.handleTool("highlight", { target: el("under") }); // second overlapping drawing
+    await svc.handleTool("highlight", { target: el("near") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    clock.advance(999);
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    clock.advance(1);
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(2); // exactly one trailing move
+    clock.advance(5000);
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(2);
+  });
+
+  it("auto-dodge: a failed move does not consume the rate limit", async () => {
+    avatar.failMoves = true;
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    avatar.failMoves = false;
+    await svc.handleTool("highlight", { target: el("near") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(2); // retried immediately, no wait
+  });
+
+  it("auto-dodge: a drawing cleared while the move is queued causes no move", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    avatar.moveTo = async (p) => {
+      avatar.moves.push(p);
+      await gate; // holds the avatar chain; the avatar itself stays where it is
+      return avatar.bounds;
+    };
+    const pending = svc.handleTool("move_avatar", { position: "bottom_left" });
+    await flushPromises();
+    const r = await svc.handleTool("highlight", { target: el("under") }); // covered, check queued behind the move
+    await svc.handleTool("clear", { overlayId: r.overlayId });
+    release();
+    await pending;
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1); // only the explicit move; the dodge saw no live drawing
+  });
+
+  it("dispose stops a pending move and the trailing timer", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    avatar.moveTo = async (p) => {
+      avatar.moves.push(p);
+      await gate;
+      return { ...TOP_RIGHT, x: p.x, y: p.y };
+    };
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    const published = sink.publishes;
+    svc.dispose();
+    release();
+    await flushPromises();
+    expect(sink.publishes).toBe(published);
+    // after dispose nothing new is queued
+    expect(await svc.handleTool("move_avatar", { position: "top_left" })).toMatchObject({ reason: "avatar_unavailable" });
+    expect(avatar.moves).toHaveLength(1);
+  });
+
+  it("dispose cancels the trailing check", async () => {
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    avatar.bounds = TOP_RIGHT;
+    clock.advance(500);
+    await svc.handleTool("highlight", { target: el("near") });
+    await flushPromises();
+    svc.dispose();
+    clock.advance(5000);
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+  });
+
   it("a failing avatar never breaks drawing", async () => {
     avatar.moveTo = async () => {
       throw new Error("boom");

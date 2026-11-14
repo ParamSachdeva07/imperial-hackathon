@@ -44,7 +44,7 @@ import {
   type Live,
   type Slot,
 } from "./annotations";
-import { realClock, type Clock } from "./clock";
+import { realClock, type Clock, type TimerHandle } from "./clock";
 import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, expiresAtTurnStart, expiresOnContextChange } from "./ExpiryManager";
 import { ExplainerService } from "./explainer/ExplainerService";
@@ -138,7 +138,11 @@ export class OverlayService implements OverlayControl {
   private anchorsMoved = false;
   /** Avatar moves (explicit and automatic) run one at a time. */
   private avatarChain: Promise<unknown> = Promise.resolve();
+  /** Time of the last SUCCESSFUL automatic move (failed or no-op attempts don't consume the rate limit). */
   private lastAutoDodgeAt = Number.NEGATIVE_INFINITY;
+  /** The one pending trailing auto-dodge check (scheduled when a check lands inside the rate window). */
+  private dodgeTimer: TimerHandle | null = null;
+  private disposed = false;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
@@ -176,6 +180,9 @@ export class OverlayService implements OverlayControl {
   }
 
   dispose(): void {
+    this.disposed = true;
+    if (this.dodgeTimer !== null) this.clock.clearTimeout(this.dodgeTimer);
+    this.dodgeTimer = null;
     this.anchors.stop();
     this.expiry.dispose();
     for (const d of this.disposers) d();
@@ -328,7 +335,7 @@ export class OverlayService implements OverlayControl {
     // Displays changed while we were resolving: re-check this annotation against the new layout.
     if (this.relayoutGen !== displayGen) void this.relayoutAll();
 
-    this.autoDodge(l);
+    this.requestAutoDodge();
 
     // A card whose anchor can't be resolved is still shown (centred-right); report why it's unanchored.
     return ok(l.id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
@@ -381,26 +388,48 @@ export class OverlayService implements OverlayControl {
   }
 
   /**
-   * A drawing was just shown: if the avatar is (nearly) on top of what it points at, move the avatar
-   * away. Fire-and-forget (never delays or changes the tool result), serialized with other avatar
-   * moves, and rate-limited so the avatar can't dart around.
+   * Something on screen changed (a drawing was shown, a step guide moved on, a target appeared):
+   * ask for an auto-dodge check. Fire-and-forget (never delays or changes a tool result). The check
+   * itself runs serialized on the avatar chain and works from the CURRENT drawings and avatar bounds.
    */
-  private autoDodge(l: Live): void {
+  private requestAutoDodge(): void {
+    if (this.disposed || !this.deps.avatar) return;
+    void this.serializeAvatar(() => this.runAutoDodgeCheck());
+  }
+
+  private async runAutoDodgeCheck(): Promise<ToolResult> {
     const avatar = this.deps.avatar;
-    if (!avatar || l.ended) return;
-    const now = this.clock.now();
-    if (now - this.lastAutoDodgeAt < AUTO_DODGE_MIN_INTERVAL_MS) return;
+    if (this.disposed || !avatar) return AVATAR_UNAVAILABLE;
     const bounds = avatar.getBounds();
-    if (!bounds || !avatar.isMovable()) return;
+    if (!bounds || !avatar.isMovable()) return AVATAR_UNAVAILABLE;
     // A step guide shows one control at a time; the other drawings every target they use.
-    const targets =
-      l.toolName === "show_steps"
-        ? [this.primaryBounds(l)].flatMap((b) => (b ? [b] : []))
-        : [...l.resolved.values()].flatMap((r) => (r ? [r.bounds] : []));
-    const near = targets.map((t) => inflate(t, AUTO_DODGE_MARGIN));
-    if (!near.some((t) => intersects(t, bounds))) return;
-    this.lastAutoDodgeAt = now;
-    void this.serializeAvatar(() => this.performAvatarMove("auto", undefined, undefined, near));
+    const near: Rect[] = [];
+    for (const l of this.live.values()) {
+      if (l.ended) continue;
+      const targets =
+        l.toolName === "show_steps"
+          ? [this.primaryBounds(l)].flatMap((b) => (b ? [b] : []))
+          : [...l.resolved.values()].flatMap((r) => (r ? [r.bounds] : []));
+      for (const t of targets) near.push(inflate(t, AUTO_DODGE_MARGIN));
+    }
+    if (!near.some((t) => intersects(t, bounds))) return { ok: true, visible: true, resolvedBounds: bounds };
+    const wait = this.lastAutoDodgeAt + AUTO_DODGE_MIN_INTERVAL_MS - this.clock.now();
+    if (wait > 0) {
+      // Too soon after the last move: one trailing check at the end of the window instead of dropping it.
+      if (this.dodgeTimer === null) {
+        this.dodgeTimer = this.clock.setTimeout(() => {
+          this.dodgeTimer = null;
+          this.requestAutoDodge();
+        }, wait);
+      }
+      return AVATAR_UNAVAILABLE;
+    }
+    const result = await this.performAvatarMove("auto", undefined, undefined, near);
+    const after = avatar.getBounds();
+    if (!this.disposed && result.ok && after && (after.x !== bounds.x || after.y !== bounds.y)) {
+      this.lastAutoDodgeAt = this.clock.now();
+    }
+    return result;
   }
 
   private serializeAvatar(fn: () => Promise<ToolResult>): Promise<ToolResult> {
@@ -416,14 +445,14 @@ export class OverlayService implements OverlayControl {
     extraAvoid: Rect[],
   ): Promise<ToolResult> {
     const avatar = this.deps.avatar;
-    if (!avatar || !avatar.isMovable() || !avatar.getBounds()) return AVATAR_UNAVAILABLE;
+    if (this.disposed || !avatar || !avatar.isMovable() || !avatar.getBounds()) return AVATAR_UNAVAILABLE;
     const avoid = [...extraAvoid];
     if (avoidTarget) {
       const r = await this.resolver.resolve(avoidTarget);
       if (r.ok) avoid.push(r.target.bounds); // an avoid target that can't be resolved is ignored
     }
     const current = avatar.getBounds();
-    if (!current || !avatar.isMovable()) return AVATAR_UNAVAILABLE; // collapsed or grabbed while resolving
+    if (this.disposed || !current || !avatar.isMovable()) return AVATAR_UNAVAILABLE; // disposed, collapsed or grabbed while resolving
     const displays = this.displays();
     const own = displayForRect(current, displays);
     const display = displayId ? findDisplay(displayId, displays) : (own ?? findDisplay(this.deps.screen.getPrimaryDisplayId(), displays) ?? displays[0]);
@@ -433,7 +462,7 @@ export class OverlayService implements OverlayControl {
     const to = chooseAvatarPosition({ avatar: current, workArea: display.workArea, position, avoid, relocate: display.id !== own?.id });
     if (to.x === current.x && to.y === current.y) return { ok: true, visible: true, resolvedBounds: current };
     const moved = await avatar.moveTo(to);
-    if (!moved) return AVATAR_UNAVAILABLE;
+    if (!moved || this.disposed) return AVATAR_UNAVAILABLE;
     // The avatar is an avoid rect for every label and card: lay them out again around its new spot.
     for (const l of this.live.values()) if (!l.ended && l.item) this.refresh(l);
     this.publish();
@@ -477,6 +506,7 @@ export class OverlayService implements OverlayControl {
     this.refresh(l);
     this.publish();
     this.checkCurrentStepAppears(l);
+    this.requestAutoDodge(); // the new current step's control may be under the avatar
     return ok(stepsId, this.primaryBounds(l), { visible: !!l.resolved.get(stepSlot(l.steps.current)) });
   }
 
@@ -557,12 +587,14 @@ export class OverlayService implements OverlayControl {
     // fully off every display counts as lost.
     const display = displayForRect(bounds.rect, this.displays());
     if (!display) return this.handleAnchorLost(id, elementId);
+    const appeared = (l.elements.get(elementId) ?? []).some((slot) => !l.resolved.get(slot));
     for (const slot of l.elements.get(elementId) ?? []) {
       l.resolved.set(slot, { bounds: bounds.rect, displayId: display.id, shape: { kind: "rect" }, elementId });
     }
     this.manager.update(id, { resolvedBounds: this.primaryBounds(l) ?? null, displayId: kindOfLive(l).primary(l)?.displayId ?? null });
     this.refresh(l);
     this.anchorsMoved = true; // published when the anchor check completes
+    if (appeared) this.requestAutoDodge(); // a previously unresolved target just showed up
   }
 
   private handleAnchorLost(id: string, elementId: string): void {
