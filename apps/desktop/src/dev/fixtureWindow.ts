@@ -9,16 +9,22 @@ import { IPC, type FixtureBoundsMessage } from "@pointy/shared/overlay/render";
 import type { Rect } from "@pointy/shared/overlay";
 import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
 
+/** Width reserved on the right of the primary screen for the voice test window. */
+export const VOICE_WINDOW_WIDTH = 440;
+
 export function openFixtureWindow(
   bounds: MockBoundsProvider,
   loadPage: (win: BrowserWindow) => Promise<void>,
   preloadDir: string,
 ): BrowserWindow {
+  // Left part of the primary screen, leaving room on the right for the voice test window.
+  const wa = screen.getPrimaryDisplay().workArea;
+  const width = Math.max(820, Math.min(1100, wa.width - VOICE_WINDOW_WIDTH - 3 * 16));
   const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    x: 80,
-    y: 80,
+    width,
+    height: Math.min(760, wa.height - 32),
+    x: wa.x + 16,
+    y: wa.y + 16,
     title: "Pointy Fixture",
     backgroundColor: "#ffffff",
     webPreferences: { preload: join(preloadDir, "fixture.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },

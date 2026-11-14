@@ -6,6 +6,8 @@ const api = {
   getSecret: (): Promise<{ value: string; expiresAt: number; model: string }> => ipcRenderer.invoke("voice:secret"),
   callTool: (name: string, args: unknown): Promise<ToolResult> => ipcRenderer.invoke("voice:tool", name, args),
   turnStart: (turnId: string): Promise<void> => ipcRenderer.invoke("voice:turn", turnId),
+  instructions: (): Promise<string> => ipcRenderer.invoke("voice:instructions"),
+  openFixture: (): Promise<number> => ipcRenderer.invoke("voice:fixture"),
   onOverlayEvent(cb: (e: OverlayEvent) => void): () => void {
     const l = (_e: IpcRendererEvent, ev: OverlayEvent) => cb(ev);
     ipcRenderer.on("voice:overlay-event", l);

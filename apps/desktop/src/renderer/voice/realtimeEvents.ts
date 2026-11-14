@@ -11,6 +11,8 @@ export interface RealtimeDeps {
   send(event: object): void;
   callTool(name: string, args: unknown): Promise<unknown>;
   turnStart(turnId: string): Promise<void> | void;
+  /** Current instructions (fresh on-screen element list), sent as a session.update each turn. */
+  instructions?(): Promise<string>;
   log(kind: "you" | "pointy" | "tool" | "error" | "info", text: string): void;
   newTurnId(): string;
 }
@@ -26,9 +28,13 @@ type ServerEvent = { type: string; [k: string]: unknown };
 
 export async function handleServerEvent(ev: ServerEvent, deps: RealtimeDeps): Promise<void> {
   switch (ev.type) {
-    case "input_audio_buffer.speech_started":
+    case "input_audio_buffer.speech_started": {
       await deps.turnStart(deps.newTurnId());
+      // Windows may have moved/opened since the session began: refresh what the AI can point at.
+      const instructions = await deps.instructions?.().catch(() => null);
+      if (instructions) deps.send({ type: "session.update", session: { type: "realtime", instructions } });
       return;
+    }
     case "conversation.item.input_audio_transcription.completed":
       if (typeof ev.transcript === "string" && ev.transcript.trim()) deps.log("you", ev.transcript.trim());
       return;

@@ -95,6 +95,9 @@ async function run(argv: string[]): Promise<number> {
       }
       console.log(JSON.stringify(await call(conn, "GET", req.path), null, 2));
       return 0;
+    case "post":
+      console.log(JSON.stringify(await call(conn, "POST", req.path, req.body)));
+      return 0;
     case "control":
       console.log(JSON.stringify(await call(conn, "POST", "/control", req.body)));
       return 0;

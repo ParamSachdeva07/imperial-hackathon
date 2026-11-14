@@ -13,6 +13,8 @@ interface VoiceApi {
   getSecret(): Promise<{ value: string; expiresAt: number; model: string }>;
   callTool(name: string, args: unknown): Promise<ToolResult>;
   turnStart(turnId: string): Promise<void>;
+  instructions(): Promise<string>;
+  openFixture(): Promise<number>;
   onOverlayEvent(cb: (e: OverlayEvent) => void): () => void;
 }
 const voice = (window as unknown as { pointyVoice: VoiceApi }).pointyVoice;
@@ -57,6 +59,7 @@ function App() {
         send: (e: object) => dc.readyState === "open" && dc.send(JSON.stringify(e)),
         callTool: (name: string, args: unknown) => voice.callTool(name, args),
         turnStart: (id: string) => voice.turnStart(id),
+        instructions: () => voice.instructions(),
         log,
         newTurnId: () => `voice-turn-${++turn.current}`,
       };
@@ -69,6 +72,10 @@ function App() {
       };
       dc.onopen = () => {
         setStatus("live");
+        // Make sure the AI knows what's on screen right now.
+        void voice.instructions().then((instructions) =>
+          deps.send({ type: "session.update", session: { type: "realtime", instructions } }),
+        );
         log("info", "connected — say something like “where is the Send button?”");
       };
       await conn.setLocalDescription(await conn.createOffer());
@@ -97,6 +104,11 @@ function App() {
     setStatus((s) => (s === "error" ? s : "idle"));
   }
 
+  async function openFixture() {
+    const n = await voice.openFixture();
+    log("info", `test app open — the AI can point at ${n} controls`);
+  }
+
   async function clearAll() {
     log("tool", `clear(all) → ${JSON.stringify(await voice.callTool("clear", { overlayId: "all" }))}`);
   }
@@ -115,6 +127,7 @@ function App() {
             Start talking
           </button>
         )}
+        <button onClick={() => void openFixture()}>Open test app</button>
         <button onClick={() => void clearAll()}>Clear overlay</button>
       </div>
       <section className="log">

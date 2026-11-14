@@ -20,7 +20,8 @@
     "postinstall": "node node_modules/electron/install.js",
     "voice": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_VOICE=1 npx electron .",
     "app": "npm run build -w @pointy/desktop && cd apps/desktop && npx electron .",
-    "e2e": "npm run build -w @pointy/desktop && tsx scripts/e2e-cli.ts"
+    "e2e": "npm run build -w @pointy/desktop && tsx scripts/e2e-cli.ts",
+    "eval:voice": "tsx scripts/eval-voice-tools.ts"
   },
   "engines": {
     "node": ">=22"

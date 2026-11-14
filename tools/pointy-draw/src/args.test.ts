@@ -41,6 +41,9 @@ describe("pointy-draw args (spec §8.1 commands)", () => {
     expect(p(["highlight", "--point", "5,6", "--display", "9"])).toMatchObject({ input: { target: { kind: "point", displayId: "9" } } });
     expect(p(["highlight", "--polygon", "0,0 10,0 5,8"])).toMatchObject({ input: { target: { kind: "polygon", points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 8 }] } } });
   });
+  it("fixture reopens the test app", () => {
+    expect(p(["fixture"])).toEqual({ kind: "post", path: "/fixture", body: {} });
+  });
   it("rejects bad usage", () => {
     expect(() => p(["highlight"])).toThrow(UsageError);
     expect(() => p(["highlight", "--rect", "1,2,3"])).toThrow(UsageError);

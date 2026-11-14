@@ -43,6 +43,12 @@ describe("realtime event handling", () => {
     expect(d.sent).toEqual([]);
   });
 
+  it("refreshes the on-screen element list with a session.update on each user turn", async () => {
+    const d = { ...deps(), instructions: async () => "fresh instructions" };
+    await handleServerEvent({ type: "input_audio_buffer.speech_started" }, d);
+    expect(d.sent).toEqual([{ type: "session.update", session: { type: "realtime", instructions: "fresh instructions" } }]);
+  });
+
   it("starts an overlay turn when the user starts speaking and logs transcripts", async () => {
     const d = deps();
     await handleServerEvent({ type: "input_audio_buffer.speech_started" }, d);

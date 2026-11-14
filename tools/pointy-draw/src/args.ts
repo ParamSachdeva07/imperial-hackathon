@@ -7,7 +7,8 @@ export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "control"; body: { op: string; arg?: string } }
   | { kind: "sim"; body: Record<string, unknown> }
-  | { kind: "get"; path: "/events" | "/state" | "/displays" | "/elements" };
+  | { kind: "get"; path: "/events" | "/state" | "/displays" | "/elements" }
+  | { kind: "post"; path: "/fixture"; body: Record<string, unknown> };
 
 export interface ParseContext {
   primaryDisplayId: string;
@@ -28,6 +29,7 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw sim move ELEMENT_ID dx,dy | sim remove ELEMENT_ID | sim restore [ELEMENT_ID]
   pointy-draw turn TURN_ID | context | select ELEMENT_ID | cue CUE_ID
   pointy-draw events | state | displays | elements
+  pointy-draw fixture                         open (or bring back) the fake mail test app
 
   <target>: --element ID | --rect x,y,w,h | --point x,y | --polygon "x,y x,y x,y"  [--display ID (default: primary)]
   E (expiry): next_turn | on_target_selected | context_change | manual | <milliseconds>
@@ -171,6 +173,8 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
     case "cue":
       if (!rest[0]) throw new UsageError("cue CUE_ID");
       return { kind: "control", body: { op: "cue", arg: rest[0] } };
+    case "fixture":
+      return { kind: "post", path: "/fixture", body: {} };
     case "events":
     case "state":
     case "displays":

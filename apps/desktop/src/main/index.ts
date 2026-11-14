@@ -41,6 +41,7 @@ const PROBE_HTML = `<!doctype html><html><body style="margin:0;background:transp
 </svg></body></html>`;
 
 const preloadDir = join(__dirname, "../preload");
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function readManifestPrompts(file: string): string[] {
   try {
@@ -93,9 +94,20 @@ async function main(): Promise<void> {
     hideDuringCapture: process.env.POINTY_HIDE_DURING_CAPTURE === "1",
   });
 
-  if (process.env.POINTY_NO_FIXTURE !== "1") {
-    openFixtureWindow(boundsProvider, (win) => loadRendererPage(win, "fixture"), preloadDir);
-  }
+  // The fake mail app is the test surface: reopenable (CLI `pointy-draw fixture`, the voice
+  // window's button, and automatically when a voice session starts).
+  let fixtureWindow: BrowserWindow | null = null;
+  const ensureFixture = async (): Promise<void> => {
+    if (fixtureWindow && !fixtureWindow.isDestroyed()) {
+      if (fixtureWindow.isMinimized()) fixtureWindow.restore();
+      fixtureWindow.show();
+    } else {
+      fixtureWindow = openFixtureWindow(boundsProvider, (win) => loadRendererPage(win, "fixture"), preloadDir);
+    }
+    // Wait (briefly) until its elements have been reported, so targets resolve right away.
+    for (let i = 0; i < 30 && boundsProvider.listElementIds().length === 0; i++) await delay(100);
+  };
+  if (process.env.POINTY_NO_FIXTURE !== "1") void ensureFixture();
 
   let voiceWindow: BrowserWindow | null = null;
   const openVoice = () => {
@@ -109,6 +121,7 @@ async function main(): Promise<void> {
       apiKey: process.env.OPENAI_API_KEY,
       preloadDir,
       loadPage: (win) => loadRendererPage(win, "voice"),
+      ensureFixture,
       ctx: {
         listElements: () =>
           boundsProvider.listElementIds().flatMap((id) => {
@@ -135,6 +148,12 @@ async function main(): Promise<void> {
       sim: boundsProvider,
       getDisplays: () => electronScreen.getDisplays(),
       getPrimaryDisplayId: () => electronScreen.getPrimaryDisplayId(),
+      extraRoutes: {
+        "/fixture": async () => {
+          await ensureFixture();
+          return { ok: true, elements: boundsProvider.listElementIds().length };
+        },
+      },
     }).catch((err: unknown) => {
       console.error(`[pointy] dev server not started (pointy-draw unavailable): ${String(err)}`);
       return null;

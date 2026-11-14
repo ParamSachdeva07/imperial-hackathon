@@ -31,6 +31,7 @@ export interface DevServerDeps {
     simRemove(elementId: string): void;
     simRestore(elementId?: string): void;
     listElementIds(): string[];
+    getBoundsSync?(elementId: string): { rect: { x: number; y: number; width: number; height: number } } | null;
   };
   getDisplays: () => DisplayInfo[];
   getPrimaryDisplayId: () => string;
@@ -92,6 +93,15 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
           return send(res, 200, { primary: deps.getPrimaryDisplayId(), displays: deps.getDisplays() });
         case "/elements":
           return send(res, 200, deps.sim.listElementIds());
+        case "/element-rects":
+          return send(
+            res,
+            200,
+            deps.sim.listElementIds().flatMap((id) => {
+              const b = deps.sim.getBoundsSync?.(id);
+              return b ? [{ id, rect: b.rect }] : [];
+            }),
+          );
         case "/debug/anatomy":
           return send(res, 200, { src: deps.control.debugAnatomyImage?.(url.searchParams.get("id") ?? "") ?? null });
       }
