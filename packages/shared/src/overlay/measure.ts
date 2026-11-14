@@ -120,6 +120,10 @@ export const COMPARE_COL = (CARD_INNER - CARD.gap) / 2;
 export const COMPARE_IMAGE_H = Math.round(COMPARE_COL * 0.75);
 export const ANATOMY_IMAGE_H = Math.round(CARD_INNER * 0.62);
 export const CONCEPT_IMAGE_H = Math.round(CARD_INNER * 0.56);
+/** Concept image height shrinks with the panel count so a 3-panel card still fits a laptop screen. */
+export function conceptImageHeight(panels: number): number {
+  return panels >= 3 ? Math.round(CARD_INNER * 0.34) : panels === 2 ? Math.round(CARD_INNER * 0.42) : CONCEPT_IMAGE_H;
+}
 
 const rows = (heights: number[]) => heights.reduce((a, b) => a + b, 0) + CARD.rowGap * Math.max(0, heights.length - 1);
 const textH = (text: string, width: number, size: number = BODY, lh: number = BODY_LH, cw: number = 1) =>
@@ -155,7 +159,7 @@ export function measureCard(title: string, spec: ExplainerSpec): Size {
       break;
     case "concept":
       body =
-        spec.panels.reduce((sum, p) => sum + CONCEPT_IMAGE_H + CARD.rowGap + textH(p.caption, CARD_INNER), 0) +
+        spec.panels.reduce((sum, p) => sum + conceptImageHeight(spec.panels.length) + CARD.rowGap + textH(p.caption, CARD_INNER), 0) +
         CARD.gap * (spec.panels.length - 1);
       break;
   }

@@ -16,7 +16,7 @@ interface Conn {
 const CLI_DIR = resolve(fileURLToPath(import.meta.url), "../..");
 
 function connection(): Conn {
-  const file = join(homedir(), ".pointy", "dev-server.json");
+  const file = process.env.POINTY_DEV_FILE ?? join(homedir(), ".pointy", "dev-server.json");
   try {
     return JSON.parse(readFileSync(file, "utf8")) as Conn;
   } catch {

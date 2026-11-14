@@ -319,7 +319,7 @@ describe("OverlayService", () => {
   });
 
   it("works on a display with a negative origin", async () => {
-    const r = await svc.handleTool("point_at", { target: { kind: "rect", displayId: "2", rect: rect(-1900, 300) }, label: "Here" });
+    const r = await svc.handleTool("point_at", { target: { kind: "rect", displayId: "2", rect: rect(-1700, 300) }, label: "Here" });
     const item = sink.byId(r.overlayId!);
     if (item?.kind !== "pointer") throw new Error();
     expect(item.entry.x).toBeLessThan(-1920); // glides in from the left edge of the left display
@@ -437,6 +437,83 @@ describe("OverlayService", () => {
       screen.change();
       await flushPromises();
       expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+  });
+
+  describe("review round 1 (codex) regressions", () => {
+    it("drops a tool call that was still resolving when clear('all') arrived", async () => {
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((r) => (release = r));
+      const pending = svc.handleTool("highlight", { target: el("send") });
+      await svc.handleTool("clear", { overlayId: "all" });
+      bounds.gate = null;
+      release();
+      const r = await pending;
+      expect(r).toEqual({ ok: true, visible: false });
+      expect(sink.items).toHaveLength(0);
+    });
+
+    it("an annotation mixing element and coordinate targets expires on context change", async () => {
+      const r = await svc.handleTool("point_at", {
+        target: el("attach"),
+        motion: "drag_to",
+        dragTo: { kind: "rect", displayId: "1", rect: rect(800, 600) },
+      });
+      svc.onContextChange();
+      expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
+    });
+
+    it("advancing to a step that never appears reports target_lost after a grace period", async () => {
+      const r = await svc.handleTool("show_steps", {
+        steps: [
+          { target: el("attach"), label: "Attach" },
+          { target: el("never"), label: "Never shows" },
+        ],
+      });
+      await svc.handleTool("advance_step", { stepsId: r.overlayId });
+      clock.advance(1900);
+      expect(types()).not.toContain("overlay.target_lost");
+      clock.advance(200);
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("a step guide with expires on_target_selected ends when its last step is selected", async () => {
+      const r = await svc.handleTool("show_steps", {
+        steps: [
+          { target: el("attach"), label: "Attach" },
+          { target: el("send"), label: "Send" },
+        ],
+        expires: "on_target_selected",
+      });
+      svc.onTargetSelected("attach");
+      expect(types()).not.toContain("overlay.expired");
+      svc.onTargetSelected("send");
+      expect(events).toContainEqual({ type: "steps.completed", stepsId: r.overlayId });
+      clock.advance(1300); // all ✓ shown briefly, then it ends
+      expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
+    });
+
+    it("reports the real reason an explainer anchor could not be resolved", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        anchor: { kind: "rect", displayId: "99", rect: rect(0, 0) },
+        title: "T",
+        spec: { kind: "sequence", steps: [{ icon: "click", caption: "a" }, { icon: "send", caption: "b" }] },
+      });
+      expect(r).toMatchObject({ ok: true, visible: true, reason: "display_not_found" });
+    });
+
+    it("a lost current step fades out with its ring and badge still drawn", async () => {
+      const r = await svc.handleTool("show_steps", { steps: [{ target: el("attach"), label: "Attach" }] });
+      bounds.set("attach", null);
+      clock.advance(300);
+      await flushPromises();
+      clock.advance(300);
+      await flushPromises();
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "steps") throw new Error();
+      expect(item.state).toBe("exiting");
+      expect(item.steps[0]!.target).not.toBeNull();
+      expect(item.steps[0]!.badge).not.toBeNull();
     });
   });
 });

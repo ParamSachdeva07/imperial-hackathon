@@ -54,6 +54,10 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v
 
 const scaled = (size: Size, scale: number): Size => ({ width: size.width * scale, height: size.height * scale });
 
+/** Largest scale (≤ 1) at which `size` fits inside the work area with `gap` on every side. */
+const fitScale = (size: Size, workArea: Rect, gap: number): number =>
+  Math.min(1, (workArea.width - 2 * gap) / size.width, (workArea.height - 2 * gap) / size.height);
+
 const overlapsAny = (rect: Rect, rects: Rect[]): boolean => rects.some((a) => intersects(rect, a));
 
 /** Candidate boxes in preference order: right, left, below, above. */
@@ -99,7 +103,9 @@ export function placeBeside(input: LayoutInput): LayoutResult {
     }
   }
 
-  const scale = allowShrink ? SHRINK : 1;
+  // Last resort: a box still bigger than the work area is scaled down until it fits, so content is
+  // never pushed off-screen.
+  const scale = Math.min(allowShrink ? SHRINK : 1, fitScale(size, workArea, gap));
   const tc = center(target);
   const ranked = corners(scaled(size, scale), workArea, gap)
     .map((rect) => ({ rect, d: distance(center(rect), tc) }))
@@ -167,7 +173,8 @@ export function placeCentredRight(
     const rect = candidates.find((r) => containsRect(workArea, r) && !overlapsAny(r, avoid));
     if (rect) return { rect, placement: "right", scale, connector: null };
   }
-  return { rect: preferred(scaled(size, SHRINK)), placement: "right", scale: SHRINK, connector: null };
+  const scale = Math.min(SHRINK, fitScale(size, workArea, gap));
+  return { rect: preferred(scaled(size, scale)), placement: "right", scale, connector: null };
 }
 
 export interface PointerPlacement {
@@ -200,10 +207,15 @@ export function pointerPlacement(
     { d: rightOf(displayBounds) - tap.x, entry: { x: rightOf(displayBounds) + pointerSize, y: tap.y } },
     { d: tap.y - displayBounds.y, entry: { x: tap.x, y: displayBounds.y - pointerSize } },
     { d: bottomOf(displayBounds) - tap.y, entry: { x: tap.x, y: bottomOf(displayBounds) + pointerSize } },
-  ];
-  const nearest = edges.reduce((best, e) => (e.d < best.d ? e : best));
-  const entry = nearest.entry;
+  ].sort((a, b) => a.d - b.d);
 
+  // Nearest edge first, but only where the resting pointer stays fully on the display (a target
+  // hugging the left edge gets its pointer from another side instead of resting off-screen).
+  const candidates = edges.map((e) => placeFrom(e.entry, tap, target, pointerSize));
+  return candidates.find((c) => containsRect(displayBounds, c.body)) ?? candidates[0]!;
+}
+
+function placeFrom(entry: Point, tap: Point, target: Rect, pointerSize: number): PointerPlacement {
   const dx = tap.x - entry.x;
   const dy = tap.y - entry.y;
   const len = Math.hypot(dx, dy) || 1;

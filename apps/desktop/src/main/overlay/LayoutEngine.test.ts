@@ -244,57 +244,66 @@ describe("pointerPlacement", () => {
   const display = r(0, 0, 1000, 800);
 
   it("enters from the left for a target near the left edge", () => {
-    const p = pointerPlacement(r(100, 380, 100, 40), display);
+    const p = pointerPlacement(r(150, 380, 100, 40), display);
     expect(p.entry).toEqual({ x: -96, y: 400 });
-    expect(p.tap).toEqual({ x: 150, y: 400 });
-    expect(p.rest).toEqual({ x: 92, y: 400 });
+    expect(p.tap).toEqual({ x: 200, y: 400 });
+    expect(p.rest).toEqual({ x: 142, y: 400 });
     expect(p.angle).toBe(0);
-    expect(p.body).toEqual(r(-4, 352, 96, 96));
+    expect(p.body).toEqual(r(46, 352, 96, 96));
   });
 
   it("enters from the right (pointing left)", () => {
-    const p = pointerPlacement(r(800, 380, 100, 40), display);
+    const p = pointerPlacement(r(750, 380, 100, 40), display);
     expect(p.entry).toEqual({ x: 1096, y: 400 });
-    expect(p.rest).toEqual({ x: 908, y: 400 });
+    expect(p.rest).toEqual({ x: 858, y: 400 });
     expect(p.angle).toBe(180);
-    expect(p.body).toEqual(r(908, 352, 96, 96));
+    expect(p.body).toEqual(r(858, 352, 96, 96));
   });
 
   it("enters from the top (pointing down)", () => {
-    const p = pointerPlacement(r(480, 50, 40, 100), display);
+    const p = pointerPlacement(r(480, 120, 40, 100), display);
     expect(p.entry).toEqual({ x: 500, y: -96 });
-    expect(p.rest).toEqual({ x: 500, y: 42 });
+    expect(p.rest).toEqual({ x: 500, y: 112 });
     expect(p.angle).toBe(90);
-    expect(p.body).toEqual(r(452, -54, 96, 96));
+    expect(p.body).toEqual(r(452, 16, 96, 96));
   });
 
   it("enters from the bottom (pointing up)", () => {
-    const p = pointerPlacement(r(480, 650, 40, 100), display);
+    const p = pointerPlacement(r(480, 580, 40, 100), display);
     expect(p.entry).toEqual({ x: 500, y: 896 });
-    expect(p.rest).toEqual({ x: 500, y: 758 });
+    expect(p.rest).toEqual({ x: 500, y: 688 });
     expect(p.angle).toBe(-90);
+  });
+
+  it("a target hugging an edge gets its pointer from another side, so it never rests off-screen", () => {
+    const hug = r(5, 380, 100, 40); // nearest edge is left, but there is no room left of it
+    const p = pointerPlacement(hug, display);
+    expect(p.entry.x).not.toBe(-96); // not from the left edge
+    expect(p.angle).toBe(90); // the next-nearest edge with room: the top
+    expect(containsRect(display, p.body)).toBe(true);
   });
 
   it("works on a display with a negative origin", () => {
     const neg = r(-1920, -200, 1920, 1080);
-    const target = r(-1900, 0, 100, 50);
+    const target = r(-1750, 0, 100, 50);
     const p = pointerPlacement(target, neg);
     expect(p.entry).toEqual({ x: -2016, y: 25 });
     expect(containsPoint(neg, p.entry)).toBe(false);
     expect(containsPoint(target, p.rest)).toBe(false);
-    expect(p.rest).toEqual({ x: -1908, y: 25 });
+    expect(p.rest).toEqual({ x: -1758, y: 25 });
     expect(p.angle).toBe(0);
+    expect(containsRect(neg, p.body)).toBe(true);
   });
 
   it("negative origin above the primary: enters from the top edge", () => {
     const neg = r(0, -1080, 1920, 1080);
-    const target = r(900, -1060, 100, 40);
+    const target = r(900, -960, 100, 40);
     const p = pointerPlacement(target, neg);
     expect(p.entry.y).toBe(-1080 - 96);
     expect(p.angle).toBe(90);
   });
 
-  it("entry is always outside the display and rest outside the target", () => {
+  it("entry is always outside the display and rest outside the target (even in corners)", () => {
     const targets = [r(5, 5, 30, 30), r(960, 5, 30, 30), r(5, 760, 30, 30), r(960, 760, 30, 30), r(480, 380, 40, 40)];
     for (const t of targets) {
       const p = pointerPlacement(t, display);
@@ -307,7 +316,7 @@ describe("pointerPlacement", () => {
   });
 
   it("rest lies on the entry→tap line", () => {
-    const p = pointerPlacement(r(100, 380, 100, 40), display);
+    const p = pointerPlacement(r(150, 380, 100, 40), display);
     expect(p.rest.y).toBe(p.entry.y);
   });
 
@@ -318,9 +327,17 @@ describe("pointerPlacement", () => {
   });
 
   it("small targets rest 8 DIP outside", () => {
-    const p = pointerPlacement(r(496, 396, 8, 8), display); // nearest edge: left? d=500 left, 500 right, 400 top
+    const p = pointerPlacement(r(496, 396, 8, 8), display);
     expect(p.entry).toEqual({ x: 500, y: -96 });
     expect(p.rest).toEqual({ x: 500, y: 400 - 4 - 8 });
+  });
+});
+
+describe("placeBeside: oversized boxes", () => {
+  it("scales a box taller than the work area down until it fits", () => {
+    const res = placeBeside({ target: r(400, 350, 100, 100), size: { width: 520, height: 1037 }, workArea: r(0, 0, 1000, 800) });
+    expect(containsRect(r(0, 0, 1000, 800), res.rect)).toBe(true);
+    expect(res.scale).toBeLessThan(0.8);
   });
 });
 

@@ -58,6 +58,7 @@ export class OverlayWindowManager implements SceneSink {
   private seq = 0;
   private paintedListeners = new Set<(ids: string[]) => void>();
   private hiddenDepth = 0;
+  private hiddenSettled: Promise<void> = Promise.resolve();
   private disposeDisplayListener: (() => void) | null = null;
 
   constructor(
@@ -107,9 +108,11 @@ export class OverlayWindowManager implements SceneSink {
     this.hiddenDepth += 1;
     if (this.hiddenDepth === 1) {
       for (const w of this.windows.values()) if (!w.win.isDestroyed()) w.win.setOpacity(0);
-      await delay(COMPOSITION_SETTLE_MS);
+      this.hiddenSettled = delay(COMPOSITION_SETTLE_MS);
     }
     try {
+      // Every concurrent caller waits until the hide has reached the screen.
+      await this.hiddenSettled;
       return await fn();
     } finally {
       this.hiddenDepth -= 1;

@@ -16,11 +16,12 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { DisplayInfo, OverlayControl, OverlayEvent } from "@pointy/shared/overlay";
 
-export const DEV_SERVER_FILE = join(homedir(), ".pointy", "dev-server.json");
+/** Connection file for the CLI (POINTY_DEV_FILE overrides, e.g. so e2e runs never touch a dev session). */
+export const DEV_SERVER_FILE = process.env.POINTY_DEV_FILE ?? join(homedir(), ".pointy", "dev-server.json");
 const MAX_BODY = 256 * 1024;
 
 export interface DevServerDeps {
@@ -130,7 +131,7 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
     server.listen(port, "127.0.0.1", () => resolve());
   });
   const actualPort = (server.address() as { port: number }).port;
-  mkdirSync(join(homedir(), ".pointy"), { recursive: true, mode: 0o700 });
+  mkdirSync(dirname(DEV_SERVER_FILE), { recursive: true, mode: 0o700 });
   writeFileSync(DEV_SERVER_FILE, JSON.stringify({ port: actualPort, token, pid: process.pid }), { mode: 0o600 });
   chmodSync(DEV_SERVER_FILE, 0o600);
 

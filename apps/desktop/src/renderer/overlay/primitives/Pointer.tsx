@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { PointerItem } from "@pointy/shared/overlay/render";
 import { totalMs } from "../pointerTimeline";
+import { Connector } from "./Connector";
 import { Label } from "./Label";
 
 /**
@@ -40,6 +41,11 @@ export function PointerView({ item }: { item: PointerItem }) {
           <Arrow />
         </div>
       </div>
+      {item.label?.connector ? (
+        <svg className="layer label-late" width="1" height="1" aria-hidden="true">
+          <Connector segment={item.label.connector} />
+        </svg>
+      ) : null}
       {item.label ? <Label label={item.label} className="label-late" /> : null}
     </div>
   );

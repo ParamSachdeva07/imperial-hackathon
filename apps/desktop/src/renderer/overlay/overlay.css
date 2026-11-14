@@ -162,6 +162,15 @@ body,
 .connector-dot { fill: #111827; }
 
 /* ---------- pointer ---------- */
+/* Registered so a moved target's resting position glides over theme moveMs (150 ms), not jumps. */
+@property --p-rest-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-rest-y { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-tap-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-tap-y { syntax: "<length>"; inherits: true; initial-value: 0px; }
+.ptr {
+  transition: --p-rest-x var(--move-ms, 150ms) ease-out, --p-rest-y var(--move-ms, 150ms) ease-out,
+    --p-tap-x var(--move-ms, 150ms) ease-out, --p-tap-y var(--move-ms, 150ms) ease-out;
+}
 .ptr {
   position: absolute;
   left: 0;

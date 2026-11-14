@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(import.meta.url), "../..");
 const cli = join(root, "node_modules/.bin/pointy-draw");
-const devFile = join(homedir(), ".pointy", "dev-server.json");
+// Isolated port + connection file, so e2e never collides with a running dev/voice session.
+const devFile = join(homedir(), ".pointy", "dev-server.e2e.json");
+process.env.POINTY_DEV_FILE = devFile;
+process.env.POINTY_DEV_PORT = process.env.POINTY_E2E_PORT ?? "47616";
 const electron = join(root, "node_modules/.bin/electron");
 
 let failures = 0;

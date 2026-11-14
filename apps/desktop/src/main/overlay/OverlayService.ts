@@ -87,6 +87,15 @@ interface Live {
 const EXIT_MARGIN_MS = 50;
 
 type Caller = "user" | "model" | "controller";
+type ResolveFailureReason = "target_not_found" | "target_offscreen" | "display_not_found";
+
+/** How long a step that isn't on screen yet may take to appear after the guide advances to it. */
+const STEP_APPEAR_GRACE_MS = 2000;
+
+const lastStepElement = (input: ShowStepsInput): string[] => {
+  const last = input.steps[input.steps.length - 1]?.target;
+  return last?.kind === "element" ? [last.elementId] : [];
+};
 export interface ToolCallOptions {
   caller?: Caller;
 }
@@ -113,6 +122,8 @@ export class OverlayService implements OverlayControl {
   private readonly live = new Map<string, Live>();
   private readonly listeners = new Set<(e: OverlayEvent) => void>();
   private readonly disposers: (() => void)[] = [];
+  /** Bumped by clear("all") and new turns: tool calls still resolving targets are then dropped. */
+  private epoch = 0;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
@@ -171,6 +182,7 @@ export class OverlayService implements OverlayControl {
   }
 
   onTurnStart(turnId: string): void {
+    this.epoch += 1;
     this.expiry.onTurnStart(turnId);
     for (const id of this.manager.endTurn()) this.endLive(id);
   }
@@ -224,12 +236,17 @@ export class OverlayService implements OverlayControl {
   private async show(toolName: Live["toolName"], input: Live["input"]): Promise<ToolResult> {
     const slots = this.slotsFor(toolName, input);
     const resolved = new Map<Slot, ResolvedTarget | null>();
+    const failures = new Map<Slot, ResolveFailureReason>();
+    const epoch = this.epoch;
     const results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
+    // clear("all") or a new turn arrived while we were resolving: this call is stale.
+    if (epoch !== this.epoch) return { ok: true, visible: false };
     for (const [slot, r] of results) {
       if (r.ok) {
         resolved.set(slot, r.target);
       } else {
         resolved.set(slot, null);
+        failures.set(slot, r.reason);
         if (this.isRequired(toolName, slot, input)) return { ok: true, visible: false, reason: r.reason };
       }
     }
@@ -278,8 +295,10 @@ export class OverlayService implements OverlayControl {
       id,
       expires: this.expiryFor(toolName, input),
       // Step guides advance on selection instead of expiring on it.
-      elementIds: toolName === "show_steps" ? [] : [...elements.keys()],
-      coordinateOnly: placementTargets(slots).length > 0 && placementTargets(slots).every(isCoordinateOnly),
+      // A step guide "selected" means its LAST step was selected (earlier selections advance it).
+      elementIds: toolName === "show_steps" ? lastStepElement(input as ShowStepsInput) : [...elements.keys()],
+      // Any coordinate target goes stale on a context change (spec §5.4), even next to element targets.
+      coordinateOnly: placementTargets(slots).some(isCoordinateOnly),
     });
     if (elements.size) {
       const initial = new Map<string, ElementBounds>();
@@ -293,8 +312,9 @@ export class OverlayService implements OverlayControl {
 
     if (l.explainer) this.loadExplainerAsync(l);
 
-    const anchorMissing = toolName === "show_explainer" && slots.has("anchor") && !resolved.get("anchor");
-    return ok(id, this.primaryBounds(l), anchorMissing ? { reason: "target_not_found" } : {});
+    // A card whose anchor can't be resolved is still shown (centred-right); report why it's unanchored.
+    const anchorFailure = toolName === "show_explainer" ? failures.get("anchor") : undefined;
+    return ok(id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
   }
 
   private slotsFor(toolName: Live["toolName"], input: Live["input"]): Map<Slot, Target> {
@@ -339,6 +359,7 @@ export class OverlayService implements OverlayControl {
 
   private clear(overlayId: string, by: Caller): ToolResult {
     if (overlayId === "all") {
+      this.epoch += 1;
       for (const l of [...this.live.values()]) if (!l.ended) this.dismiss(l.id, by, "cleared");
       return { ok: true, visible: false };
     }
@@ -365,7 +386,22 @@ export class OverlayService implements OverlayControl {
     this.emit({ type: "steps.advanced", stepsId, index: l.steps.current });
     this.layout(l);
     this.publish();
+    this.checkCurrentStepAppears(l);
     return ok(stepsId, this.primaryBounds(l), { visible: !!l.resolved.get(`step:${l.steps.current}`) });
+  }
+
+  /**
+   * After advancing to a step whose element isn't on screen yet (it may appear once the previous
+   * step is done), give it a grace period; if it still hasn't appeared, the guide is lost.
+   */
+  private checkCurrentStepAppears(l: Live): void {
+    if (!l.steps || l.steps.completed || l.resolved.get(`step:${l.steps.current}`)) return;
+    const index = l.steps.current;
+    this.clock.setTimeout(() => {
+      if (l.ended || !l.steps || l.steps.current !== index || l.resolved.get(`step:${index}`)) return;
+      this.emit({ type: "overlay.target_lost", overlayId: l.id });
+      this.fadeOut(l.id);
+    }, STEP_APPEAR_GRACE_MS);
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -448,16 +484,17 @@ export class OverlayService implements OverlayControl {
     const l = this.live.get(id);
     if (!l || l.ended) return;
     const slots = l.elements.get(elementId) ?? [];
-    for (const s of slots) l.resolved.set(s, null);
     // Steps survive the loss of a non-current step (it may only appear later).
     const critical =
       l.steps !== undefined
         ? !l.steps.completed && slots.includes(`step:${l.steps.current}`)
         : slots.some((s) => s === "target" || s === "dragTo" || s === "anchor");
     if (critical) {
+      // Keep the last geometry so the whole annotation fades out together (spec §5.4).
       this.emit({ type: "overlay.target_lost", overlayId: id });
       this.fadeOut(id);
     } else {
+      for (const s of slots) l.resolved.set(s, null);
       this.layout(l);
       this.publish();
     }
