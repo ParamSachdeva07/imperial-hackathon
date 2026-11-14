@@ -6,7 +6,8 @@
   "exports": {
     "./overlay": "./src/overlay/index.ts",
     "./overlay/*": "./src/overlay/*.ts",
-    "./node/*": "./src/node/*.ts"
+    "./node/*": "./src/node/*.ts",
+    "./context/*": "./src/context/*.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
