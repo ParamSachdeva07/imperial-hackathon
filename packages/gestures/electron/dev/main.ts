@@ -11,9 +11,12 @@
  *   POINTY_GESTURES_SELFTEST=1   synthetic hands instead of the camera; checks the pipeline and exits
  *   POINTY_GESTURES_NO_FEEDBACK=1  don't show the on-screen cursor / trail / rings
  *   POINTY_GESTURES_CAPTURABLE=1   let screenshots include the feedback overlay (it's hidden from captures by default)
+ *   POINTY_GESTURES_ZONE=x0,y0,x1,y1  part of the camera image mapped to the whole screen (0..1, default 0.15,0.2,0.85,0.7);
+ *                                  lower y0 if the top of the screen is too high to reach, raise y1 for the bottom
  */
 import { join } from "node:path";
 import { app, screen, type BrowserWindow } from "electron";
+import type { ActiveZone } from "../../src/config";
 import type { GestureEvent } from "../../src/events";
 import { toMousePoint } from "../../src/electron/coords";
 import { startGestureFeedback, type GestureFeedback } from "../../src/electron/feedback";
@@ -25,6 +28,24 @@ import { SELFTEST_DURATION_MS } from "./selftest";
 const env = (name: string) => process.env[name];
 const selfTest = env("POINTY_GESTURES_SELFTEST") === "1";
 const log = (msg: string) => console.log(`[gestures] ${msg}`);
+
+/** POINTY_GESTURES_ZONE="x0,y0,x1,y1" (normalized camera coordinates), or undefined. */
+function zoneFromEnv(): ActiveZone | undefined {
+  const raw = env("POINTY_GESTURES_ZONE");
+  if (!raw) return undefined;
+  const n = raw.split(",").map((v) => Number(v.trim()));
+  const [x0, y0, x1, y1] = n;
+  const ok =
+    n.length === 4 &&
+    n.every((v) => Number.isFinite(v) && v >= 0 && v <= 1) &&
+    x0 !== undefined && y0 !== undefined && x1 !== undefined && y1 !== undefined &&
+    x1 - x0 >= 0.1 && y1 - y0 >= 0.1;
+  if (!ok) {
+    log(`ignoring POINTY_GESTURES_ZONE="${raw}" (expected x0,y0,x1,y1 between 0 and 1, e.g. 0.15,0.2,0.85,0.7)`);
+    return undefined;
+  }
+  return { x0: x0!, y0: y0!, x1: x1!, y1: y1! };
+}
 
 function loadPage(win: BrowserWindow, page: "vision" | "feedback", query = ""): Promise<void> {
   const devUrl = env("ELECTRON_RENDERER_URL");
@@ -42,11 +63,14 @@ function loadVisionPage(win: BrowserWindow): Promise<void> {
 async function main(): Promise<void> {
   await app.whenReady();
 
+  const zone = zoneFromEnv();
   const service = await startGestureService({
     preloadPath: join(__dirname, "../preload/gestures.cjs"),
     loadPage: loadVisionPage,
     showWindow: env("POINTY_GESTURES_SHOW") === "1",
+    ...(zone ? { config: { activeZone: zone } } : {}),
   });
+  if (zone) log(`active zone: x ${zone.x0}–${zone.x1}, y ${zone.y0}–${zone.y1} of the camera image`);
   app.on("before-quit", () => service.dispose());
 
   // Subscribe right away: the camera is already running, a wake must not be missed.

@@ -189,9 +189,9 @@ describe("pointing", () => {
     expect(ofType(evs, "region_selected")).toHaveLength(0);
     const pts = ofType(evs, "point_selected");
     expect(pts).toHaveLength(1);
-    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.1)/0.6·900 = 450
+    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.2)/0.5·900 = 360
     expect(at(pts, 0).x).toBeCloseTo(926, -1);
-    expect(at(pts, 0).y).toBeCloseTo(450, -1);
+    expect(at(pts, 0).y).toBeCloseTo(360, -1);
     expect(at(pts, 0).displayId).toBe(1);
   });
 
@@ -238,11 +238,11 @@ describe("circling", () => {
     const regions = ofType(evs, "region_selected");
     expect(regions).toHaveLength(1);
     const { bbox, polygon } = at(regions, 0);
-    // radius 0.12 → ≈247 pt horizontally, 180 pt vertically → bbox ≈ 494 × 360
+    // radius 0.12 → ≈247 pt horizontally, 216 pt vertically → bbox ≈ 494 × 432
     expect(bbox.width).toBeGreaterThan(400);
     expect(bbox.width).toBeLessThan(560);
-    expect(bbox.height).toBeGreaterThan(290);
-    expect(bbox.height).toBeLessThan(400);
+    expect(bbox.height).toBeGreaterThan(360);
+    expect(bbox.height).toBeLessThan(480);
     expect(polygon.length).toBeGreaterThan(6);
     expect(polygon.length).toBeLessThan(60); // simplified
     // Convex hull → never self-intersecting: every turn has the same orientation.
@@ -580,9 +580,9 @@ describe("scroll", () => {
     expect(at(sc, 0).phase).toBe("start");
     expect(at(sc, sc.length - 1).phase).toBe("end");
     const dy = sc.filter((e) => e.phase === "move").reduce((s, e) => s + e.dy, 0);
-    // 0.2 of the frame over a 0.6-high zone on a 900-pt display ≈ 300 pt, hand moved down → dy > 0
-    expect(dy).toBeGreaterThan(250);
-    expect(dy).toBeLessThan(320);
+    // 0.2 of the frame over a 0.5-high zone on a 900-pt display = 360 pt, hand moved down → dy > 0
+    expect(dy).toBeGreaterThan(300);
+    expect(dy).toBeLessThan(380);
     expect(ofType(evs, "cursor_moved")).toHaveLength(0);
   });
 
@@ -610,9 +610,9 @@ describe("scroll", () => {
     const open = frames(500, 500, () => [palmAt("Right", 0.5, 0.5)]);
     const sc = ofType(run(it, [...drag, ...open]), "scroll");
     const dy = sc.reduce((sum, e) => sum + e.dy, 0);
-    // hand travelled 0.2 / 0.6 × 900 = 300 pt (minus what moved before the fist was confirmed)
-    expect(dy).toBeGreaterThan(260);
-    expect(dy).toBeLessThanOrEqual(301);
+    // hand travelled 0.2 / 0.5 × 900 = 360 pt (minus what moved before the fist was confirmed)
+    expect(dy).toBeGreaterThan(310);
+    expect(dy).toBeLessThanOrEqual(361);
     expect(at(sc, sc.length - 1).phase).toBe("end");
   });
 

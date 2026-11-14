@@ -113,7 +113,7 @@ POINTY_GESTURES_SHOW=1 npm run electron -w @pointy/gestures  # debug window: cam
 npm run electron:selftest -w @pointy/gestures                # synthetic hands, checks the whole pipeline, exits 0/1
 ```
 
-Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
+Other flags: `POINTY_GESTURES_NO_MOUSE=1`, `POINTY_GESTURES_NO_FEEDBACK=1`, `POINTY_GESTURES_CAPTURABLE=1` (let your own screenshots include the feedback overlay), `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen), `POINTY_GESTURES_IDLE_MS=…`. In PowerShell, set them with `$env:POINTY_GESTURES_SHOW=1` before the command.
 
 Notes:
 - Bundle `nut-js` as external (`rollupOptions.external`): it ships a native addon.
@@ -130,7 +130,7 @@ In Electron, skip the bridge: on a `mouse` event the main process converts (x, y
 
 ## Calibration
 
-`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is the central 70 % × 60 % of the camera frame.
+`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is x 15–85 %, y 20–70 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
 
 ## Tuning
 
