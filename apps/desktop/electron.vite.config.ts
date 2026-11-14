@@ -3,13 +3,17 @@ import { defineConfig } from "electron-vite";
 import react from "@vitejs/plugin-react";
 
 // @pointy/shared is TypeScript source in the workspace, so it must be bundled, not externalized.
-const bundleWorkspace = { exclude: ["@pointy/shared"] };
+// @pointy/gestures is TS source too (its nut-js mouse addon stays external, see main.rollupOptions).
+const bundleWorkspace = { exclude: ["@pointy/shared", "@pointy/gestures"] };
 
 export default defineConfig({
   main: {
     build: {
       externalizeDeps: bundleWorkspace,
-      rollupOptions: { input: { index: resolve(__dirname, "src/main/index.ts") } },
+      rollupOptions: {
+        input: { index: resolve(__dirname, "src/main/index.ts") },
+        external: [/^@nut-tree-fork\//], // native addon: loaded lazily at runtime, never bundled
+      },
     },
   },
   preload: {
@@ -22,6 +26,8 @@ export default defineConfig({
           overlay: resolve(__dirname, "src/preload/overlay.ts"),
           fixture: resolve(__dirname, "src/preload/fixture.ts"),
           voice: resolve(__dirname, "src/preload/voice.ts"),
+          gestures: resolve(__dirname, "src/preload/gestures.ts"),
+          gestureFeedback: resolve(__dirname, "src/preload/gestureFeedback.ts"),
         },
       },
     },
@@ -38,6 +44,8 @@ export default defineConfig({
           fixture: resolve(__dirname, "src/renderer/fixture/index.html"),
           gallery: resolve(__dirname, "src/renderer/gallery/index.html"),
           voice: resolve(__dirname, "src/renderer/voice/index.html"),
+          gestures: resolve(__dirname, "src/renderer/gestures/index.html"),
+          gestureFeedback: resolve(__dirname, "src/renderer/gestureFeedback/index.html"),
         },
       },
     },

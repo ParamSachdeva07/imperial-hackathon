@@ -16,6 +16,16 @@
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
  *   POINTY_REDUCE_MOTION=1  force reduce-motion
  *   POINTY_PROBE=1          overlay windows draw a fixed ring only (canvas check)
+ *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
+ *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
+ *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
+ *   POINTY_GESTURES_MOUSE=1 let gestures drive the real OS mouse/clicks, only while the session is open
+ *   POINTY_GESTURES_IDLE_MS gesture session idle timeout (default 20000)
+ *                           The user's own hand drawing (cursor, trail, rings, wake ring, selection) is the
+ *                           gestures package's feedback window (contentProtection follows POINTY_CAPTURABLE);
+ *                           the AI overlay draws none of it.
+ *   (no flag needed to simulate gestures without a camera: dev server POST /gesture, CLI
+ *   `pointy-draw gesture ...`; the feedback window then starts lazily on the first call)
  *   POINTY_DEV_PORT / POINTY_DEV_FILE   dev server port / connection file (isolated test runs)
  */
 import { join, resolve } from "node:path";
@@ -29,11 +39,21 @@ import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
 import { MockScreenCaptureProvider } from "./overlay/mocks/MockScreenCaptureProvider";
 import { ElectronScreen, OverlayWindowManager } from "./overlay/OverlayWindowManager";
 import { getOverlayPlatform } from "./overlay/platform";
+import type { ScreenCaptureProvider } from "@pointy/shared/overlay";
+import { hideFeedbackDuringCapture } from "./gestures/captureHiding";
+import { feedbackCaptureHiding } from "./gestures/feedbackHost";
+import { registerGestureAssetScheme, startGestures, type GesturesHandle } from "./gestures/startGestures";
 import { PRELOAD_DIR } from "./rendererPages";
 import { installDevLogging, startDevHarness } from "../dev/devHarness";
 
 const repoRoot = resolve(__dirname, "../../../..");
 const env = (name: string) => process.env[name];
+
+// Privileged schemes must be registered before app ready.
+registerGestureAssetScheme();
+
+/** Gesture layer (null unless POINTY_GESTURES=1). */
+let gestures: GesturesHandle | null = null;
 
 const PROBE_HTML = `<!doctype html><html><body style="margin:0;background:transparent">
 <svg width="100%" height="100%" style="position:fixed;inset:0">
@@ -72,9 +92,14 @@ async function main(): Promise<void> {
   const anam = env("POINTY_AVATAR") === "mock" ? null : new AnamAvatarClient();
   anam?.start();
 
+  // Gesture feedback lives in its own windows, which the overlay's hideDuringCapture does not know:
+  // hide them around every capture too when that flag is on.
+  const hideFeedback = (p: ScreenCaptureProvider): ScreenCaptureProvider =>
+    env("POINTY_HIDE_DURING_CAPTURE") === "1" ? hideFeedbackDuringCapture(p, feedbackCaptureHiding) : p;
+
   const overlay = createOverlayControl({
     boundsProvider,
-    captureProvider: new MockScreenCaptureProvider(() => displays.getDisplays()),
+    captureProvider: hideFeedback(new MockScreenCaptureProvider(() => displays.getDisplays())),
     avoidRects: anam ? new CompositeAvoidRects(anam, new MockAvoidRects(primary)) : new MockAvoidRects(primary),
     ...(anam ? { avatar: anam } : {}),
     assetsDir,
@@ -85,7 +110,9 @@ async function main(): Promise<void> {
       forceReduceMotion: env("POINTY_REDUCE_MOTION") === "1",
     },
   });
+  gestures = await startGestures({ repoRoot });
   app.on("before-quit", () => {
+    gestures?.dispose(); // feedback window first, then the gesture service (see startGestures)
     anam?.dispose();
     overlay.dispose();
   });
@@ -98,6 +125,7 @@ async function main(): Promise<void> {
       assetsDir,
       openFixture: env("POINTY_NO_FIXTURE") !== "1",
       openVoice: env("POINTY_VOICE") === "1",
+      gestures: gestures ? { sim: gestures.sim, session: gestures.session } : null,
     });
   }
   console.log(`[pointy] overlay ready (contentProtection=${contentProtection})`);

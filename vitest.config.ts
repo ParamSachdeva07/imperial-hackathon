@@ -45,6 +45,14 @@ export default defineConfig({
       },
       {
         test: {
+          name: "gestures",
+          root: "./packages/gestures",
+          include: ["test/**/*.test.ts"],
+          environment: "node",
+        },
+      },
+      {
+        test: {
           name: "scripts",
           root: "./scripts",
           include: ["**/*.test.ts"],

@@ -8,8 +8,11 @@ import { delay } from "@pointy/shared/node/env";
 import { readManifestPrompts } from "../main/overlay/explainer/manifest";
 import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
 import type { OverlayHandle, ScreenSource } from "../main/overlay";
+import { launchGestureFeedback, primaryDisplayInfo } from "../main/gestures/feedbackHost";
+import { SimGestureService } from "../main/gestures/SimGestureService";
 import { loadRendererPage, PRELOAD_DIR } from "../main/rendererPages";
 import { startDevServer } from "./devServer";
+import { assertEventsForDisplay, GestureBody, GestureSessionBody } from "./gestureSchema";
 import { openFixtureWindow } from "./fixtureWindow";
 import { openVoiceWindow } from "./realtime/voiceWindow";
 
@@ -20,6 +23,12 @@ export interface DevHarnessOptions {
   assetsDir: string;
   openFixture: boolean;
   openVoice: boolean;
+  /**
+   * The real gesture layer (POINTY_GESTURES=1), else null. Real: POST /gesture is merged into its
+   * feedback window and session controller. Null: the feedback window is started lazily on the first
+   * /gesture or /gesture/session call, driven by a standalone simulation.
+   */
+  gestures?: { sim: SimGestureService; session: { open(): void; close(): void } } | null;
 }
 
 /**
@@ -85,6 +94,25 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
 
   overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
 
+  // Camera-free gestures drive the gestures package's own feedback window (not the AI overlay). With the
+  // real layer running they are merged into it; otherwise a standalone simulation + window start lazily.
+  let lazySim: Promise<SimGestureService> | null = null;
+  const lazyStop: (() => void)[] = [];
+  const ensureSim = (): Promise<SimGestureService> => {
+    if (opts.gestures) return Promise.resolve(opts.gestures.sim);
+    lazySim ??= (async () => {
+      const svc = new SimGestureService({ display: primaryDisplayInfo });
+      lazyStop.push(() => svc.dispose());
+      const feedback = await launchGestureFeedback(svc, process.env, (m) => console.log(`[gestures] ${m}`));
+      if (feedback) lazyStop.unshift(() => feedback.dispose());
+      return svc;
+    })();
+    return lazySim;
+  };
+  app.on("before-quit", () => {
+    for (const d of lazyStop.splice(0)) d();
+  });
+
   // A dev-server problem (e.g. port in use) must not stop the overlay or the voice window.
   const server = await startDevServer({
     control: overlay.control,
@@ -96,6 +124,23 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
       "/fixture": async () => {
         await ensureFixture();
         return { ok: true, elements: boundsProvider.listElementIds().length };
+      },
+      "/gesture": async (body) => {
+        const b = GestureBody.parse(body);
+        const sim = await ensureSim();
+        assertEventsForDisplay(b.events, sim.display.id); // the feedback window covers one display only
+        void sim.play(b.events, b.intervalMs);
+        return { ok: true, count: b.events.length, real: Boolean(opts.gestures) };
+      },
+      "/gesture/session": async (body) => {
+        const { active } = GestureSessionBody.parse(body);
+        if (opts.gestures) {
+          if (active) opts.gestures.session.open();
+          else opts.gestures.session.close();
+        } else {
+          (await ensureSim()).setSessionActive(active);
+        }
+        return { ok: true, active, real: Boolean(opts.gestures) };
       },
     },
   }).catch((err: unknown) => {

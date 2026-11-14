@@ -2,7 +2,9 @@
 
 This file says what has been merged into `main` and how, and how the pieces talk to each other. It also covers how to keep re-merging the feature branches as their owners push fixes. **Read this before touching an integration.**
 
-Last updated: 2026-11-14. Integration branch: `integration/overlay-anam`.
+Last updated: 2026-11-14. Integration branches:
+- `integration/overlay-anam` (stage 1, merged in PR #2);
+- `integration/gestures` (stage 2).
 
 ---
 
@@ -10,10 +12,10 @@ Last updated: 2026-11-14. Integration branch: `integration/overlay-anam`.
 
 | Branch | What it is | Status |
 |---|---|---|
-| `main` | Integration target. Work lands via PRs. | Receives `integration/overlay-anam` |
+| `main` | Integration target. Work lands via PRs. | Has stage 1 (PR #2). Receives `integration/gestures` |
 | `feat/overlay-tools` | **Pointy overlay**: the Electron app `apps/desktop`, the tool contract `packages/shared`, the explainer broker `backend/explainer-broker` and the dev CLI `tools/pointy-draw`. | ✅ Merged (stage 1) |
 | `feat/anam-overlay` | **Anam avatar**: the standalone Electron app in `anam-overlay/` (React and Vite) plus a FastAPI token broker on :8765. Its single commit sits on top of overlay-tools and adds only `anam-overlay/`. | ✅ Merged (stage 1) |
-| `feat/gestures-integration` | `packages/gestures`: camera hand tracking that becomes events, plus an Electron gesture service. Based on overlay-tools@2d3c0b5. It touches only `packages/gestures/`, root `vitest.config.ts` (adds a `gestures` project) and `package-lock.json`. | ⏳ Stage 2, not merged yet |
+| `feat/gestures-integration` | `packages/gestures`: camera hand tracking that becomes events, plus an Electron gesture service. Based on overlay-tools@2d3c0b5. It touches only `packages/gestures/`, root `vitest.config.ts` (adds a `gestures` project) and `package-lock.json`. Owner: Alexandre. | ✅ Merged and wired (stage 2, §8) |
 | `feat/gestures` | An older, standalone version of the gestures package with unrelated history. | ❌ Superseded by `feat/gestures-integration`; do not merge |
 | (later) Jev AI / brain | The controller and model brain. | ⏳ Not started; see §7 |
 
@@ -148,10 +150,13 @@ Better still: ask the owners to merge `main` back into their branches once this 
 
 ## 7. Known gaps / next steps
 
-- **Stage 2, gestures:**
-  - Merge `origin/feat/gestures-integration`. Expect conflicts only in `vitest.config.ts` (keep both projects) and `package-lock.json` (regenerate).
-  - Then wire it into `apps/desktop` per `packages/gestures/GESTURES_HANDOFF.md` §6: preload and renderer entries, `startGestureService` in `main/index.ts`, wasm and model serving, and `NSCameraUsageDescription`.
-  - Watch for camera contention with the Anam call.
+- **Gestures (stage 2 open items; see §8.6).** These still need a person to check:
+  - packaged-app camera and Accessibility permissions, including `NSCameraUsageDescription`;
+  - `electron-vite dev` with the gestures page;
+  - the real nut-js mouse;
+  - thresholds tuned for older users;
+  - multi-display.
+  The camera doesn't clash with Anam, because Anam only asks for audio.
 - **Jev AI / brain:** not integrated. The controller should use `exportToolDefinitions()` (which now includes `move_avatar`) and `createOverlayControl({ avatar })`. It should also decide whether to keep Pointy's own `POINTY_VOICE` realtime loop or let Anam be the only voice.
 - **Flaky upstream test:** `anam-overlay/tests/overlay.test.mjs:120` (`layout.width === layout.height` on the avatar circle) fails about 1 in 5 runs, off by roughly 1e-5 px mid-transition. It reproduces on the untouched `feat/anam-overlay` code, so it is not caused by this integration. Report it to the anam owner; a tolerance compare would fix it.
 - **Real home dir in anam's Playwright tests:** they launch the real app, which writes, then removes, `~/.pointy/anam-control.json`. Don't run them while a real Anam session is open, or set `ANAM_CONTROL_FILE` to a temp path.
@@ -161,3 +166,92 @@ Better still: ask the owners to merge `main` back into their branches once this 
   - No packaging: both apps run unpackaged.
   - macOS only (`apps/desktop` platform layer).
 - PR #1 (`feat/overlay-tools` → `main`) is superseded by the integration PR.
+
+## 8. Stage 2: gestures (`feat/gestures-integration`)
+
+### 8.1 What landed (branch `integration/gestures`)
+1. `Merge feat/gestures-integration`: `--no-ff`, no conflicts. `packages/gestures` is a workspace package.
+2. `chore(integration)`:
+   - `npm install` reverted the branch's unrelated lockfile churn.
+   - `apps/desktop` now depends on `@pointy/gestures`.
+3. `feat(desktop)`: the gesture **service wired into the app** (§8.2).
+4. `feat(dev)`: camera-free **simulation**, CLI and docs (§8.4).
+5. `Merge` of Alexandre's 6 new commits (his own feedback window, wake ring, fist scroll, latency).
+6. Follow-up: the in-overlay feedback layer from the first iteration (`overlay:gesture`, `GestureFeedbackBridge`, `GestureLayer`) was **removed** in favour of his window, per the agreed split (§8.3). The AI overlay is identical to `origin/main`.
+
+Nothing under `packages/gestures/` was modified. Alexandre owns it.
+
+### 8.2 Wiring (opt-in)
+**Flags:**
+- `POINTY_GESTURES=1`: starts the hidden camera window plus MediaPipe.
+- `POINTY_GESTURES_SHOW=1`: shows the vision/debug window.
+- `POINTY_GESTURES_MOUSE=1`: the real OS mouse/clicks via nut-js, **only while a session is open**. This needs the macOS Accessibility permission.
+- `POINTY_GESTURES_IDLE_MS`: the session idle timeout (default 20000).
+
+**One-time setup:** `npm run gestures:assets` copies the MediaPipe wasm and downloads the ~8 MB model into `packages/gestures/.cache/public` (gitignored). Then `npm run app:gestures` builds and runs.
+
+**Code:**
+- `apps/desktop/src/main/gestures/startGestures.ts` calls `startGestureService(...)`. It never throws, and returns `null` when the flag is off or on failure.
+- **Assets:** a privileged scheme, `pointy-gestures-assets://assets/{mediapipe-wasm,models}/…`.
+  - It is registered before ready and handled on the `pointy-gestures` session partition.
+  - It is read-only, GET/HEAD, and traversal- and symlink-safe (`assetResolver.ts`).
+  - It works from both `file://` (the built app) and the dev server.
+  - The Google model URL stays as a fallback.
+- The gestures page CSP adds `'wasm-unsafe-eval'` and `blob:` workers for MediaPipe.
+- **Session seam:** `DevSessionController.ts`.
+  - Open palm opens the session; idle or `close()` ends it.
+  - It subscribes right after `startGestureService` resolves (the service never queues events).
+  - **The brain replaces this**: subscribe to `service.on("point_selected"|"region_selected"|…)` and call `service.setSessionActive`.
+- `MouseGate.ts` attaches and detaches `attachSystemMouse` (move, click and wheel scroll) with the session, so all of it is session-gated; race-safe.
+
+### 8.3 Feedback: the agreed split and his window
+**Split** (recorded in `packages/gestures/GESTURES_HANDOFF.md`): gestures draw only what the user is doing with their hand (cursor, trail, rings, wake ring, selection) in **their own** click-through window; the AI overlay (`apps/desktop/src/main/overlay`) draws only what the AI shows. Neither draws the other's content. The overlay code is therefore untouched (identical to `origin/main`).
+
+**Wiring:**
+- `startGestures.ts` calls `startGestureFeedback(...)` (via `feedbackHost.ts`) after the session controller is subscribed. A feedback failure is logged and never stops gestures. It is disposed before the service.
+- `src/preload/gestureFeedback.ts` imports `@pointy/gestures/electron/feedback-preload`; `src/renderer/gestureFeedback/{index.html,main.ts}` call `startFeedbackRenderer()` (strict CSP, transparent body). Registered in `electron.vite.config.ts` and `rendererPages.ts`.
+- **Flag:** `contentProtection` follows `POINTY_CAPTURABLE` (default protected, so the AI never sees the drawings; `POINTY_CAPTURABLE=1` for screenshots).
+- `GesturesHandle.feedback` / `.clearSelection()`: the future brain calls it when a turn ends.
+- `GesturesHandle.captureHiding` (`getWindowIds()` / `withHidden(fn)`, pure `captureHiding.ts`) is the feedback window's counterpart of `getOverlayWindowIds()` / `withOverlayHidden()`; a capture path that ignores content protection should combine both (`combineCaptureHiding`). The window is also content-protected unless `POINTY_CAPTURABLE=1`. With `POINTY_HIDE_DURING_CAPTURE=1`, main/index.ts wraps the overlay's `captureProvider` (`hideFeedbackDuringCapture`) so every capture also hides all feedback windows (`feedbackCaptureHiding` registry, includes the lazily started simulation window). `POST /gesture` rejects events whose `displayId` is not the gesture display (the feedback window covers one display).
+
+**Simulation drives his window:** `SimGestureService` (pure) implements the `GestureService` subset the feedback window and `DevSessionController` use (`onAny`, `onSession`, `setSessionActive`, `sessionActive`, `display`).
+- With `POINTY_GESTURES=1` it **merges** the real service and the simulated events (one adapter, one window); session changes go to the real service. Simulated events never reach the real service, so they never move the real mouse.
+- Without it, the feedback window starts **lazily** on the first `/gesture` or `/gesture/session` call (no extra window in normal dev runs or e2e).
+
+### 8.4 Simulate without a camera (dev)
+- Dev server: `POST /gesture { events, intervalMs? }` takes real `@pointy/gestures` event shapes, display-relative and validated by `src/dev/gestureSchema.ts`. `POST /gesture/session { active }`.
+- CLI:
+  - `npx pointy-draw gesture wake 700,450` (wake ring, then `wake_requested`)
+  - `npx pointy-draw gesture session on`
+  - `npx pointy-draw gesture circle --center 700,450 --radius 150`
+  - `gesture dwell X,Y`, `gesture point X,Y`, `gesture lost`
+- Verified live on macOS with screenshots (`POINTY_CAPTURABLE=1`): wake ring, cursor, trail, dwell ring and region in his window; the AI overlay draws none of it.
+
+### 8.5 Re-sync hot spots (when Alexandre pushes fixes)
+- `git merge --no-ff origin/feat/gestures-integration`, then `npm install` (regenerate the lockfile, don't hand-merge it).
+- If `events.ts` changes: `src/dev/gestureSchema.ts` (its compile-time check is bidirectional, so typecheck fails until the schema equals the package union), then `tools/pointy-draw/src/gesture.ts` if a new event needs a CLI generator.
+- If the feedback exports change (`startGestureFeedback` options, `feedback-preload`, `feedback-renderer`, or which `GestureService` members it uses): `main/gestures/feedbackHost.ts`, `SimGestureService.ts`, `src/preload/gestureFeedback.ts`, `src/renderer/gestureFeedback/main.ts`.
+- If `startGestureService` options, `attachSystemMouse` options or the vision preload/renderer exports change: `startGestures.ts`, `MouseGate.ts`, `src/preload/gestures.ts`, `src/renderer/gestures/main.ts`.
+- If `copy-wasm.mjs` or `fetch-model.mjs` output paths change: `assetResolver.ts` and the root `gestures:assets` script.
+
+### 8.6 Verified / not verified
+- **Verified on macOS:**
+  - `npm run electron:selftest -w @pointy/gestures` reports SELFTEST PASSED, including the real mouse click position and fist scrolling (Accessibility granted to Electron).
+  - The built app with `POINTY_GESTURES=1`:
+    - the wasm and model load over the custom scheme;
+    - vision reaches `running` at about 30–60 fps with hands detected;
+    - his feedback window starts with `contentProtection=true`.
+  - Sim screenshots: wake ring, trail, region and dwell ring are drawn by **his** window at the right positions, and the AI overlay draws nothing.
+  - `npm run e2e`.
+- **Not verified:**
+  - `electron-vite dev` with the gesture pages;
+  - real-camera use with `POINTY_GESTURES_MOUSE=1`;
+  - packaged-app permissions (`NSCameraUsageDescription`, Accessibility);
+  - multi-display (v1 maps the primary display only; `/gesture` rejects other display ids);
+  - thresholds with older users.
+
+### 8.7 Issues to raise with Alexandre (inside `packages/gestures`; not patched here)
+Found by review. The fixes belong in his package, so we did not work around them:
+1. **`startGestureFeedback` doesn't replay the session after the feedback page reloads.** `startFeedbackRenderer` resets its `active` flag on load, but main only sends the session state at creation and on changes. After a reload during an open session, nothing draws until the session toggles. In practice this happens only on a dev hot-reload or a renderer crash. Fix: re-send the session state on `did-finish-load`, or add a renderer `ready` handshake as the vision window has.
+2. **`startGestureFeedback` leaks on a failed load.** If `loadPage` rejects (for example, the dev server is down), the window and the service/screen listeners stay alive and no disposer is returned. Fix: try/catch with cleanup.
+3. **No reduced-motion support in `startFeedbackRenderer`.** Its canvas animations ignore `prefers-reduced-motion`, unlike the AI overlay. Fix: an option or a media-query check.

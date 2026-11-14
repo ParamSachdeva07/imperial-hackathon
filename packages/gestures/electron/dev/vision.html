@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Pointy gestures (debug)</title>
+    <style>
+      body { margin: 0; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
+      #status { padding: 6px 10px; }
+    </style>
+  </head>
+  <body>
+    <div id="status">starting…</div>
+    <div style="display: flex; gap: 8px; padding: 0 8px">
+      <div id="preview" style="width: 480px; flex: none"></div>
+      <div id="side" style="flex: 1"></div>
+    </div>
+    <script type="module" src="./vision.ts"></script>
+  </body>
+</html>

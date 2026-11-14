@@ -3,13 +3,16 @@
  */
 import { parseArgs } from "node:util";
 import { parseRect } from "@pointy/shared/overlay/geometry";
+import { circleEvents, dwellEvents, FRAME_MS, lostEvents, pointEvents, wakeEvents } from "./gesture";
 
 export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "control"; body: { op: string; arg?: string } }
   | { kind: "sim"; body: Record<string, unknown> }
   | { kind: "get"; path: "/events" | "/state" | "/displays" | "/elements" }
-  | { kind: "post"; path: "/fixture"; body: Record<string, unknown> };
+  | { kind: "post"; path: "/fixture"; body: Record<string, unknown> }
+  | { kind: "post"; path: "/gesture"; body: { events: unknown[]; intervalMs: number } }
+  | { kind: "post"; path: "/gesture/session"; body: { active: boolean } };
 
 export interface ParseContext {
   primaryDisplayId: string;
@@ -31,8 +34,13 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw sim move ELEMENT_ID dx,dy | sim remove ELEMENT_ID | sim restore [ELEMENT_ID]
   pointy-draw turn TURN_ID | context | select ELEMENT_ID | cue CUE_ID
   pointy-draw events | state | displays | elements
+  pointy-draw gesture circle --center x,y --radius R [--ms 1500]   simulate a circled region (cursor, dwell, region_selected)
+  pointy-draw gesture dwell x,y [--ms 800] | gesture point x,y | gesture lost
+  pointy-draw gesture wake x,y [--ms 700]     simulate a raised open palm held still (wake ring, then wake_requested)
+  pointy-draw gesture session on|off          open/close the gesture session (feedback only shows while on)
   pointy-draw fixture                         open (or bring back) the fake mail test app
 
+  gesture coordinates are display-relative DIP on the primary display (or --display ID, numeric).
   <target>: --element ID | --rect x,y,w,h | --point x,y | --polygon "x,y x,y x,y"  [--display ID (default: primary)]
   E (expiry): next_turn | on_target_selected | context_change | manual | <milliseconds>
   --wait-shown   wait for overlay.shown and print the latency (tool calls)`;
@@ -100,6 +108,9 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       "start-at": { type: "string" },
       file: { type: "string" },
       json: { type: "string" },
+      center: { type: "string" },
+      radius: { type: "string" },
+      ms: { type: "string" },
       "wait-shown": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -184,6 +195,8 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
     case "cue":
       if (!rest[0]) throw new UsageError("cue CUE_ID");
       return { kind: "control", body: { op: "cue", arg: rest[0] } };
+    case "gesture":
+      return gestureCommand(rest, v, ctx);
     case "fixture":
       return { kind: "post", path: "/fixture", body: {} };
     case "events":
@@ -197,4 +210,43 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
 
 export function wantsWaitShown(argv: string[]): boolean {
   return argv.includes("--wait-shown");
+}
+
+function gestureCommand(rest: string[], v: Values, ctx: ParseContext): Request {
+  const [sub, arg] = rest;
+  const displayId = Number((v.display as string | undefined) ?? ctx.primaryDisplayId);
+  if (!Number.isInteger(displayId)) throw new UsageError(`gesture: display id must be numeric, got "${String(v.display ?? ctx.primaryDisplayId)}"`);
+  const ms = (fallback: number): number => {
+    if (v.ms === undefined) return fallback;
+    const n = Number(v.ms);
+    if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--ms: expected a positive number, got "${String(v.ms)}"`);
+    return n;
+  };
+  const post = (events: unknown[]): Request => ({ kind: "post", path: "/gesture", body: { events, intervalMs: FRAME_MS } });
+  const xy = (what: string): { x: number; y: number } => {
+    if (!arg) throw new UsageError(`${what}: give x,y`);
+    const [x, y] = nums(arg, 2, what);
+    return { x: x as number, y: y as number };
+  };
+  switch (sub) {
+    case "circle": {
+      if (!v.center || !v.radius) throw new UsageError("gesture circle: --center x,y and --radius R are required");
+      const [x, y] = nums(v.center as string, 2, "--center");
+      const radius = Number(v.radius);
+      if (!Number.isFinite(radius) || radius <= 0) throw new UsageError(`--radius: expected a positive number, got "${String(v.radius)}"`);
+      return post(circleEvents({ x: x as number, y: y as number }, radius, displayId, ms(1500)));
+    }
+    case "dwell":
+      return post(dwellEvents(xy("gesture dwell"), displayId, ms(800)));
+    case "wake":
+      return post(wakeEvents(xy("gesture wake"), displayId, ms(700)));
+    case "point":
+      return post(pointEvents(xy("gesture point"), displayId));
+    case "lost":
+      return post(lostEvents());
+    case "session":
+      if (arg !== "on" && arg !== "off") throw new UsageError("gesture session on|off");
+      return { kind: "post", path: "/gesture/session", body: { active: arg === "on" } };
+  }
+  throw new UsageError("gesture: circle | dwell | point | lost | wake | session");
 }

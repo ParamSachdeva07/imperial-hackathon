@@ -74,6 +74,13 @@ the background (serialized, at most one per 1.5 s, never affecting the tool resu
   (`explainer.image_ready` / `explainer.image_failed`). Cards keep text at full size: they first
   try smaller pictures, then a corner with a connector, before shrinking.
 
+## Gestures
+
+This overlay draws only what the AI shows. What the user does with their hand (cursor, trail, rings,
+wake ring, selection) is drawn by the gestures package's own feedback window, started from
+`../gestures/`. Neither draws the other's content (split recorded in
+`packages/gestures/GESTURES_HANDOFF.md`). No camera needed to test: `npx pointy-draw gesture ...`.
+
 ## Dev only
 
 - `npm run app` — overlay + fake mail app + dev server. `npm run voice` — plus the GPT Realtime test

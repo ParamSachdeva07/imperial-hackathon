@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src",
+    "playground",
+    "test",
+    "electron",
+    "electron.vite.config.ts",
+    "vite.config.ts"
+  ]
+}
