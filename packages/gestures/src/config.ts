@@ -126,8 +126,9 @@ export const DEFAULT_CONFIG: GestureConfig = {
 
   mirror: true,
   // Top edge at 20 % of the image: reaching the top of the screen (browser tabs) mustn't
-  // require raising the hand above the head, where tracking is lost.
-  activeZone: { x0: 0.15, y0: 0.2, x1: 0.85, y1: 0.7 },
+  // require raising the hand above the head, where tracking is lost. Bottom edge at 65 %: the
+  // taskbar is reached before the wrist leaves the frame.
+  activeZone: { x0: 0.15, y0: 0.2, x1: 0.85, y1: 0.65 },
 
   recognizerMinScore: 0.6,
   fingerExtendRatio: 1.15,

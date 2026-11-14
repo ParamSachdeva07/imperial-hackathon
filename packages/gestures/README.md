@@ -130,7 +130,7 @@ In Electron, skip the bridge: on a `mouse` event the main process converts (x, y
 
 ## Calibration
 
-`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is x 15–85 %, y 20–70 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
+`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is x 15–85 %, y 20–65 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
 
 ## Tuning
 

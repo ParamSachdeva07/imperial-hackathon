@@ -271,8 +271,12 @@ export class GestureInterpreter {
         m.lastSeen = t;
       } else {
       m.lastRawAnchor = this.decayOffset(m.offset, m.lastRawAnchor, raw);
-      const [sx, sy] = this.clampToDisplay([raw[0] + m.offset[0], raw[1] + m.offset[1]]);
-      m.pos = this.follow(isNew ? null : m.pos, m.filter.filter(sx, sy, t / 1000), t - m.lastSeen);
+      const target: Vec2 = [raw[0] + m.offset[0], raw[1] + m.offset[1]];
+      const [sx, sy] = this.clampToDisplay(target);
+      m.pos = this.snapToEdges(
+        this.follow(isNew ? null : m.pos, m.filter.filter(sx, sy, t / 1000), t - m.lastSeen),
+        target,
+      );
       m.lastSeen = t;
       m.hist.push({ t, x: m.pos[0], y: m.pos[1] });
       while (m.hist.length > 1 && at(m.hist, 0).t < t - 1000) m.hist.shift();
@@ -466,6 +470,18 @@ export class GestureInterpreter {
       if (Math.hypot(offset[0], offset[1]) < 0.5) offset[0] = offset[1] = 0;
     }
     return raw;
+  }
+
+  /**
+   * Screen edges are "infinitely deep" targets (taskbar, browser tabs): once the finger points
+   * past an edge, put the mouse right on it at once instead of waiting for the smoothing to
+   * creep there, which can take long enough for tracking to drop with the hand that low/high.
+   */
+  private snapToEdges(pos: Vec2, target: Vec2): Vec2 {
+    const { width, height } = this.display;
+    const x = target[0] <= 0 ? 0 : target[0] >= width ? width : pos[0];
+    const y = target[1] <= 0 ? 0 : target[1] >= height ? height : pos[1];
+    return [x, y];
   }
 
   private clampToDisplay([x, y]: Vec2): Vec2 {

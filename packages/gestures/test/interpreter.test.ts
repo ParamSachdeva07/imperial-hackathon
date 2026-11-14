@@ -189,9 +189,9 @@ describe("pointing", () => {
     expect(ofType(evs, "region_selected")).toHaveLength(0);
     const pts = ofType(evs, "point_selected");
     expect(pts).toHaveLength(1);
-    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.2)/0.5·900 = 360
+    // x=0.4 mirrored → 0.6 → (0.6-0.15)/0.7·1440 ≈ 926; y=0.4 → (0.4-0.2)/0.45·900 = 400
     expect(at(pts, 0).x).toBeCloseTo(926, -1);
-    expect(at(pts, 0).y).toBeCloseTo(360, -1);
+    expect(at(pts, 0).y).toBeCloseTo(400, -1);
     expect(at(pts, 0).displayId).toBe(1);
   });
 
@@ -238,11 +238,11 @@ describe("circling", () => {
     const regions = ofType(evs, "region_selected");
     expect(regions).toHaveLength(1);
     const { bbox, polygon } = at(regions, 0);
-    // radius 0.12 → ≈247 pt horizontally, 216 pt vertically → bbox ≈ 494 × 432
+    // radius 0.12 → ≈247 pt horizontally, 240 pt vertically → bbox ≈ 494 × 480
     expect(bbox.width).toBeGreaterThan(400);
     expect(bbox.width).toBeLessThan(560);
-    expect(bbox.height).toBeGreaterThan(360);
-    expect(bbox.height).toBeLessThan(480);
+    expect(bbox.height).toBeGreaterThan(400);
+    expect(bbox.height).toBeLessThan(540);
     expect(polygon.length).toBeGreaterThan(6);
     expect(polygon.length).toBeLessThan(60); // simplified
     // Convex hull → never self-intersecting: every turn has the same orientation.
@@ -295,6 +295,20 @@ describe("one finger → system mouse (default mousePose)", () => {
     expect(at(moves, moves.length - 1).x).toBeGreaterThan(at(moves, 0).x + 250);
     expect(ofType(evs, "cursor_moved")).toHaveLength(0);
     expect(ofType(evs, "point_selected")).toHaveLength(0);
+  });
+
+  it("pointing past the bottom / top edge puts the mouse right on it (taskbar, tabs)", () => {
+    const it = active();
+    // y 0.4 → 0.75 (zone bottom at 0.65) in 300 ms, then the first frames past the edge
+    const evs = run(it, [
+      ...frames(0, 500, () => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 })]),
+      ...frames(500, 300, (i, n) => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.4 + 0.35 * (i / (n - 1)) })]),
+    ]);
+    const m = ofType(evs, "mouse");
+    expect(at(m, m.length - 1).y).toBe(900);
+    const up = run(it, frames(800, 300, (i, n) => [hand("Right", "Pointing_Up", { x: 0.5, y: 0.75 - 0.65 * (i / (n - 1)) })]));
+    const m2 = ofType(up, "mouse");
+    expect(at(m2, m2.length - 1).y).toBe(0);
   });
 
   it("two fingers spread apart (V sign) neither draw nor move the mouse", () => {
@@ -580,9 +594,9 @@ describe("scroll", () => {
     expect(at(sc, 0).phase).toBe("start");
     expect(at(sc, sc.length - 1).phase).toBe("end");
     const dy = sc.filter((e) => e.phase === "move").reduce((s, e) => s + e.dy, 0);
-    // 0.2 of the frame over a 0.5-high zone on a 900-pt display = 360 pt, hand moved down → dy > 0
+    // 0.2 of the frame over a 0.45-high zone on a 900-pt display = 400 pt, hand moved down → dy > 0
     expect(dy).toBeGreaterThan(300);
-    expect(dy).toBeLessThan(380);
+    expect(dy).toBeLessThan(422);
     expect(ofType(evs, "cursor_moved")).toHaveLength(0);
   });
 
@@ -610,9 +624,9 @@ describe("scroll", () => {
     const open = frames(500, 500, () => [palmAt("Right", 0.5, 0.5)]);
     const sc = ofType(run(it, [...drag, ...open]), "scroll");
     const dy = sc.reduce((sum, e) => sum + e.dy, 0);
-    // hand travelled 0.2 / 0.5 × 900 = 360 pt (minus what moved before the fist was confirmed)
-    expect(dy).toBeGreaterThan(310);
-    expect(dy).toBeLessThanOrEqual(361);
+    // hand travelled 0.2 / 0.45 × 900 = 400 pt (minus what moved before the fist was confirmed)
+    expect(dy).toBeGreaterThan(344);
+    expect(dy).toBeLessThanOrEqual(401);
     expect(at(sc, sc.length - 1).phase).toBe("end");
   });
 
