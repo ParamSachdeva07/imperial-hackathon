@@ -43,7 +43,7 @@ The build already places the overlay page and preload where `createOverlayContro
 | true / true | same reasons, on `show_explainer` | The card is shown centred-right because its anchor wasn't found. |
 | false / false | `invalid_input` | Arguments didn't validate (or a stretch tool that isn't enabled). |
 | false / false | `unknown_overlay` | `clear` / `advance_step` with an id that doesn't exist. |
-| false / false | `replaced` | The call was overtaken (cleared, new turn, context change) before it could draw. |
+| false / false | `cancelled` | The call was overtaken (cleared, new turn, context change) before it could draw. |
 
 ## Behaviour
 

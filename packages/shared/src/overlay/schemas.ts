@@ -15,6 +15,13 @@
  *      doesn't exist).
  *   4. `PreviewActionInput` gains an optional `expires` (default "manual"), consistent with the
  *      other tools.
+ *   5. `ToolResult.reason` gains "cancelled": the call was overtaken before it could draw
+ *      (`clear` all, a new turn, or a context change arrived while its targets were resolving).
+ *      "replaced" keeps its §5.2 meaning: a drawing that was shown and then superseded.
+ *
+ * Lifetime note: for `show_steps`, `expires: "on_target_selected"` means "until the guide is
+ * completed" (each selected step advances it; the last one ends it after a brief "All done"),
+ * not "after the first click".
  */
 import { z } from "zod";
 
@@ -37,6 +44,7 @@ export const Target = z.discriminatedUnion("kind", [
 ]);
 
 // ---------- Lifetime ----------
+// "on_target_selected" on a step guide: until the guide is completed (see the header note).
 export const Expiry = z.union([
   z.enum(["next_turn", "on_target_selected", "context_change", "manual"]),
   z.object({ ms: z.number().int().min(500).max(120_000) }),
@@ -181,6 +189,7 @@ export const ToolResultReason = z.enum([
   "display_not_found",
   "replaced",
   "unknown_overlay", // additive
+  "cancelled", // additive: overtaken (clear all / new turn / context change) before it drew
 ]);
 
 export const ToolResult = z.object({

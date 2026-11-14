@@ -92,7 +92,7 @@ const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResu
   ...(bounds ? { resolvedBounds: bounds } : {}),
   ...extra,
 });
-const STALE: ToolResult = { ok: false, visible: false, reason: "replaced" };
+const CANCELLED: ToolResult = { ok: false, visible: false, reason: "cancelled" };
 
 /** The parts of a drawing that can be moved out of the way (labels and cards, not targets). */
 function movableBoxes(item: RenderItem): Rect[] {
@@ -273,7 +273,7 @@ export class OverlayService implements OverlayControl {
       this.inflight.delete(call);
     }
     // clear("all"), a new turn or a context change arrived while resolving and would have removed it.
-    if (call.cancelled) return STALE;
+    if (call.cancelled) return CANCELLED;
 
     const resolved = new Map<Slot, ResolvedTarget | null>();
     let anchorFailure: ToolResult["reason"];

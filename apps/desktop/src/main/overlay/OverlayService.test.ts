@@ -469,7 +469,7 @@ describe("OverlayService", () => {
       bounds.gate = null;
       release();
       const r = await pending;
-      expect(r).toEqual({ ok: false, visible: false, reason: "replaced" });
+      expect(r).toEqual({ ok: false, visible: false, reason: "cancelled" });
       expect(sink.items).toHaveLength(0);
     });
 
@@ -578,7 +578,7 @@ describe("OverlayService", () => {
       svc.onContextChange();
       bounds.gate = null;
       release();
-      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "cancelled" });
     });
 
     it("a completed step guide with an explicit manual lifetime stays until cleared", async () => {
@@ -701,7 +701,7 @@ describe("OverlayService", () => {
       svc.onTurnStart("t2");
       bounds.gate = null;
       release();
-      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "cancelled" });
     });
 
     it("step guides default to the contract's next_turn lifetime", async () => {
@@ -743,7 +743,7 @@ describe("OverlayService", () => {
       svc.onContextChange();
       bounds.gate = null;
       release();
-      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "cancelled" });
     });
   });
 

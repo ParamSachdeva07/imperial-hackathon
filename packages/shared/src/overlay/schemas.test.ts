@@ -163,6 +163,7 @@ describe("Results and events", () => {
   it("validates ToolResult", () => {
     expect(ToolResult.safeParse({ ok: true, visible: false, reason: "target_not_found" }).success).toBe(true);
     expect(ToolResult.safeParse({ ok: false, visible: false, reason: "unknown_overlay" }).success).toBe(true);
+    expect(ToolResult.safeParse({ ok: false, visible: false, reason: "cancelled" }).success).toBe(true);
     expect(ToolResult.safeParse({ ok: true, visible: true, reason: "nope" }).success).toBe(false);
   });
   it("validates events, including the additive dismiss reason", () => {
