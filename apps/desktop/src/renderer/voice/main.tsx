@@ -30,8 +30,15 @@ function App() {
 
   const log = (kind: Line["kind"], text: string) => setLines((l) => [...l.slice(-200), { kind, text, at: Date.now() }]);
 
-  useEffect(() => voice.onOverlayEvent((e) => log("event", JSON.stringify(e))), []);
-  useEffect(() => logEnd.current?.scrollIntoView({ block: "end" }), [lines]);
+  useEffect(() => {
+    const off = voice.onOverlayEvent((e) => log("event", JSON.stringify(e)));
+    return () => off();
+  }, []);
+  useEffect(() => {
+    // Block body on purpose: newer Chromium returns a Promise from scrollIntoView, and an effect
+    // must never return anything but a cleanup function.
+    logEnd.current?.scrollIntoView({ block: "end" });
+  }, [lines]);
 
   async function connect() {
     setStatus("connecting");

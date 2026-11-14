@@ -14,7 +14,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { app, screen, type BrowserWindow } from "electron";
+import { app, dialog, screen, type BrowserWindow } from "electron";
 import { createOverlayControl } from "./overlay/createOverlayControl";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
 import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
@@ -97,18 +97,14 @@ async function main(): Promise<void> {
     openFixtureWindow(boundsProvider, (win) => loadRendererPage(win, "fixture"), preloadDir);
   }
 
-  if (!app.isPackaged) {
-    const server = await startDevServer({
-      control: overlay.control,
-      sim: boundsProvider,
-      getDisplays: () => electronScreen.getDisplays(),
-      getPrimaryDisplayId: () => electronScreen.getPrimaryDisplayId(),
-    });
-    console.log(`[pointy] dev server on 127.0.0.1:${server.port}`);
-    app.on("before-quit", () => void server.close());
-  }
-  if (!app.isPackaged && process.env.POINTY_VOICE === "1") {
-    openVoiceWindow({
+  let voiceWindow: BrowserWindow | null = null;
+  const openVoice = () => {
+    if (voiceWindow && !voiceWindow.isDestroyed()) {
+      voiceWindow.show();
+      voiceWindow.focus();
+      return;
+    }
+    voiceWindow = openVoiceWindow({
       control: overlay.control,
       apiKey: process.env.OPENAI_API_KEY,
       preloadDir,
@@ -124,14 +120,59 @@ async function main(): Promise<void> {
         pregeneratedImagePrompts: () => readManifestPrompts(join(repoRoot, "assets/explainers/manifest.json")),
       },
     });
+    console.log("[pointy] voice test window opened");
+  };
+  if (!app.isPackaged && process.env.POINTY_VOICE === "1") openVoice();
+  // `npm run voice` while Pointy is already running: open the voice window in this instance.
+  app.on("second-instance", (_e, _argv, _cwd, data) => {
+    if (!app.isPackaged && (data as { voice?: boolean } | undefined)?.voice) openVoice();
+  });
+
+  if (!app.isPackaged) {
+    // A dev-server problem (e.g. port in use) must not stop the overlay or the voice window.
+    const server = await startDevServer({
+      control: overlay.control,
+      sim: boundsProvider,
+      getDisplays: () => electronScreen.getDisplays(),
+      getPrimaryDisplayId: () => electronScreen.getPrimaryDisplayId(),
+    }).catch((err: unknown) => {
+      console.error(`[pointy] dev server not started (pointy-draw unavailable): ${String(err)}`);
+      return null;
+    });
+    if (server) {
+      console.log(`[pointy] dev server on 127.0.0.1:${server.port}`);
+      app.on("before-quit", () => void server.close());
+    }
   }
   overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
   app.on("before-quit", () => overlay.dispose());
   console.log(`[pointy] overlay ready (contentProtection=${contentProtection})`);
 }
 
+// Dev: surface renderer errors in the terminal, with the page they came from.
+if (!app.isPackaged) {
+  app.on("web-contents-created", (_e, wc) => {
+    wc.on("console-message", (details) => {
+      if (details.level === "error" || details.level === "warning") {
+        const page = wc.getURL().split("/").slice(-2).join("/").split("?")[0];
+        console.log(`[renderer ${details.level}] ${page}: ${details.message}`);
+      }
+    });
+  });
+}
+
 app.on("window-all-closed", () => {
   // Overlay windows are always present; keep running until explicitly quit.
 });
 
-void main();
+// One Pointy per user session (isolated test runs with their own POINTY_DEV_FILE are exempt).
+const isolated = Boolean(process.env.POINTY_DEV_FILE);
+if (!isolated && !app.requestSingleInstanceLock({ voice: process.env.POINTY_VOICE === "1" })) {
+  console.log("[pointy] already running — handed over to the running instance");
+  app.quit();
+} else {
+  main().catch((err: unknown) => {
+    console.error("[pointy] startup failed:", err);
+    dialog.showErrorBox("Pointy could not start", String(err instanceof Error ? err.stack ?? err.message : err));
+  });
+}
