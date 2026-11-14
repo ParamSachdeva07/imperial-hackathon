@@ -1,0 +1,290 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #0b1220;
+  background: #e8edf4;
+  font-size: 14px;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+textarea,
+input {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+  border: 1px solid #64748b;
+  border-radius: 7px;
+  padding: 10px 20px;
+  background: #fff;
+  color: #0b1220;
+  font-weight: 650;
+}
+button:disabled {
+  cursor: not-allowed;
+  background: #dbe3ef;
+  color: #475569;
+  border-color: #94a3b8;
+}
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+summary:focus-visible,
+.live-log:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+.assistant {
+  margin: auto;
+  padding: 0 10px 8px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 2px 2px 76px;
+  min-height: 32px;
+  -webkit-app-region: drag;
+}
+h1 {
+  font-size: 13px;
+  letter-spacing: 0;
+  margin: 0;
+}
+h2 {
+  font-size: 14px;
+  margin: 0;
+}
+.connection {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+}
+.connection.connected {
+  color: #166534;
+}
+.instruction-panel,
+.log-panel {
+  background: #fff;
+  border: 1px solid #94a3b8;
+  border-radius: 10px;
+}
+.instruction-panel {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  flex-shrink: 0;
+}
+form > label {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 54px;
+  max-height: 110px;
+  padding: 7px 9px;
+  color: #0b1220;
+  background: #fff;
+  border: 1px solid #64748b;
+  border-radius: 7px;
+  line-height: 1.5;
+}
+textarea::placeholder {
+  color: #526176;
+}
+textarea:disabled {
+  background: #f1f5f9;
+  color: #334155;
+}
+.task-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+}
+.task-controls button { padding: 5px 12px; min-height: 30px; }
+.log-toggle { margin-left: auto; }
+.primary {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+.primary:hover:not(:disabled) {
+  background: #1e40af;
+}
+.stop {
+  color: #991b1b;
+  border-color: #991b1b;
+}
+.stop:hover:not(:disabled) {
+  background: #fef2f2;
+}
+.shortcut {
+  margin-left: auto;
+  color: #475569;
+  font-size: 13px;
+}
+.connection-details {
+  margin-top: 14px;
+  color: #334155;
+  font-size: 14px;
+}
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  width: fit-content;
+}
+.text-button {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #1e40af;
+  background: transparent;
+  text-decoration: underline;
+  font-weight: 600;
+}
+.error-message {
+  background: #fef2f2;
+  border-left: 4px solid #991b1b;
+  color: #991b1b;
+  padding: 12px;
+  line-height: 1.5;
+}
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 160px;
+  overflow: hidden;
+}
+.log-heading {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 12px 14px 0;
+}
+.status {
+  font-size: 13px;
+  font-weight: 650;
+  padding: 5px 9px;
+  background: #e2e8f0;
+  color: #1e293b;
+  border-radius: 5px;
+}
+.status.completed {
+  background: #dcfce7;
+  color: #14532d;
+}
+.status.failed,
+.status.blocked {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.step-count {
+  margin-left: auto;
+  color: #475569;
+  font-size: 13px;
+}
+.current-message {
+  padding: 0 20px 14px;
+  margin: 10px 0 0;
+  color: #334155;
+  border-bottom: 1px solid #cbd5e1;
+  line-height: 1.5;
+  font-size: 14px;
+}
+.live-log {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 0 14px;
+  scrollbar-color: #64748b #f1f5f9;
+}
+.live-log ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.empty-log {
+  padding: 24px 0;
+  color: #475569;
+  line-height: 1.6;
+}
+.log-entry {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 14px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 12px 0;
+}
+.log-entry time {
+  color: #475569;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    monospace;
+  padding-top: 3px;
+}
+.event-type {
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #475569;
+}
+.log-entry p {
+  margin: 4px 0 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+.log-entry.error p,
+.log-entry.error .event-type {
+  color: #991b1b;
+}
+.log-entry.result .event-type {
+  color: #166534;
+}
+.log-entry details {
+  font-size: 12px;
+  margin-top: 8px;
+  color: #334155;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #f1f5f9;
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+/* Compact mode keeps the input, actions, and one status line visible. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.compact textarea { resize: none; }
+.compact .log-panel { min-height: 24px; flex: none; border: 0; background: transparent; }
+.compact .log-heading { padding: 0; flex-wrap: nowrap; }
+.compact .log-heading h2, .compact .step-count { display: none; }
+.compact .status { padding: 3px 6px; font-size: 12px; }
+.compact .current-message { display: none; }
+.compact .error-message { margin: 5px 0 0; padding: 6px; }
+
+.run-settings { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+.run-settings label { display: flex; flex-direction: column; gap: .4rem; font-size: 1rem; }
+.run-settings input { width: 9rem; padding: .5rem; color: #111827; background: #fff; border: 1px solid #64748b; border-radius: .4rem; font: inherit; }

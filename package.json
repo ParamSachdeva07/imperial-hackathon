@@ -1,0 +1,40 @@
+{
+  "name": "desktop-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "apps/desktop/dist-electron/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "setup": "node scripts/launch.mjs setup",
+    "dev": "node scripts/launch.mjs dev",
+    "build": "node scripts/launch.mjs build",
+    "test": "node scripts/launch.mjs test",
+    "test:native": "node scripts/launch.mjs native",
+    "typecheck": "tsc --noEmit",
+    "package:mac": "node scripts/launch.mjs package"
+  },
+  "dependencies": {
+    "agent-browser": "0.43.0",
+    "agent-desktop": "1.3.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@electron/packager": "^19.0.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "electron": "45.3.2",
+    "esbuild": "^0.27.0",
+    "playwright": "^1.65.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "entry": [
+    "apps/desktop/electron/main.ts",
+    "apps/desktop/electron/preload.ts",
+    "apps/desktop/src/main.tsx",
+    "scripts/*.{mjs,ts}",
+    "tests/**/*.test.ts"
+  ],
+  "ignorePatterns": [
+    ".runtime/**",
+    "**/dist/**",
+    "**/dist-electron/**",
+    "release/**"
+  ],
+  "ignoreDependencies": [
+    "agent-desktop"
+  ]
+}

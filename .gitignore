@@ -1,0 +1,14 @@
+node_modules/
+.venv/
+.env
+.env.*
+!.env.example
+.runtime/
+dist/
+dist-electron/
+release/
+__pycache__/
+.pytest_cache/
+.coverage
+*.log
+.DS_Store

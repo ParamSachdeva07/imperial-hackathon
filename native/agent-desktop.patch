@@ -1,0 +1,1249 @@
+diff --git a/crates/core/src/actions/post_action.rs b/crates/core/src/actions/post_action.rs
+index 1341e17..5717331 100644
+--- a/crates/core/src/actions/post_action.rs
++++ b/crates/core/src/actions/post_action.rs
+@@ -93,6 +93,18 @@ pub fn execute_verified_action(
+         }
+     };
+     let observed = observed.map_err(|error| verification_error(&result, None, error))?;
++    let expected_value = match &action {
++        Action::SetValue(value) => Some(value.as_str()),
++        Action::Clear => Some(""),
++        Action::TypeText(_) => expected_text.as_deref(),
++        _ => None,
++    };
++    if let Some(value) = expected_value.filter(|_| !secure_value_is_redacted(&action, &observed)) {
++        let details = result.details.get_or_insert_with(|| serde_json::json!({}));
++        if let Some(details) = details.as_object_mut() {
++            details.insert("expected_value".into(), value.into());
++        }
++    }
+     let verified = matches_postcondition(
+         &action,
+         before.as_ref(),
+diff --git a/crates/core/src/refs/ref_alloc.rs b/crates/core/src/refs/ref_alloc.rs
+index 72f3280..9379144 100644
+--- a/crates/core/src/refs/ref_alloc.rs
++++ b/crates/core/src/refs/ref_alloc.rs
+@@ -275,6 +275,19 @@ fn skeleton_anchor_entry(
+     entry
+ }
+ 
++// A named/native-identified region with a retained token can be read directly,
++// even when it has no input action. Scoped traversal otherwise strands these
++// containers between a loaded parent and unread descendants.
++fn is_readable_region(node: &AccessibilityNode) -> bool {
++    matches!(node.role.as_str(), "group" | "webarea" | "main" | "complementary" |
++        "region" | "navigation" | "banner" | "contentinfo" | "search" | "toolbar" |
++        "scrollarea" | "list" | "table" | "outline" | "menu" | "dialog" | "sheet")
++        && carries_element_token(node)
++        && (node.identity.native_id.is_some() ||
++            node.identity.name.as_deref().is_some_and(|s| !s.trim().is_empty()) ||
++            node.identity.description.as_deref().is_some_and(|s| !s.trim().is_empty()))
++}
++
+ fn allocate_refs_at_path(
+     mut node: AccessibilityNode,
+     refmap: &mut RefMap,
+@@ -283,14 +296,20 @@ fn allocate_refs_at_path(
+     plan: &AllocationPlan,
+ ) -> Result<AccessibilityNode, crate::AppError> {
+     let node_is_ref_able = is_ref_able(&node);
++    let read_only_region = !node_is_ref_able && is_readable_region(&node)
++        && (config.scope.root_ref_id.is_none() || path.len() > config.scope.path_prefix.len());
+ 
+-    if node_is_ref_able {
++    if node_is_ref_able || read_only_region {
+         let mut entry = ref_entry_from_node(
+             &node,
+             &config.source,
+             config.scope.root_ref_id.map(str::to_string),
+             path,
+         );
++        if read_only_region {
++            entry.capabilities.available_actions.clear();
++            node.presentation.available_actions.clear();
++        }
+         entry.scope.path_is_absolute = config.scope.root_ref_id.is_some();
+         entry.identity.unique_at_capture = plan.proven(&entry, path);
+         entry.source.renderer_accessibility_forced = config.options.force_renderer_accessibility;
+@@ -300,7 +319,7 @@ fn allocate_refs_at_path(
+         node.ref_id = allocate_observed_ref(refmap, entry)?;
+     }
+ 
+-    let is_skeleton_anchor = !node_is_ref_able && plan.skeleton_anchors.contains(path.as_slice());
++    let is_skeleton_anchor = !node_is_ref_able && !read_only_region && plan.skeleton_anchors.contains(path.as_slice());
+ 
+     if is_skeleton_anchor {
+         let mut entry = skeleton_anchor_entry(&node, &config.source, path);
+diff --git a/crates/core/src/snapshot/snapshot_ref_alloc_tests.rs b/crates/core/src/snapshot/snapshot_ref_alloc_tests.rs
+index d0d4039..07e8d85 100644
+--- a/crates/core/src/snapshot/snapshot_ref_alloc_tests.rs
++++ b/crates/core/src/snapshot/snapshot_ref_alloc_tests.rs
+@@ -114,3 +114,26 @@ fn test_drill_alloc_compact() {
+     assert_eq!(tree.children.len(), 1);
+     assert_eq!(tree.children[0].role, "button");
+ }
++
++#[test]
++fn retained_named_region_remains_readable_inside_a_scoped_snapshot() {
++    let mut region = node("complementary");
++    region.identity.name = Some("Media region".into());
++    region.identity.retained_object = Some("axtok1:page-7:node-3".into());
++    region.presentation.available_actions = vec!["SetFocus".into(), "RightClick".into()];
++    region.children_count = Some(4);
++    let mut root = node("group");
++    root.children = vec![region];
++    let mut refs = RefMap::new();
++    let config = drill_config(Some("Example"), 42, "@e5", false, false);
++    let tree = ref_alloc::allocate_refs(root, &mut refs, &config).unwrap();
++    let region = &tree.children[0];
++    let reference = region.ref_id.as_deref().expect("region must be readable");
++    let entry = refs.get(reference).unwrap();
++    assert_eq!(entry.scope.root_ref.as_deref(), Some("@e5"));
++    assert!(entry.scope.path_is_absolute);
++    assert_eq!(entry.scope.path.as_slice(), &[0]);
++    assert!(entry.capabilities.available_actions.is_empty());
++    assert!(region.presentation.available_actions.is_empty());
++    assert_eq!(region.children_count, Some(4));
++}
+diff --git a/crates/macos/src/actions/post_state.rs b/crates/macos/src/actions/post_state.rs
+index cdf95c7..e9ba706 100644
+--- a/crates/macos/src/actions/post_state.rs
++++ b/crates/macos/src/actions/post_state.rs
+@@ -181,7 +181,7 @@ fn element_state_from_attrs(
+     let states = crate::tree::state_reader::states_from_element(element, &attrs, &role, &context);
+     let enabled = Some(attrs.states.enabled);
+     let hidden = attrs.states.semantic.hidden;
+-    let offscreen = crate::tree::state_reader::offscreen(attrs.bounds, window_bounds);
++    let offscreen = crate::tree::state_reader::offscreen_from_attrs(&attrs, window_bounds);
+     Ok(ElementState {
+         role,
+         states,
+diff --git a/crates/macos/src/system/window/cg_window.rs b/crates/macos/src/system/window/cg_window.rs
+index d321848..0d65710 100644
+--- a/crates/macos/src/system/window/cg_window.rs
++++ b/crates/macos/src/system/window/cg_window.rs
+@@ -44,22 +44,9 @@ impl WindowRecord {
+     }
+ }
+ 
+-#[derive(Clone, Copy)]
+-pub(crate) enum WindowRecordScope<'a> {
+-    Pid(i32),
+-    Pids(&'a rustc_hash::FxHashSet<i32>),
+-    Window(i64),
+-}
+-
+-impl WindowRecordScope<'_> {
+-    fn matches(self, pid: i32, window_number: i64) -> bool {
+-        match self {
+-            Self::Pid(expected) => pid == expected,
+-            Self::Pids(expected) => expected.contains(&pid),
+-            Self::Window(expected) => window_number == expected,
+-        }
+-    }
+-}
++#[path = "window_record_scope.rs"]
++mod record_scope;
++pub(crate) use record_scope::WindowRecordScope;
+ 
+ pub(crate) fn window_records_until(
+     deadline: Instant,
+@@ -127,16 +114,13 @@ pub(in crate::system) fn records_from_dictionaries(
+     let mut records = Vec::new();
+     for dictionary in dictionaries {
+         let layer = required_int_field(&dictionary, "kCGWindowLayer")?;
+-        if layer != 0 {
+-            continue;
+-        }
+         let pid = i32::try_from(required_int_field(&dictionary, "kCGWindowOwnerPID")?)
+             .map_err(|_| invalid_field_error("kCGWindowOwnerPID"))?;
+         if pid <= 0 {
+             continue;
+         }
+         let window_number = required_int_field(&dictionary, "kCGWindowNumber")?;
+-        if !scope.matches(pid, window_number) {
++        if !scope.matches(pid, window_number) || !scope.includes_layer(layer, window_number) {
+             continue;
+         }
+         if dictionary
+diff --git a/crates/macos/src/system/window/window_inventory.rs b/crates/macos/src/system/window/window_inventory.rs
+index 68f680e..9956e8c 100644
+--- a/crates/macos/src/system/window/window_inventory.rs
++++ b/crates/macos/src/system/window/window_inventory.rs
+@@ -48,7 +48,18 @@ pub(crate) fn list_windows_until(
+             |owners| owners.matching_pids(app_filter),
+             |pids| {
+                 require_running_app(pids, app_filter)?;
+-                cg_window::window_records_until(deadline, cg_window::WindowRecordScope::Pids(pids))
++                let mut ids = rustc_hash::FxHashSet::default();
++                for pid in pids {
++                    ids.extend(
++                        crate::system::window::window_ax_state::accessible_window_ids_until(
++                            *pid, deadline,
++                        )?,
++                    );
++                }
++                cg_window::window_records_until(
++                    deadline,
++                    cg_window::WindowRecordScope::Accessible { pids, ids: &ids },
++                )
+             },
+             |records, _| {
+                 let mut windows = windows_from_records_with_focus(
+diff --git a/crates/macos/src/system/window/window_record_scope.rs b/crates/macos/src/system/window/window_record_scope.rs
+new file mode 100644
+index 0000000..bddc9d5
+--- /dev/null
++++ b/crates/macos/src/system/window/window_record_scope.rs
+@@ -0,0 +1,34 @@
++#[derive(Clone, Copy)]
++pub(crate) enum WindowRecordScope<'a> {
++    Pid(i32),
++    Pids(&'a rustc_hash::FxHashSet<i32>),
++    Window(i64),
++    Accessible {
++        pids: &'a rustc_hash::FxHashSet<i32>,
++        ids: &'a rustc_hash::FxHashSet<i64>,
++    },
++}
++
++impl WindowRecordScope<'_> {
++    pub(super) fn includes_layer(self, layer: i64, window_number: i64) -> bool {
++        layer == 0
++            || match self {
++                Self::Window(expected) => expected == window_number,
++                Self::Accessible { ids, .. } => ids.contains(&window_number),
++                _ => false,
++            }
++    }
++
++    pub(super) fn matches(self, pid: i32, window_number: i64) -> bool {
++        match self {
++            Self::Pid(expected) => pid == expected,
++            Self::Pids(expected) => expected.contains(&pid),
++            Self::Accessible { pids, .. } => pids.contains(&pid),
++            Self::Window(expected) => window_number == expected,
++        }
++    }
++}
++
++#[cfg(test)]
++#[path = "window_record_scope_tests.rs"]
++mod tests;
+diff --git a/crates/macos/src/system/window/window_record_scope_tests.rs b/crates/macos/src/system/window/window_record_scope_tests.rs
+new file mode 100644
+index 0000000..8e8d029
+--- /dev/null
++++ b/crates/macos/src/system/window/window_record_scope_tests.rs
+@@ -0,0 +1,21 @@
++use super::*;
++use rustc_hash::FxHashSet;
++
++#[test]
++fn auxiliary_layers_require_an_exact_accessibility_window_identity() {
++    let pids = FxHashSet::from_iter([42]);
++    let ids = FxHashSet::from_iter([73]);
++    let scope = WindowRecordScope::Accessible {
++        pids: &pids,
++        ids: &ids,
++    };
++    assert!(scope.matches(42, 73));
++    assert!(!scope.matches(43, 73));
++    assert!(scope.includes_layer(3, 73));
++    assert!(!scope.includes_layer(3, 74));
++    assert!(scope.includes_layer(0, 74));
++    assert!(!WindowRecordScope::Pid(42).includes_layer(3, 73));
++    assert!(!WindowRecordScope::Pids(&pids).includes_layer(3, 73));
++    assert!(WindowRecordScope::Window(73).includes_layer(3, 73));
++    assert!(!WindowRecordScope::Window(73).includes_layer(3, 74));
++}
+diff --git a/crates/macos/src/tree/element_bounds.rs b/crates/macos/src/tree/element_bounds.rs
+index d8c05ff..f94a673 100644
+--- a/crates/macos/src/tree/element_bounds.rs
++++ b/crates/macos/src/tree/element_bounds.rs
+@@ -61,10 +61,26 @@ pub(crate) fn owning_window_bounds(
+ pub(crate) fn clips_descendants(role: &str) -> bool {
+     matches!(
+         role,
+-        "AXWindow" | "AXScrollArea" | "AXWebArea" | "AXSheet" | "AXPopover"
++        "AXWindow" | "AXScrollArea" | "AXWebArea" | "AXSheet" | "AXMenu" | "AXPopover"
+     )
+ }
+ 
++pub(crate) fn starts_clipping_surface(role: &str) -> bool {
++    matches!(role, "AXMenu" | "AXPopover")
++}
++
++pub(crate) fn surface_viewport(
++    parent: Option<Rect>,
++    role: &str,
++    bounds: Option<Rect>,
++) -> Option<Rect> {
++    if starts_clipping_surface(role) {
++        bounds
++    } else {
++        parent
++    }
++}
++
+ pub(crate) fn intersect_rects(left: Rect, right: Rect) -> Option<Rect> {
+     let x = left.x.max(right.x);
+     let y = left.y.max(right.y);
+@@ -83,6 +99,9 @@ pub(crate) fn clipped_viewport(
+     role: &str,
+     bounds: Option<Rect>,
+ ) -> Option<Rect> {
++    if starts_clipping_surface(role) {
++        return surface_viewport(parent, role, bounds);
++    }
+     if !clips_descendants(role) {
+         return parent;
+     }
+@@ -100,33 +119,43 @@ pub(crate) fn ancestor_viewport(
+     element: &AXElement,
+     deadline: Deadline,
+ ) -> Result<Option<Rect>, AdapterError> {
+-    let mut viewport = owning_window_bounds(element, deadline)?;
+-    if viewport.is_none() {
+-        return Ok(None);
+-    }
++    let window = owning_window_bounds(element, deadline)?;
+     let instant = super::locator_deadline::from_operation(deadline)?;
+-    let mut current = super::surface_read::element(element, "AXParent", instant)?;
++    ancestor_viewport_with(
++        window,
++        super::surface_read::element(element, "AXParent", instant)?,
++        |parent| super::surface_read::string(parent, "AXRole", instant),
++        |parent| read_bounds_with_deadline(parent, instant),
++        |parent| super::surface_read::element(parent, "AXParent", instant),
++    )
++}
++
++fn ancestor_viewport_with<E>(
++    window: Option<Rect>,
++    mut current: Option<E>,
++    mut read_role: impl FnMut(&E) -> Result<Option<String>, AdapterError>,
++    mut read_bounds: impl FnMut(&E) -> Result<Option<Rect>, AdapterError>,
++    mut read_parent: impl FnMut(&E) -> Result<Option<E>, AdapterError>,
++) -> Result<Option<Rect>, AdapterError> {
++    let mut ancestors = Vec::new();
+     for _ in 0..super::properties::element::ABSOLUTE_MAX_DEPTH {
+         let Some(parent) = current else {
+-            return Ok(viewport);
++            return Ok(fold_ancestor_viewports(window, ancestors));
+         };
+-        let Some(role) = super::surface_read::string(&parent, "AXRole", instant)? else {
++        let Some(role) = read_role(&parent)? else {
+             return Ok(None);
+         };
+         if role == "AXApplication" {
+-            return Ok(viewport);
++            return Ok(fold_ancestor_viewports(window, ancestors));
+         }
++        let ends_surface = starts_clipping_surface(&role) || role == "AXWindow";
+         if clips_descendants(&role) {
+-            viewport = clipped_viewport(
+-                viewport,
+-                &role,
+-                read_bounds_with_deadline(&parent, instant)?,
+-            );
++            ancestors.push((role, read_bounds(&parent)?));
+         }
+-        if role == "AXWindow" {
+-            return Ok(viewport);
++        if ends_surface {
++            return Ok(fold_ancestor_viewports(window, ancestors));
+         }
+-        current = super::surface_read::element(&parent, "AXParent", instant)?;
++        current = read_parent(&parent)?;
+     }
+     Err(AdapterError::new(
+         ErrorCode::AppUnresponsive,
+@@ -134,10 +163,22 @@ pub(crate) fn ancestor_viewport(
+     ))
+ }
+ 
++fn fold_ancestor_viewports(
++    window: Option<Rect>,
++    ancestors: Vec<(String, Option<Rect>)>,
++) -> Option<Rect> {
++    ancestors
++        .into_iter()
++        .rev()
++        .fold(window, |viewport, (role, bounds)| {
++            clipped_viewport(viewport, &role, bounds)
++        })
++}
++
+ /// The viewport an element is clipped by. `AXTopLevelUIElement` is not a
+ /// substitute: for menu content it resolves to the menu bar, a 29-point strip
+-/// that reports every open menu item as offscreen. An element with no window is
+-/// drawn on its own surface, so its clipping viewport is simply unknown.
++/// that reports every open menu item as offscreen. An element with no window
++/// has no window viewport; a concrete popup ancestor can establish its surface.
+ fn first_owning_container(
+     mut read: impl FnMut(&'static str) -> Result<Option<AXElement>, i32>,
+ ) -> Result<Option<AXElement>, (&'static str, i32)> {
+@@ -161,115 +202,5 @@ fn read_error(attribute: &str, error: i32) -> AdapterError {
+ }
+ 
+ #[cfg(test)]
+-mod tests {
+-    use super::*;
+-
+-    #[cfg(target_os = "macos")]
+-    #[test]
+-    fn native_bounds_decoder_rejects_invalid_geometry_before_live_or_snapshot_use() {
+-        use core_graphics::geometry::{CGPoint, CGSize};
+-        for (point, size) in [
+-            (CGPoint::new(0.0, 33.0), CGSize::new(-1.0, 0.0)),
+-            (CGPoint::new(0.0, 0.0), CGSize::new(10.0, -0.5)),
+-            (CGPoint::new(f64::NAN, 0.0), CGSize::new(10.0, 10.0)),
+-            (CGPoint::new(0.0, 0.0), CGSize::new(f64::INFINITY, 10.0)),
+-            (CGPoint::new(0.0, 0.0), CGSize::new(f64::MAX, 10.0)),
+-        ] {
+-            assert_eq!(rect_from_parts(point, size), None);
+-        }
+-        for size in [CGSize::new(0.0, 0.0), CGSize::new(20.0, 10.0)] {
+-            let bounds = rect_from_parts(CGPoint::new(-20.0, 33.0), size).unwrap();
+-            assert_eq!(bounds.x, -20.0);
+-            assert_eq!(bounds.width, size.width);
+-            assert_eq!(bounds.height, size.height);
+-        }
+-    }
+-
+-    fn rect(x: f64, width: f64) -> Rect {
+-        Rect {
+-            x,
+-            y: 0.0,
+-            width,
+-            height: 100.0,
+-        }
+-    }
+-
+-    #[test]
+-    fn only_clipping_containers_narrow_the_viewport() {
+-        let window = Some(rect(0.0, 500.0));
+-        assert_eq!(
+-            clipped_viewport(window, "AXGroup", Some(rect(20.0, 10.0))),
+-            window
+-        );
+-        assert_eq!(
+-            clipped_viewport(window, "AXScrollArea", Some(rect(20.0, 100.0))),
+-            Some(rect(20.0, 100.0))
+-        );
+-    }
+-
+-    #[test]
+-    fn disjoint_viewports_remain_known_empty_through_descendants() {
+-        let empty = clipped_viewport(
+-            Some(rect(0.0, 100.0)),
+-            "AXScrollArea",
+-            Some(rect(200.0, 100.0)),
+-        );
+-        assert_eq!(
+-            crate::tree::state_reader::offscreen(Some(rect(-50.0, 500.0)), empty),
+-            Some(true)
+-        );
+-        let nested = clipped_viewport(empty, "AXScrollArea", Some(rect(-50.0, 500.0)));
+-        assert_eq!(
+-            crate::tree::state_reader::offscreen(Some(rect(-50.0, 500.0)), nested),
+-            Some(true)
+-        );
+-    }
+-
+-    #[test]
+-    fn missing_clipping_geometry_is_unknown_not_empty() {
+-        assert_eq!(
+-            clipped_viewport(Some(rect(0.0, 100.0)), "AXScrollArea", None),
+-            None
+-        );
+-        assert_eq!(
+-            clipped_viewport(None, "AXScrollArea", Some(rect(0.0, 100.0))),
+-            None
+-        );
+-    }
+-    /// A menu item's `AXTopLevelUIElement` is the menu bar, whose 29-point height
+-    /// clips every open menu item. A window-less element therefore reports no
+-    /// clipping viewport rather than a wrong one.
+-    #[test]
+-    fn a_window_less_element_reports_no_clipping_viewport() {
+-        let mut attributes = Vec::new();
+-        let container = first_owning_container(|attribute| {
+-            attributes.push(attribute);
+-            Ok(None)
+-        })
+-        .unwrap();
+-
+-        assert!(container.is_none());
+-        assert_eq!(attributes, ["AXWindow"]);
+-    }
+-
+-    #[test]
+-    fn incomplete_window_read_never_falls_through_to_a_weaker_container() {
+-        for error in [
+-            accessibility_sys::kAXErrorCannotComplete,
+-            accessibility_sys::kAXErrorInvalidUIElement,
+-        ] {
+-            let calls = std::cell::Cell::new(0);
+-            let result = first_owning_container(|_| {
+-                calls.set(calls.get() + 1);
+-                Err(error)
+-            });
+-
+-            let failure = match result {
+-                Err(failure) => failure,
+-                Ok(_) => panic!("incomplete AXWindow read must fail"),
+-            };
+-            assert_eq!(failure, ("AXWindow", error));
+-            assert_eq!(calls.get(), 1);
+-        }
+-    }
+-}
++#[path = "element_bounds_tests.rs"]
++mod tests;
+diff --git a/crates/macos/src/tree/element_bounds_tests.rs b/crates/macos/src/tree/element_bounds_tests.rs
+new file mode 100644
+index 0000000..935c8e5
+--- /dev/null
++++ b/crates/macos/src/tree/element_bounds_tests.rs
+@@ -0,0 +1,280 @@
++use super::*;
++
++#[cfg(target_os = "macos")]
++#[test]
++fn native_bounds_decoder_rejects_invalid_geometry_before_live_or_snapshot_use() {
++    use core_graphics::geometry::{CGPoint, CGSize};
++    for (point, size) in [
++        (CGPoint::new(0.0, 33.0), CGSize::new(-1.0, 0.0)),
++        (CGPoint::new(0.0, 0.0), CGSize::new(10.0, -0.5)),
++        (CGPoint::new(f64::NAN, 0.0), CGSize::new(10.0, 10.0)),
++        (CGPoint::new(0.0, 0.0), CGSize::new(f64::INFINITY, 10.0)),
++        (CGPoint::new(0.0, 0.0), CGSize::new(f64::MAX, 10.0)),
++    ] {
++        assert_eq!(rect_from_parts(point, size), None);
++    }
++    for size in [CGSize::new(0.0, 0.0), CGSize::new(20.0, 10.0)] {
++        let bounds = rect_from_parts(CGPoint::new(-20.0, 33.0), size).unwrap();
++        assert_eq!(bounds.x, -20.0);
++        assert_eq!(bounds.width, size.width);
++        assert_eq!(bounds.height, size.height);
++    }
++}
++
++fn rect(x: f64, width: f64) -> Rect {
++    Rect {
++        x,
++        y: 0.0,
++        width,
++        height: 100.0,
++    }
++}
++
++#[test]
++fn only_clipping_containers_narrow_the_viewport() {
++    let window = Some(rect(0.0, 500.0));
++    assert_eq!(
++        clipped_viewport(window, "AXGroup", Some(rect(20.0, 10.0))),
++        window
++    );
++    assert_eq!(
++        clipped_viewport(window, "AXScrollArea", Some(rect(20.0, 100.0))),
++        Some(rect(20.0, 100.0))
++    );
++}
++
++#[test]
++fn disjoint_viewports_remain_known_empty_through_descendants() {
++    let empty = clipped_viewport(
++        Some(rect(0.0, 100.0)),
++        "AXScrollArea",
++        Some(rect(200.0, 100.0)),
++    );
++    assert_eq!(
++        crate::tree::state_reader::offscreen(Some(rect(-50.0, 500.0)), empty),
++        Some(true)
++    );
++    let nested = clipped_viewport(empty, "AXScrollArea", Some(rect(-50.0, 500.0)));
++    assert_eq!(
++        crate::tree::state_reader::offscreen(Some(rect(-50.0, 500.0)), nested),
++        Some(true)
++    );
++}
++
++#[test]
++fn missing_clipping_geometry_is_unknown_not_empty() {
++    assert_eq!(
++        clipped_viewport(Some(rect(0.0, 100.0)), "AXScrollArea", None),
++        None
++    );
++    assert_eq!(
++        clipped_viewport(None, "AXScrollArea", Some(rect(0.0, 100.0))),
++        None
++    );
++}
++/// A menu item's `AXTopLevelUIElement` is the menu bar, whose 29-point height
++/// clips every open menu item. A window-less element therefore reports no
++/// owning window viewport rather than a wrong one.
++#[test]
++fn a_window_less_element_reports_no_owning_window_viewport() {
++    let mut attributes = Vec::new();
++    let container = first_owning_container(|attribute| {
++        attributes.push(attribute);
++        Ok(None)
++    })
++    .unwrap();
++
++    assert!(container.is_none());
++    assert_eq!(attributes, ["AXWindow"]);
++}
++
++#[test]
++fn incomplete_window_read_never_falls_through_to_a_weaker_container() {
++    for error in [
++        accessibility_sys::kAXErrorCannotComplete,
++        accessibility_sys::kAXErrorInvalidUIElement,
++    ] {
++        let calls = std::cell::Cell::new(0);
++        let result = first_owning_container(|_| {
++            calls.set(calls.get() + 1);
++            Err(error)
++        });
++
++        let failure = match result {
++            Err(failure) => failure,
++            Ok(_) => panic!("incomplete AXWindow read must fail"),
++        };
++        assert_eq!(failure, ("AXWindow", error));
++        assert_eq!(calls.get(), 1);
++    }
++}
++
++fn popup_bounds() -> Rect {
++    Rect {
++        x: 204.0,
++        y: 131.0,
++        width: 71.0,
++        height: 514.0,
++    }
++}
++
++#[test]
++fn popup_descendants_escape_outer_scroll_clipping_but_keep_surface_bounds() {
++    let ribbon = Rect {
++        x: 0.0,
++        y: 50.0,
++        width: 1000.0,
++        height: 126.0,
++    };
++    let item = Rect {
++        x: 209.0,
++        y: 184.0,
++        width: 60.0,
++        height: 24.0,
++    };
++    let outside = Rect { y: 650.0, ..item };
++    for role in ["AXMenu", "AXPopover"] {
++        let window = Rect {
++            height: 700.0,
++            ..rect(0.0, 1000.0)
++        };
++        let parent = clipped_viewport(Some(window), "AXScrollArea", Some(ribbon));
++        assert_eq!(
++            crate::tree::state_reader::offscreen(Some(item), parent),
++            Some(true)
++        );
++        let popup = clipped_viewport(parent, role, Some(popup_bounds()));
++        assert_eq!(popup, Some(popup_bounds()));
++        assert_eq!(
++            crate::tree::state_reader::offscreen(Some(item), popup),
++            Some(false)
++        );
++        assert_eq!(
++            crate::tree::state_reader::offscreen(Some(outside), popup),
++            Some(true)
++        );
++    }
++}
++
++#[test]
++fn submenu_can_establish_a_surface_outside_its_parent_menu_and_window() {
++    let submenu = rect(600.0, 100.0);
++    let menu = clipped_viewport(Some(rect(0.0, 500.0)), "AXMenu", Some(rect(400.0, 100.0)));
++    assert_eq!(
++        clipped_viewport(menu, "AXMenu", Some(submenu)),
++        Some(submenu)
++    );
++}
++
++#[test]
++fn popup_geometry_is_required_even_when_outer_geometry_is_known() {
++    for role in ["AXMenu", "AXPopover"] {
++        assert_eq!(clipped_viewport(Some(rect(0.0, 500.0)), role, None), None);
++        assert_eq!(
++            clipped_viewport(None, role, Some(popup_bounds())),
++            Some(popup_bounds())
++        );
++    }
++}
++
++fn read_ancestor_chain(window: Option<Rect>, chain: &[(&str, Option<Rect>)]) -> Option<Rect> {
++    ancestor_viewport_with(
++        window,
++        (!chain.is_empty()).then_some(0),
++        |index| Ok(Some(chain[*index].0.into())),
++        |index| Ok(chain[*index].1),
++        |index| Ok((*index + 1 < chain.len()).then_some(*index + 1)),
++    )
++    .unwrap()
++}
++
++#[test]
++fn live_popup_ancestry_retains_inner_scroll_clipping_and_stops_before_outer_scroll() {
++    let scroll = Rect {
++        x: 204.0,
++        y: 200.0,
++        width: 71.0,
++        height: 90.0,
++    };
++    for role in ["AXMenu", "AXPopover"] {
++        let chain = [("AXScrollArea", Some(scroll)), (role, Some(popup_bounds()))];
++        let viewport = ancestor_viewport_with(
++            Some(rect(0.0, 1000.0)),
++            Some(0),
++            |index| Ok(Some(chain[*index].0.into())),
++            |index| Ok(chain[*index].1),
++            |index| {
++                assert_eq!(
++                    *index, 0,
++                    "a popup must stop before reading its outer parent"
++                );
++                Ok(Some(*index + 1))
++            },
++        )
++        .unwrap();
++        assert_eq!(viewport, Some(scroll));
++        assert_eq!(
++            crate::tree::state_reader::offscreen(Some(Rect { y: 300.0, ..scroll }), viewport),
++            Some(true)
++        );
++    }
++}
++
++#[test]
++fn live_clipping_and_snapshot_clipping_agree_for_popup_and_regular_branches() {
++    let window = Some(rect(0.0, 500.0));
++    let popup = Some(rect(450.0, 200.0));
++    for outer_role in ["AXMenu", "AXPopover", "AXScrollArea", "AXGroup"] {
++        let chain = [
++            ("AXScrollArea", Some(rect(480.0, 100.0))),
++            (outer_role, popup),
++            ("AXWindow", window),
++        ];
++        let snapshot = chain.iter().rev().fold(window, |viewport, (role, bounds)| {
++            clipped_viewport(viewport, role, *bounds)
++        });
++        assert_eq!(
++            read_ancestor_chain(window, &chain),
++            snapshot,
++            "{outer_role}"
++        );
++    }
++}
++
++#[test]
++fn live_clipping_preserves_unknown_geometry_within_a_popup() {
++    for role in ["AXMenu", "AXPopover"] {
++        assert_eq!(
++            read_ancestor_chain(None, &[(role, Some(popup_bounds()))]),
++            Some(popup_bounds())
++        );
++        assert_eq!(
++            read_ancestor_chain(None, &[("AXScrollArea", Some(popup_bounds()))]),
++            None
++        );
++        assert_eq!(
++            read_ancestor_chain(Some(rect(0.0, 500.0)), &[(role, None)]),
++            None
++        );
++        assert_eq!(
++            read_ancestor_chain(
++                None,
++                &[("AXScrollArea", None), (role, Some(popup_bounds()))]
++            ),
++            None
++        );
++    }
++}
++
++#[test]
++fn missing_live_ancestor_role_cannot_establish_a_visible_surface() {
++    let viewport = ancestor_viewport_with(
++        Some(rect(0.0, 500.0)),
++        Some(0),
++        |_| Ok(None),
++        |_| panic!("unknown role must not be treated as a clipping surface"),
++        |_| panic!("unknown role must stop the walk"),
++    )
++    .unwrap();
++    assert_eq!(viewport, None);
++}
+diff --git a/crates/macos/src/tree/hit_test.rs b/crates/macos/src/tree/hit_test.rs
+index 1904a1a..89b45ad 100644
+--- a/crates/macos/src/tree/hit_test.rs
++++ b/crates/macos/src/tree/hit_test.rs
+@@ -266,9 +266,6 @@ mod imp {
+                 Ok(role) => role,
+                 Err(_) => return Ok(None),
+             };
+-            if ends_clipping_walk(role.as_deref()) {
+-                return Ok(Some(visible));
+-            }
+             if role.as_deref().is_some_and(clips_descendants) {
+                 let Some(bounds) = read_bounds_with_deadline(&current, deadline)? else {
+                     return Ok(None);
+@@ -278,6 +275,9 @@ mod imp {
+                 };
+                 visible = intersection;
+             }
++            if ends_clipping_walk(role.as_deref()) {
++                return Ok(Some(visible));
++            }
+             current = match crate::tree::resolve::resolve_ax_read::read_element(
+                 &current, "AXParent", deadline,
+             ) {
+@@ -289,8 +289,8 @@ mod imp {
+         Ok(None)
+     }
+ 
+-    use crate::tree::element_bounds::clips_descendants;
+     pub(super) use crate::tree::element_bounds::intersect_rects;
++    use crate::tree::element_bounds::{clips_descendants, starts_clipping_surface};
+ 
+     pub(super) fn remember_ancestor(visited: &mut Vec<AXElement>, current: &AXElement) -> bool {
+         if visited
+@@ -304,7 +304,7 @@ mod imp {
+     }
+ 
+     pub(super) fn ends_clipping_walk(role: Option<&str>) -> bool {
+-        role == Some(kAXApplicationRole)
++        role == Some(kAXApplicationRole) || role.is_some_and(starts_clipping_surface)
+     }
+ 
+     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+diff --git a/crates/macos/src/tree/hit_test_tests.rs b/crates/macos/src/tree/hit_test_tests.rs
+index 462a63c..e344a1d 100644
+--- a/crates/macos/src/tree/hit_test_tests.rs
++++ b/crates/macos/src/tree/hit_test_tests.rs
+@@ -99,3 +99,20 @@ fn ancestor_walk_retains_handles_and_detects_the_same_element() {
+     assert!(!remember_ancestor(&mut visited, &equivalent));
+     assert_eq!(visited.len(), 1);
+ }
++
++#[test]
++fn popup_surface_completes_pointer_clipping_before_its_outer_scroll_ancestors() {
++    for role in ["AXMenu", "AXPopover"] {
++        assert!(ends_clipping_walk(Some(role)));
++        assert!(crate::tree::element_bounds::clips_descendants(role));
++    }
++    for role in [
++        "AXMenuItem",
++        "AXPopUpButton",
++        "AXScrollArea",
++        "AXWebArea",
++        "AXSheet",
++    ] {
++        assert!(!ends_clipping_walk(Some(role)));
++    }
++}
+diff --git a/crates/macos/src/tree/properties/mod.rs b/crates/macos/src/tree/properties/mod.rs
+index f30fc8d..4374517 100644
+--- a/crates/macos/src/tree/properties/mod.rs
++++ b/crates/macos/src/tree/properties/mod.rs
+@@ -19,7 +19,11 @@ pub(crate) mod node_attribute_status;
+ pub(crate) mod node_attrs;
+ pub(crate) mod node_control_states;
+ pub(crate) mod node_identifiers;
++#[cfg(target_os = "macos")]
++pub(crate) mod node_label;
+ pub(crate) mod node_semantic_states;
++#[cfg(target_os = "macos")]
++pub(crate) mod range_text;
+ pub(crate) mod readonly;
+ #[cfg(target_os = "macos")]
+ pub(crate) mod selection_owner;
+diff --git a/crates/macos/src/tree/properties/node_attribute_fetch.rs b/crates/macos/src/tree/properties/node_attribute_fetch.rs
+index 316930c..8e444fa 100644
+--- a/crates/macos/src/tree/properties/node_attribute_fetch.rs
++++ b/crates/macos/src/tree/properties/node_attribute_fetch.rs
+@@ -20,10 +20,7 @@ mod imp {
+             properties::node_semantic_states::NodeSemanticStates,
+         },
+     };
+-    use accessibility_sys::{
+-        kAXDescriptionAttribute, kAXErrorFailure, kAXErrorSuccess, kAXRoleAttribute,
+-        kAXSubroleAttribute, kAXTitleAttribute,
+-    };
++    use accessibility_sys::{kAXErrorFailure, kAXErrorSuccess};
+     use agent_desktop_core::EvidenceRequirements;
+ 
+     pub(crate) fn fetch_node_attrs_with_status_for(
+@@ -94,7 +91,9 @@ mod imp {
+                 },
+                 17 => {
+                     if let Some(label) = ax_value::retained_ax_element(&item) {
+-                        match title_ui_element_text(&label, deadline, usage) {
++                        match crate::tree::properties::node_label::title_ui_element_text(
++                            &label, deadline, usage,
++                        ) {
+                             Ok(Some(value)) if value.complete => {
+                                 labelled_by_text = Some(value.value)
+                             }
+@@ -139,13 +138,35 @@ mod imp {
+         }
+         let role_complete = !status.field_unknown(ROLE) && role.is_some();
+         let subrole_complete = !status.field_unknown(SUBROLE);
+-        if crate::tree::properties::node_attribute_names::should_read_value(
++        let read_value = crate::tree::properties::node_attribute_names::should_read_value(
+             requirements,
+             role.as_deref(),
+             subrole.as_deref(),
+             role_complete,
+             subrole_complete,
+-        ) {
++        );
++        let mut range_handled = false;
++        if read_value
++            && crate::tree::properties::range_text::eligible(role.as_deref(), subrole.as_deref())
++        {
++            fallback_reads += 3;
++            match crate::tree::properties::range_text::read(element, deadline, usage) {
++                Ok(Some(value)) if value.complete => {
++                    texts[VALUE] = Some(value.value);
++                    range_handled = true;
++                }
++                Ok(Some(_)) => {
++                    status.record_truncated(VALUE);
++                    range_handled = true;
++                }
++                Ok(None) => {}
++                Err(error) => {
++                    status.record_slot_error(VALUE, error);
++                    range_handled = true;
++                }
++            }
++        }
++        if read_value && !range_handled {
+             batch_reads += 1;
+             requested_count += 1;
+             if crate::tree::locator_deadline::remaining(deadline).is_err() {
+@@ -313,50 +334,6 @@ mod imp {
+             status,
+         }
+     }
+-
+-    fn title_ui_element_text(
+-        element: &AXElement,
+-        deadline: std::time::Instant,
+-        usage: &mut crate::tree::observation_usage::ObservationUsage,
+-    ) -> Result<Option<crate::tree::properties::bounded_string::BoundedString>, i32> {
+-        let title = crate::tree::properties::attributes::copy_string_attr_bounded_result(
+-            element,
+-            kAXTitleAttribute,
+-            deadline,
+-            usage,
+-        )?;
+-        if let Some(title) = title.filter(|value| !value.value.trim().is_empty()) {
+-            return Ok(Some(title));
+-        }
+-        let role = crate::tree::properties::attributes::copy_string_attr_result(
+-            element,
+-            kAXRoleAttribute,
+-            deadline,
+-        )?;
+-        let subrole = crate::tree::properties::attributes::copy_string_attr_result(
+-            element,
+-            kAXSubroleAttribute,
+-            deadline,
+-        )?;
+-        let safe_static_text = role.as_deref() == Some("AXStaticText")
+-            && subrole.as_deref() != Some("AXSecureTextField");
+-        if safe_static_text {
+-            if let Some(value) =
+-                crate::tree::properties::attributes::copy_value_typed_bounded_result(
+-                    element, deadline, usage,
+-                )?
+-                .filter(|value| !value.value.trim().is_empty())
+-            {
+-                return Ok(Some(value));
+-            }
+-        }
+-        crate::tree::properties::attributes::copy_string_attr_bounded_result(
+-            element,
+-            kAXDescriptionAttribute,
+-            deadline,
+-            usage,
+-        )
+-    }
+ }
+ 
+ #[cfg(not(target_os = "macos"))]
+diff --git a/crates/macos/src/tree/properties/node_label.rs b/crates/macos/src/tree/properties/node_label.rs
+new file mode 100644
+index 0000000..bd435ad
+--- /dev/null
++++ b/crates/macos/src/tree/properties/node_label.rs
+@@ -0,0 +1,47 @@
++use crate::tree::AXElement;
++use accessibility_sys::{
++    kAXDescriptionAttribute, kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute,
++};
++
++pub(crate) fn title_ui_element_text(
++    element: &AXElement,
++    deadline: std::time::Instant,
++    usage: &mut crate::tree::observation_usage::ObservationUsage,
++) -> Result<Option<crate::tree::properties::bounded_string::BoundedString>, i32> {
++    let title = crate::tree::properties::attributes::copy_string_attr_bounded_result(
++        element,
++        kAXTitleAttribute,
++        deadline,
++        usage,
++    )?;
++    if let Some(title) = title.filter(|value| !value.value.trim().is_empty()) {
++        return Ok(Some(title));
++    }
++    let role = crate::tree::properties::attributes::copy_string_attr_result(
++        element,
++        kAXRoleAttribute,
++        deadline,
++    )?;
++    let subrole = crate::tree::properties::attributes::copy_string_attr_result(
++        element,
++        kAXSubroleAttribute,
++        deadline,
++    )?;
++    let safe_static_text =
++        role.as_deref() == Some("AXStaticText") && subrole.as_deref() != Some("AXSecureTextField");
++    if safe_static_text {
++        if let Some(value) = crate::tree::properties::attributes::copy_value_typed_bounded_result(
++            element, deadline, usage,
++        )?
++        .filter(|value| !value.value.trim().is_empty())
++        {
++            return Ok(Some(value));
++        }
++    }
++    crate::tree::properties::attributes::copy_string_attr_bounded_result(
++        element,
++        kAXDescriptionAttribute,
++        deadline,
++        usage,
++    )
++}
+diff --git a/crates/macos/src/tree/properties/range_text.rs b/crates/macos/src/tree/properties/range_text.rs
+new file mode 100644
+index 0000000..95d06ef
+--- /dev/null
++++ b/crates/macos/src/tree/properties/range_text.rs
+@@ -0,0 +1,93 @@
++use super::{ax_ipc, bounded_string::BoundedString};
++use crate::tree::{AXElement, observation_usage::ObservationUsage};
++use accessibility_sys::{
++    AXValueCreate, kAXErrorCannotComplete, kAXErrorFailure,
++    kAXErrorParameterizedAttributeUnsupported, kAXErrorSuccess, kAXValueTypeCFRange,
++};
++use core_foundation::{
++    base::{CFType, TCFType},
++    number::CFNumber,
++    string::CFString,
++};
++use core_foundation_sys::base::CFRange;
++
++pub(crate) fn eligible(role: Option<&str>, subrole: Option<&str>) -> bool {
++    matches!(role, Some("AXTextField" | "AXTextArea" | "AXComboBox"))
++        && subrole != Some("AXSecureTextField")
++}
++
++fn count(element: &AXElement, deadline: impl ax_ipc::AxDeadline) -> Result<Option<usize>, i32> {
++    let name = CFString::new("AXNumberOfCharacters");
++    let (error, raw) = ax_ipc::copy_attribute_value(element, name.as_concrete_TypeRef(), deadline);
++    let value = (!raw.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(raw) });
++    if error != kAXErrorSuccess {
++        return if super::ax_absence::is_absent_attribute_error(error)
++            || error == kAXErrorParameterizedAttributeUnsupported
++        {
++            Ok(None)
++        } else {
++            Err(error)
++        };
++    }
++    let number = value
++        .and_then(|v| v.downcast::<CFNumber>())
++        .and_then(|n| n.to_i64());
++    number
++        .and_then(|n| usize::try_from(n).ok())
++        .map(Some)
++        .ok_or(kAXErrorFailure)
++}
++
++pub(crate) fn read(
++    element: &AXElement,
++    deadline: impl ax_ipc::AxDeadline,
++    usage: &mut ObservationUsage,
++) -> Result<Option<BoundedString>, i32> {
++    let Some(length) = count(element, deadline)? else {
++        return Ok(None);
++    };
++    if length > usage.string_capacity() {
++        return Ok(Some(BoundedString {
++            value: String::new(),
++            complete: false,
++        }));
++    }
++    let range = CFRange::init(0, length as isize);
++    let parameter =
++        unsafe { AXValueCreate(kAXValueTypeCFRange, (&range as *const CFRange).cast()) };
++    if parameter.is_null() {
++        return Err(kAXErrorFailure);
++    }
++    let parameter = unsafe { CFType::wrap_under_create_rule(parameter.cast()) };
++    let name = CFString::new("AXStringForRange");
++    let (error, raw) = ax_ipc::copy_parameterized_attribute_value(
++        element,
++        name.as_concrete_TypeRef(),
++        parameter.as_CFTypeRef(),
++        deadline,
++    );
++    let value = (!raw.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(raw) });
++    if error != kAXErrorSuccess {
++        return if super::ax_absence::is_absent_attribute_error(error)
++            || error == kAXErrorParameterizedAttributeUnsupported
++        {
++            Ok(None)
++        } else {
++            Err(error)
++        };
++    }
++    let text = value
++        .and_then(|v| v.downcast::<CFString>())
++        .ok_or(kAXErrorFailure)?;
++    let text = BoundedString::from_cf(&text, usage).map_err(|_| kAXErrorFailure)?;
++    if count(element, deadline)? != Some(length)
++        || text.complete && text.value.encode_utf16().count() != length
++    {
++        return Err(kAXErrorCannotComplete);
++    }
++    Ok(Some(text))
++}
++
++#[cfg(test)]
++#[path = "range_text_tests.rs"]
++mod tests;
+diff --git a/crates/macos/src/tree/properties/range_text_tests.rs b/crates/macos/src/tree/properties/range_text_tests.rs
+new file mode 100644
+index 0000000..4a874ca
+--- /dev/null
++++ b/crates/macos/src/tree/properties/range_text_tests.rs
+@@ -0,0 +1,11 @@
++use super::*;
++
++#[test]
++fn range_text_never_reads_secure_or_non_text_controls() {
++    assert!(eligible(Some("AXTextField"), Some("AXSearchField")));
++    assert!(eligible(Some("AXTextArea"), None));
++    assert!(eligible(Some("AXComboBox"), None));
++    assert!(!eligible(Some("AXTextField"), Some("AXSecureTextField")));
++    assert!(!eligible(Some("AXSecureTextField"), None));
++    assert!(!eligible(Some("AXButton"), None));
++}
+diff --git a/crates/macos/src/tree/properties/text_attributes.rs b/crates/macos/src/tree/properties/text_attributes.rs
+index ebe335e..686ece7 100644
+--- a/crates/macos/src/tree/properties/text_attributes.rs
++++ b/crates/macos/src/tree/properties/text_attributes.rs
+@@ -84,6 +84,18 @@ mod imp {
+         deadline: impl crate::tree::properties::ax_ipc::AxDeadline,
+         usage: &mut crate::tree::observation_usage::ObservationUsage,
+     ) -> Result<Option<BoundedString>, i32> {
++        let role = copy_string_attr_result(el, "AXRole", deadline)?;
++        let subrole = copy_string_attr_result(el, "AXSubrole", deadline)?;
++        if role.as_deref() == Some("AXSecureTextField")
++            || subrole.as_deref() == Some("AXSecureTextField")
++        {
++            return Ok(None);
++        }
++        if crate::tree::properties::range_text::eligible(role.as_deref(), subrole.as_deref()) {
++            if let Some(text) = crate::tree::properties::range_text::read(el, deadline, usage)? {
++                return Ok(Some(text));
++            }
++        }
+         let attribute = CFString::new(kAXValueAttribute);
+         let (error, value) = crate::tree::properties::ax_ipc::copy_attribute_value(
+             el,
+diff --git a/crates/macos/src/tree/state_reader.rs b/crates/macos/src/tree/state_reader.rs
+index 1405779..7e4d82a 100644
+--- a/crates/macos/src/tree/state_reader.rs
++++ b/crates/macos/src/tree/state_reader.rs
+@@ -60,7 +60,7 @@ pub(crate) fn states_from_element(
+     if attrs.states.control.readonly == Some(true) {
+         states.push(state::READONLY.into());
+     }
+-    if offscreen(attrs.bounds, ctx.window_bounds).unwrap_or(false) {
++    if offscreen_from_attrs(attrs, ctx.window_bounds).unwrap_or(false) {
+         states.push(state::OFFSCREEN.into());
+     }
+     states
+@@ -111,6 +111,15 @@ fn value_is_indeterminate(value: Option<&str>) -> bool {
+     })
+ }
+ 
++pub(crate) fn offscreen_from_attrs(attrs: &NodeAttrs, parent: Option<Rect>) -> Option<bool> {
++    let viewport = super::element_bounds::surface_viewport(
++        parent,
++        attrs.role.as_deref().unwrap_or(""),
++        attrs.bounds,
++    );
++    offscreen(attrs.bounds, viewport)
++}
++
+ /// `None` when either rectangle is unknown. No macOS element publishes
+ /// `AXOffscreen`, so this geometry test is the only source of the state and
+ /// both the canonical state list and the live element read must share it.
+diff --git a/crates/macos/src/tree/state_reader_tests.rs b/crates/macos/src/tree/state_reader_tests.rs
+index f44b3c6..005e0f5 100644
+--- a/crates/macos/src/tree/state_reader_tests.rs
++++ b/crates/macos/src/tree/state_reader_tests.rs
+@@ -174,3 +174,31 @@ fn disclosure_value_is_role_scoped_and_explicit_state_wins() {
+     attrs.value = Some("1".into());
+     assert_eq!(super::expanded_from_attrs(&attrs), Some(true));
+ }
++
++#[test]
++fn popup_state_uses_its_own_surface_and_preserves_explicit_hidden_state() {
++    let el = AXElement(std::ptr::null_mut());
++    for native_role in ["AXMenu", "AXPopover"] {
++        let mut attrs = sample_attrs();
++        attrs.role = Some(native_role.into());
++        attrs.bounds = Some(Rect {
++            x: 200.0,
++            y: 200.0,
++            width: 100.0,
++            height: 400.0,
++        });
++        let parent = Some(Rect {
++            x: 0.0,
++            y: 0.0,
++            width: 500.0,
++            height: 100.0,
++        });
++        assert_eq!(offscreen(attrs.bounds, parent), Some(true));
++        let states = states_from_element(&el, &attrs, "menu", &ctx_with(parent, false));
++        assert!(!states.contains(&state::OFFSCREEN.to_string()));
++        assert_eq!(offscreen_from_attrs(&attrs, parent), Some(false));
++        attrs.states.semantic.hidden = Some(true);
++        let states = states_from_element(&el, &attrs, "menu", &ctx_with(parent, false));
++        assert!(states.contains(&state::HIDDEN.to_string()));
++    }
++}
