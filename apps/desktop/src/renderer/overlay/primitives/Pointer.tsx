@@ -4,30 +4,18 @@ import { totalMs } from "../pointerTimeline";
 import { Label } from "./Label";
 
 /**
- * The pointing hand. Drawn pointing RIGHT with the fingertip at the element origin, then rotated
- * by `angle`. The choreography is a single CSS keyframe set per motion (see pointerTimeline.ts);
- * positions come from CSS variables so a moved target just updates the variables.
+ * The pointer: a bold arrow (clearer than a hand at a glance for older eyes). Drawn pointing RIGHT
+ * with the tip at the element origin (x=94, y=48), then rotated by `angle`. The choreography is a
+ * single CSS keyframe set per motion (see pointerTimeline.ts); positions come from CSS variables so
+ * a moved target just updates the variables.
  */
-const HAND = [
-  // palm, thumb, index finger (the fingertip is at x=94, y=48)
-  { x: 6, y: 30, w: 46, h: 42, r: 14 },
-  { x: 26, y: 20, w: 26, h: 22, r: 11 },
-  { x: 34, y: 38, w: 60, h: 20, r: 10 },
-];
+const ARROW = "M94 48 L56 14 L56 34 L6 34 L6 62 L56 62 L56 82 Z";
 
-function Hand() {
+function Arrow() {
   return (
     <svg className="ptr-svg" width="96" height="96" viewBox="0 0 96 96" aria-hidden="true">
-      <g className="ptr-hand-outline">
-        {HAND.map((r, i) => (
-          <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} rx={r.r} />
-        ))}
-      </g>
-      <g className="ptr-hand">
-        {HAND.map((r, i) => (
-          <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} rx={r.r} />
-        ))}
-      </g>
+      <path className="ptr-hand-outline" d={ARROW} />
+      <path className="ptr-hand" d={ARROW} />
     </svg>
   );
 }
@@ -49,7 +37,7 @@ export function PointerView({ item }: { item: PointerItem }) {
     <div className={`item item-pointer ${item.state}`} data-item={item.id} data-motion={item.motion}>
       <div className={`ptr motion-${item.motion}`} style={vars as CSSProperties}>
         <div className="ptr-body">
-          <Hand />
+          <Arrow />
         </div>
       </div>
       {item.label ? <Label label={item.label} className="label-late" /> : null}

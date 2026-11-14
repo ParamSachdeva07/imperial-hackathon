@@ -185,13 +185,19 @@ body,
 .ptr.motion-double_tap .ptr-body { animation-name: ptr-press-double_tap; }
 .ptr.motion-drag_to .ptr-body { animation-name: ptr-press-drag_to; }
 .ptr-svg { display: block; overflow: visible; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35)); }
-.ptr-hand-outline rect {
+.ptr-hand-outline {
   fill: var(--outline-color);
   stroke: var(--outline-color);
   stroke-width: calc(2 * var(--outline) + 2px);
   stroke-linejoin: round;
 }
-.ptr-hand rect { fill: #111827; }
+/* Info blue fill + thin dark edge: reads on light and dark wallpapers alike. */
+.ptr-hand {
+  fill: var(--info);
+  stroke: #111827;
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
 
 /* ---------- steps ---------- */
 .step-badge {
@@ -358,9 +364,10 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.45);
 }
-.slot-failed .slot-icon { color: rgba(255, 255, 255, 0.4); }
+/* Failed image: the nearest icon, large and clear (spec §7.3 fallback), never a "broken" look. */
+.slot-failed .slot-icon { color: #ffffff; }
 .shimmer {
   position: absolute;
   inset: 0;

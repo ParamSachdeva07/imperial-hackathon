@@ -22,7 +22,7 @@ export function ImageSlotView({
         <>
           {slot.status === "loading" ? <div className="shimmer" /> : null}
           <div className="slot-icon">
-            <Icon name={slot.fallbackIcon} size={88} strokeWidth={2.5} />
+            <Icon name={slot.fallbackIcon} size={slot.status === "failed" ? 128 : 96} strokeWidth={slot.status === "failed" ? 3.5 : 3} />
           </div>
         </>
       )}

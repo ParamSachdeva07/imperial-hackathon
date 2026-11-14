@@ -84,7 +84,9 @@ export function measureLabel(text: string, withGlyph = false): Size {
   const chrome = 2 * LABEL.padX + 2 * theme.outline + glyph;
   const natural = Math.max(textWidth(text, LABEL.fontSize) + chrome, 2 * LABEL.padX + 2 * theme.outline + 28);
   const width = Math.min(LABEL.maxWidth, natural);
-  const lines = lineCount(text, LABEL.fontSize, width - chrome);
+  // Text that fits at its natural width is one line by construction (avoids a phantom 2nd line
+  // when the per-word wrap estimate disagrees with textWidth by a pixel).
+  const lines = natural <= LABEL.maxWidth ? 1 : lineCount(text, LABEL.fontSize, width - chrome);
   const height = Math.ceil(lines * LABEL.fontSize * LINE_HEIGHT) + 2 * LABEL.padY + 2 * theme.outline;
   return { width, height };
 }
