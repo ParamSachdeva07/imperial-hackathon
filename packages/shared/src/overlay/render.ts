@@ -185,9 +185,18 @@ export const IPC = {
   image: "overlay:image",
   /** main → overlay renderer: { keys } — images no longer referenced */
   imageDrop: "overlay:image-drop",
+  /** overlay renderer → main: ImageFailedMessage — a "ready" picture failed to decode */
+  imageFailed: "overlay:image-failed",
   /** fixture renderer → main: FixtureBoundsMessage */
   fixtureBounds: "fixture:bounds",
 } as const;
+
+/** Overlay renderer → main: an explainer picture that was "ready" couldn't be decoded. */
+export interface ImageFailedMessage {
+  overlayId: string;
+  /** concept: panel index; compare: 0 = left, 1 = right; anatomy: 0. */
+  panel: number;
+}
 
 /** An element id with its rect (global DIP unless stated otherwise). */
 export interface ElementRect {

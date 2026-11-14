@@ -5,10 +5,10 @@ import { ImageSlotView } from "./ImageSlot";
 
 type Body = Extract<ExplainerBody, { kind: "compare" }>;
 
-function Side({ side, tone, imageScale }: { side: CompareSideBody; tone: "success" | "warning"; imageScale: number }) {
+function Side({ side, tone, imageScale, panel }: { side: CompareSideBody; tone: "success" | "warning"; imageScale: number; panel: number }) {
   return (
     <div className={`cmp-col cmp-${tone}`} data-side={tone === "success" ? "left" : "right"}>
-      {side.image ? <ImageSlotView slot={side.image} style={{ height: compareImageHeight(imageScale) }} /> : null}
+      {side.image ? <ImageSlotView slot={side.image} panel={panel} style={{ height: compareImageHeight(imageScale) }} /> : null}
       <div className="cmp-head">{side.title}</div>
       {side.points.length > 0 ? (
         <ul className="cmp-points">
@@ -27,8 +27,8 @@ function Side({ side, tone, imageScale }: { side: CompareSideBody; tone: "succes
 export function CompareTemplate({ body, imageScale = 1 }: { body: Body; imageScale?: number }) {
   return (
     <div className="cmp">
-      <Side side={body.left} tone="success" imageScale={imageScale} />
-      <Side side={body.right} tone="warning" imageScale={imageScale} />
+      <Side side={body.left} tone="success" imageScale={imageScale} panel={0} />
+      <Side side={body.right} tone="warning" imageScale={imageScale} panel={1} />
     </div>
   );
 }

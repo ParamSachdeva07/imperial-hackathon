@@ -9,7 +9,7 @@ export function ConceptPanels({ body, imageScale = 1 }: { body: Body; imageScale
     <div className="concept">
       {body.panels.map((p, i) => (
         <div className="concept-panel" key={i} data-panel={i}>
-          <ImageSlotView slot={p.image} style={{ height: conceptImageHeight(body.panels.length, imageScale) }} />
+          <ImageSlotView slot={p.image} panel={i} style={{ height: conceptImageHeight(body.panels.length, imageScale) }} />
           <div className="concept-caption">{p.caption}</div>
         </div>
       ))}

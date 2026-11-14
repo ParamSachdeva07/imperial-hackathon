@@ -38,6 +38,8 @@ export interface LayoutInput {
   gap?: number;
   /** Allow the 80% shrink step. Default true. */
   allowShrink?: boolean;
+  /** Side to try first (the box's previous side), so a small move doesn't make it jump sides. */
+  prefer?: Placement;
 }
 
 export interface LayoutResult {
@@ -96,8 +98,10 @@ export function placeBeside(input: LayoutInput): LayoutResult {
   const allowShrink = input.allowShrink ?? true;
   const scales = allowShrink ? [1, SHRINK] : [1];
 
+  const preferFirst = (c: [Exclude<Placement, "corner">, Rect][]) =>
+    input.prefer ? [...c.filter(([p]) => p === input.prefer), ...c.filter(([p]) => p !== input.prefer)] : c;
   for (const scale of scales) {
-    for (const [placement, rect] of sideCandidates(target, scaled(size, scale), workArea, gap)) {
+    for (const [placement, rect] of preferFirst(sideCandidates(target, scaled(size, scale), workArea, gap))) {
       if (containsRect(workArea, rect) && !intersects(rect, target) && !overlapsAny(rect, avoid)) {
         return { rect, placement, scale, connector: connectorBetween(rect, target) };
       }
@@ -203,6 +207,8 @@ export function pointerPlacement(
   pointerSize: number = theme.pointerSize,
   /** Other displays' bounds: an entry point on a neighbouring display would glide across it. */
   otherDisplays: Rect[] = [],
+  /** The pointer's previous angle: keep approaching from that side while it still works. */
+  preferAngle?: number,
 ): PointerPlacement {
   const tap = center(target);
   const edges = [
@@ -217,7 +223,9 @@ export function pointerPlacement(
   const candidates = edges.map((e) => placeFrom(e.entry, tap, target, pointerSize));
   const onScreen = (c: PointerPlacement) => containsRect(displayBounds, c.body);
   const clearOfNeighbours = (c: PointerPlacement) => !otherDisplays.some((d) => containsPoint(d, c.entry));
+  const sameSide = (c: PointerPlacement) => preferAngle !== undefined && Math.abs(c.angle - preferAngle) < 1;
   return (
+    candidates.find((c) => sameSide(c) && onScreen(c) && clearOfNeighbours(c)) ??
     candidates.find((c) => onScreen(c) && clearOfNeighbours(c)) ??
     candidates.find(onScreen) ??
     candidates[0]!
@@ -292,10 +300,13 @@ export interface CardPlacementInput {
   avoid: Rect[];
   /** Picture scale for the compact re-layout. */
   compactImageScale: number;
+  /** The card's previous side (keep it while it still fits). */
+  prefer?: Placement;
 }
 
 export interface CardPlacement {
   rect: Rect;
+  placement: Placement;
   /** Whole-card scale (1, or less when nothing else fits). */
   scale: number;
   connector: Segment | null;
@@ -314,11 +325,11 @@ export function placeCard(input: CardPlacementInput): CardPlacement {
   const { anchor, workArea, avoid } = input;
   const place = (size: Size): Omit<CardPlacement, "imageScale" | "designSize"> => {
     if (anchor) {
-      const r = placeBeside({ target: anchor, size, workArea, avoid });
-      return { rect: r.rect, scale: r.scale, connector: r.connector };
+      const r = placeBeside({ target: anchor, size, workArea, avoid, ...(input.prefer ? { prefer: input.prefer } : {}) });
+      return { rect: r.rect, placement: r.placement, scale: r.scale, connector: r.connector };
     }
     const r = placeCentredRight(size, workArea, avoid);
-    return { rect: r.rect, scale: r.scale, connector: null };
+    return { rect: r.rect, placement: r.placement, scale: r.scale, connector: null };
   };
   let designSize = input.measure(1);
   let imageScale = 1;
@@ -334,7 +345,12 @@ export function placeCard(input: CardPlacementInput): CardPlacement {
   }
   if (placed.scale < 1 && anchor) {
     const full = placeBeside({ target: anchor, size: designSize, workArea, avoid, allowShrink: false });
-    if (full.scale === 1) placed = { rect: full.rect, scale: 1, connector: full.connector };
+    if (full.scale === 1) placed = { rect: full.rect, placement: full.placement, scale: 1, connector: full.connector };
+  }
+  if (placed.scale < 1 && !anchor && fitScale(designSize, workArea, theme.edgeMargin) >= 1) {
+    // No anchor: a full-size card in any free corner beats a smaller one centred-right.
+    const corner = corners(designSize, workArea, theme.edgeMargin).find((c) => !overlapsAny(c, avoid));
+    if (corner) placed = { rect: corner, placement: "corner", scale: 1, connector: null };
   }
   return { ...placed, imageScale, designSize };
 }

@@ -4,9 +4,11 @@
  *  - Every `intervalMs` (default 300) while at least one anchor is tracked, and immediately when
  *    BoundsProvider.onChange fires, re-resolve every tracked element id (each distinct id once per
  *    check). Checks never overlap: a change arriving mid-check schedules exactly one follow-up check.
- *  - When an element's bounds differ from the last known bounds (rectsEqual eps 0.5) or its
+ *  - When an element's bounds differ from the last REPORTED bounds (rectsEqual eps 0.5) or its
  *    displayId changes → onMoved(overlayId, elementId, bounds). Also fires when an element that was
- *    missing (or never found) is found again.
+ *    missing (or never found) is found again. Comparing against the last reported bounds means many
+ *    tiny moves add up instead of each being ignored.
+ *  - After each check, onCheckDone() (if given) — so a consumer can redraw once per check.
  *  - When an element is missing for `lostAfterMisses` (default 2) consecutive checks →
  *    onLost(overlayId, elementId), once, until it is found again.
  *  - Never throws from a check: a provider rejection counts as "missing".
@@ -24,6 +26,8 @@ export interface AnchorTrackerOptions {
   lostAfterMisses?: number;
   onMoved: (overlayId: string, elementId: string, bounds: ElementBounds) => void;
   onLost: (overlayId: string, elementId: string) => void;
+  /** Called after every check, once all onMoved/onLost callbacks for it have run. */
+  onCheckDone?: () => void;
 }
 
 interface AnchorState {
@@ -39,6 +43,7 @@ export class AnchorTracker {
   private readonly lostAfter: number;
   private readonly onMoved: AnchorTrackerOptions["onMoved"];
   private readonly onLost: AnchorTrackerOptions["onLost"];
+  private readonly onCheckDone: (() => void) | undefined;
 
   /** overlayId → elementId → state. */
   private readonly overlays = new Map<string, Map<string, AnchorState>>();
@@ -56,6 +61,7 @@ export class AnchorTracker {
     this.lostAfter = opts.lostAfterMisses ?? 2;
     this.onMoved = opts.onMoved;
     this.onLost = opts.onLost;
+    this.onCheckDone = opts.onCheckDone;
   }
 
   /**
@@ -178,8 +184,10 @@ export class AnchorTracker {
             !rectsEqual(state.bounds.rect, found.rect);
           state.misses = 0;
           state.lost = false;
-          state.bounds = found;
-          if (changed || wasMissing) this.safely(() => this.onMoved(overlayId, elementId, found));
+          if (changed || wasMissing) {
+            state.bounds = found; // the new reference point for the next comparison
+            this.safely(() => this.onMoved(overlayId, elementId, found));
+          }
         } else {
           state.misses += 1;
           if (state.misses >= this.lostAfter && !state.lost) {
@@ -188,7 +196,7 @@ export class AnchorTracker {
           }
         }
       }
-    }
+    }    if (this.onCheckDone) this.safely(this.onCheckDone);
   }
 
   private safely(fn: () => void): void {

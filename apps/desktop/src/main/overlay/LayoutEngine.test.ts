@@ -419,3 +419,32 @@ describe("placeCard (explainer card fallback chain)", () => {
     expect(p.rect.x + p.rect.width).toBe(1000 - 24);
   });
 });
+
+describe("stable sides (no jumping on small moves)", () => {
+  const work = r(0, 0, 1000, 800);
+
+  it("placeBeside tries the preferred side first", () => {
+    const t = r(400, 350, 100, 40);
+    expect(placeBeside({ target: t, size: { width: 120, height: 40 }, workArea: work }).placement).toBe("right");
+    expect(placeBeside({ target: t, size: { width: 120, height: 40 }, workArea: work, prefer: "below" }).placement).toBe("below");
+  });
+
+  it("pointerPlacement keeps the previous approach side while it still works", () => {
+    // Nearest edge is left (centre x=320 of 1000), but the pointer came from the right before.
+    const t = r(300, 380, 40, 40);
+    expect(pointerPlacement(t, work).angle).toBe(0);
+    expect(pointerPlacement(t, work, 96, [], 180).angle).toBe(180);
+    // …unless that side no longer fits.
+    expect(pointerPlacement(r(940, 380, 40, 40), work, 96, [], 180).angle).not.toBe(180);
+  });
+
+  it("placeCard puts an unanchored card that doesn't fit centred-right into a free corner at full size", () => {
+    // The right half and a middle-left band are taken: centred-right and all its slides are blocked
+    // (so it would shrink), but the top-left corner is free at full size.
+    const avoid = [r(500, 0, 500, 800), r(0, 300, 500, 200)];
+    const p = placeCard({ anchor: null, measure: () => ({ width: 300, height: 200 }), hasImages: false, workArea: work, avoid, compactImageScale: 0.6 });
+    expect(p.scale).toBe(1);
+    expect(p.placement).toBe("corner");
+    expect(p.rect.x).toBe(24);
+  });
+});

@@ -397,4 +397,43 @@ describe("AnchorTracker multiple overlays / elements", () => {
     await t.check();
     expect(provider.calls).toEqual([]);
   });
+
+describe("AnchorTracker: drift and per-check callback", () => {
+  it("accumulates sub-tolerance drift against the last reported position", async () => {
+    const clock = new FakeClock();
+    const provider = new FakeBoundsProvider();
+    const moved: number[] = [];
+    let x = 100;
+    provider.set("a", { rect: { x, y: 0, width: 10, height: 10 }, displayId: "1" });
+    const t = new AnchorTracker({ boundsProvider: provider, clock, onMoved: (_o, _e, b) => moved.push(b.rect.x), onLost: () => {} });
+    t.track("o", ["a"], new Map([["a", { rect: { x, y: 0, width: 10, height: 10 }, displayId: "1" }]]));
+    for (let i = 0; i < 4; i++) {
+      x += 0.4; // each step is below the 0.5 DIP tolerance…
+      provider.set("a", { rect: { x, y: 0, width: 10, height: 10 }, displayId: "1" });
+      await t.check();
+    }
+    // …but they add up: reported whenever the total since the last report exceeds the tolerance
+    // (+0.8 and +1.6). Before, every step was compared to the previous one and nothing was reported.
+    expect(moved).toHaveLength(2);
+    expect(moved[0]).toBeCloseTo(100.8);
+    expect(moved[1]).toBeCloseTo(101.6);
+  });
+
+  it("calls onCheckDone once per check, after the move callbacks", async () => {
+    const provider = new FakeBoundsProvider();
+    const order: string[] = [];
+    provider.set("a", { rect: { x: 0, y: 0, width: 10, height: 10 }, displayId: "1" });
+    provider.set("b", { rect: { x: 50, y: 0, width: 10, height: 10 }, displayId: "1" });
+    const t = new AnchorTracker({
+      boundsProvider: provider,
+      clock: new FakeClock(),
+      onMoved: (_o, e) => order.push(`moved:${e}`),
+      onLost: () => {},
+      onCheckDone: () => order.push("done"),
+    });
+    t.track("o", ["a", "b"], new Map());
+    await t.check();
+    expect(order).toEqual(["moved:a", "moved:b", "done"]);
+  });
+});
 });

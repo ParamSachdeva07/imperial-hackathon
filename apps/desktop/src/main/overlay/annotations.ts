@@ -26,7 +26,7 @@ import {
 import type { TimerHandle } from "./clock";
 import type { ExplainerState } from "./explainer/ExplainerService";
 import { center } from "./geometry";
-import { hintPlacement, placeCard, pointerPlacement } from "./LayoutEngine";
+import { hintPlacement, placeCard, pointerPlacement, type Placement } from "./LayoutEngine";
 import { statusOf, type StepsState } from "./steps";
 import type { ResolvedTarget } from "./TargetResolver";
 
@@ -50,6 +50,8 @@ interface LiveBase {
   graceTimer: TimerHandle | null;
   /** Exiting or removed: ignore late async results. */
   ended: boolean;
+  /** Last side each label/card was placed on (kept while it fits, so small moves don't flip it). */
+  placements: Map<string, Placement>;
 }
 
 /** Service-side state for one annotation, discriminated by tool. */
@@ -70,13 +72,19 @@ export interface LayoutContext {
   avoid(): Rect[];
   displayOf(r: ResolvedTarget | null): DisplayInfo;
   otherDisplayBounds(display: DisplayInfo): Rect[];
-  placeLabel(text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[]): RenderLabel | null;
+  /** Place a label beside `around`; `key` names it so it keeps its side across re-layouts. */
+  placeLabel(key: string, text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[]): RenderLabel | null;
+  /** The previous side of a box (by key), to keep it stable. */
+  previousSide(key: string): Placement | undefined;
+  rememberSide(key: string, side: Placement): void;
   explainerBody(state: ExplainerState): ExplainerBody;
 }
 
 export interface AnnotationKind<T extends DrawTool> {
   /** Overlay id prefix ("hl_3"). */
   idPrefix: string;
+  /** Input the schema accepts but the tool can't act on (→ invalid_input). */
+  invalid?(input: InputOf<T>): boolean;
   slots(input: InputOf<T>): Map<Slot, Target>;
   /** Slots that must resolve for the call to show anything (else visible:false + reason). */
   required(input: InputOf<T>, slot: Slot): boolean;
@@ -119,13 +127,15 @@ const highlight: AnnotationKind<"highlight"> = {
       style: l.input.style,
       tone: l.input.tone,
       target: t,
-      label: ctx.placeLabel(l.input.label, l.input.tone, t.bounds, ctx.displayOf(r), ctx.avoid()),
+      label: ctx.placeLabel("label", l.input.label, l.input.tone, t.bounds, ctx.displayOf(r), ctx.avoid()),
     };
   },
 };
 
 const pointAt: AnnotationKind<"point_at"> = {
   idPrefix: "pt",
+  // A drag lesson needs somewhere to drag to.
+  invalid: (input) => input.motion === "drag_to" && !input.dragTo,
   slots(input) {
     const slots = new Map<Slot, Target>([["target", input.target]]);
     if (input.motion === "drag_to" && input.dragTo) slots.set("dragTo", input.dragTo);
@@ -142,7 +152,9 @@ const pointAt: AnnotationKind<"point_at"> = {
     const t = renderTarget(r);
     if (!t) return null;
     const display = ctx.displayOf(r);
-    const p = pointerPlacement(t.bounds, display.bounds, theme.pointerSize, ctx.otherDisplayBounds(display));
+    // Keep approaching from the same side while it still works (no sudden flip on a small move).
+    const previousAngle = l.item?.kind === "pointer" ? l.item.angle : undefined;
+    const p = pointerPlacement(t.bounds, display.bounds, theme.pointerSize, ctx.otherDisplayBounds(display), previousAngle);
     const drag = l.input.motion === "drag_to" ? renderTarget(l.resolved.get("dragTo")) : null;
     return {
       kind: "pointer",
@@ -156,7 +168,7 @@ const pointAt: AnnotationKind<"point_at"> = {
       dragEnd: drag ? center(drag.bounds) : null,
       rest: p.rest,
       angle: p.angle,
-      label: ctx.placeLabel(l.input.label, undefined, p.body, display, [...ctx.avoid(), t.bounds]),
+      label: ctx.placeLabel("label", l.input.label, undefined, p.body, display, [...ctx.avoid(), t.bounds]),
     };
   },
 };
@@ -201,7 +213,7 @@ const steps: AnnotationKind<"show_steps"> = {
         const tone: Tone = st.completed ? "success" : "info";
         // Never cover the guide's other controls or the next-step hint.
         const avoid = [...ctx.avoid(), ...otherTargets(idx), ...(hintRect ? [hintRect] : [])];
-        labelBox = ctx.placeLabel(text, tone, r.bounds, ctx.displayOf(r), avoid);
+        labelBox = ctx.placeLabel("step-label", text, tone, r.bounds, ctx.displayOf(r), avoid);
       }
       return { index: idx, label: s.label, status: statusOf(st, idx), target: renderTarget(r), hint: idx === hintIdx ? hint : null, labelBox };
     });
@@ -220,10 +232,11 @@ const explainer: AnnotationKind<"show_explainer"> = {
     if (input.spec.kind === "anatomy") slots.set("region", input.spec.region);
     return slots;
   },
-  // The anchor is optional: a card whose anchor isn't found is shown centred-right instead.
-  required: () => false,
-  // …but a card that WAS beside its anchor fades when that anchor goes away (spec §5.4).
-  critical: (_l, slot) => slot === "anchor",
+  // The anchor is optional (a card whose anchor isn't found is shown centred-right instead); an
+  // anatomy card's region is not — it is the screen it explains.
+  required: (_input, slot) => slot === "region",
+  // A card fades when what it is about goes away: the anchor it sat beside, or its anatomy region.
+  critical: (_l, slot) => slot === "anchor" || slot === "region",
   primary: (l) => l.resolved.get("anchor") ?? null,
   watchUnresolved: false,
   selectionElementIds: (l) => [...l.elements.keys()],
@@ -240,7 +253,9 @@ const explainer: AnnotationKind<"show_explainer"> = {
       // Never cover the thing being explained: an anatomy card also avoids its crop region.
       avoid: region ? [...ctx.avoid(), region.bounds] : ctx.avoid(),
       compactImageScale: COMPACT_IMAGE_SCALE,
+      ...(ctx.previousSide("card") ? { prefer: ctx.previousSide("card")! } : {}),
     });
+    ctx.rememberSide("card", placed.placement);
     return {
       kind: "explainer",
       id: l.id,

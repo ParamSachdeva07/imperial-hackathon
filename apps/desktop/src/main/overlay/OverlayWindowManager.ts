@@ -3,7 +3,7 @@
  * Rebuilds windows when displays are added, removed or change metrics.
  */
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from "electron";
-import { IPC, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
+import { IPC, type ImageFailedMessage, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
 import { ImageKeyRegistry } from "@pointy/shared/overlay/sceneImages";
 import type { DisplayInfo, Rect } from "@pointy/shared/overlay";
 import { toDisplayInfo } from "./coords";
@@ -29,6 +29,8 @@ interface OverlayWindow {
 
 /** Composition latency to wait for after changing window opacity/visibility (spec §5.1 note). */
 const COMPOSITION_SETTLE_MS = 60;
+/** Overlay fade when hidden for a capture: quick but never an abrupt blink. */
+const HIDE_FADE_MS = 120;
 
 /** Electron `screen` as a ScreenSource. */
 export class ElectronScreen implements ScreenSource {
@@ -59,6 +61,7 @@ export class OverlayWindowManager implements SceneSink {
   private reduceMotion = false;
   private seq = 0;
   private paintedListeners = new Set<(ids: string[]) => void>();
+  private imageFailedListeners = new Set<(overlayId: string, panel: number) => void>();
   private hiddenDepth = 0;
   private hiddenSettled: Promise<void> = Promise.resolve();
   private disposeDisplayListener: (() => void) | null = null;
@@ -71,6 +74,7 @@ export class OverlayWindowManager implements SceneSink {
   start(): void {
     ipcMain.on(IPC.ready, this.handleReady);
     ipcMain.on(IPC.painted, this.handlePainted);
+    ipcMain.on(IPC.imageFailed, this.handleImageFailed);
     this.disposeDisplayListener = this.screenSource.onDisplaysChanged(() => this.syncWindows());
     this.syncWindows();
   }
@@ -78,6 +82,7 @@ export class OverlayWindowManager implements SceneSink {
   stop(): void {
     ipcMain.removeListener(IPC.ready, this.handleReady);
     ipcMain.removeListener(IPC.painted, this.handlePainted);
+    ipcMain.removeListener(IPC.imageFailed, this.handleImageFailed);
     this.disposeDisplayListener?.();
     for (const w of this.windows.values()) if (!w.win.isDestroyed()) w.win.destroy();
     this.windows.clear();
@@ -100,6 +105,11 @@ export class OverlayWindowManager implements SceneSink {
     for (const w of this.windows.values()) this.sendScene(w);
   }
 
+  onImageFailed(cb: (overlayId: string, panel: number) => void): () => void {
+    this.imageFailedListeners.add(cb);
+    return () => this.imageFailedListeners.delete(cb);
+  }
+
   onPainted(cb: (ids: string[]) => void): () => void {
     this.paintedListeners.add(cb);
     return () => this.paintedListeners.delete(cb);
@@ -119,8 +129,8 @@ export class OverlayWindowManager implements SceneSink {
   async withHidden<T>(fn: () => Promise<T>): Promise<T> {
     this.hiddenDepth += 1;
     if (this.hiddenDepth === 1) {
-      for (const w of this.windows.values()) if (!w.win.isDestroyed()) w.win.setOpacity(0);
-      this.hiddenSettled = delay(COMPOSITION_SETTLE_MS);
+      // Fade out (never blink), then wait for the hidden frame to reach the screen.
+      this.hiddenSettled = this.fadeWindows(0).then(() => delay(COMPOSITION_SETTLE_MS));
     }
     try {
       // Every concurrent caller waits until the hide has reached the screen.
@@ -128,9 +138,19 @@ export class OverlayWindowManager implements SceneSink {
       return await fn();
     } finally {
       this.hiddenDepth -= 1;
-      if (this.hiddenDepth === 0) {
-        for (const w of this.windows.values()) if (!w.win.isDestroyed()) w.win.setOpacity(1);
-      }
+      if (this.hiddenDepth === 0) void this.fadeWindows(1);
+    }
+  }
+
+  /** Step every overlay window's opacity to `to` over HIDE_FADE_MS (calm, no flash). */
+  private async fadeWindows(to: number): Promise<void> {
+    const wins = [...this.windows.values()].map((w) => w.win).filter((w) => !w.isDestroyed());
+    const from = wins[0]?.getOpacity() ?? 1 - to;
+    const steps = Math.max(1, Math.round(HIDE_FADE_MS / 16));
+    for (let i = 1; i <= steps; i++) {
+      const o = from + ((to - from) * i) / steps;
+      for (const w of wins) if (!w.isDestroyed()) w.setOpacity(o);
+      if (i < steps) await delay(HIDE_FADE_MS / steps);
     }
   }
 
@@ -222,6 +242,11 @@ export class OverlayWindowManager implements SceneSink {
     w.ready = true;
     w.sentImages.clear(); // a (re)loaded page has no cached images
     this.sendScene(w);
+  };
+
+  private handleImageFailed = (e: IpcMainEvent, msg: ImageFailedMessage) => {
+    if (!this.findBySender(e) || typeof msg?.overlayId !== "string" || !Number.isInteger(msg.panel)) return;
+    for (const cb of this.imageFailedListeners) cb(msg.overlayId, msg.panel);
   };
 
   private handlePainted = (e: IpcMainEvent, msg: PaintedMessage) => {

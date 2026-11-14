@@ -47,6 +47,7 @@ import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, expiresAtTurnStart, expiresOnContextChange } from "./ExpiryManager";
 import { ExplainerService } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
+import { intersects } from "./geometry";
 import { placeBeside, pointerBody } from "./LayoutEngine";
 import { OverlayManager } from "./OverlayManager";
 import type { OverlayDebug, SceneSink, ScreenSource } from "./ports";
@@ -93,6 +94,19 @@ const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResu
 });
 const STALE: ToolResult = { ok: false, visible: false, reason: "replaced" };
 
+/** The parts of a drawing that can be moved out of the way (labels and cards, not targets). */
+function movableBoxes(item: RenderItem): Rect[] {
+  switch (item.kind) {
+    case "highlight":
+    case "pointer":
+      return item.label ? [item.label.rect] : [];
+    case "steps":
+      return item.steps.flatMap((s) => (s.labelBox ? [s.labelBox.rect] : []));
+    case "explainer":
+      return [item.card];
+  }
+}
+
 const expiryOf = (input: { expires?: Expiry | undefined }): Expiry => input.expires ?? DEFAULT_EXPIRY;
 
 export class OverlayService implements OverlayControl {
@@ -110,6 +124,8 @@ export class OverlayService implements OverlayControl {
   private displayCache: DisplayInfo[] | null = null;
   /** Bumped per display-change relayout; an older relayout's results are discarded. */
   private relayoutGen = 0;
+  /** Anchors moved during the current check (published once when it completes). */
+  private anchorsMoved = false;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
@@ -122,6 +138,12 @@ export class OverlayService implements OverlayControl {
       intervalMs: deps.anchorIntervalMs ?? 300,
       onMoved: (id, el, b) => this.handleAnchorMoved(id, el, b),
       onLost: (id, el) => this.handleAnchorLost(id, el),
+      // One redraw per check, however many anchors moved in it.
+      onCheckDone: () => {
+        if (!this.anchorsMoved) return;
+        this.anchorsMoved = false;
+        this.publish();
+      },
     });
     this.explainers = new ExplainerService({
       captureProvider: deps.captureProvider,
@@ -131,6 +153,7 @@ export class OverlayService implements OverlayControl {
     });
     this.anchors.start();
     this.disposers.push(deps.sink.onPainted((ids) => this.handlePainted(ids)));
+    this.disposers.push(deps.sink.onImageFailed((id, panel) => this.handleImageFailed(id, panel)));
     this.disposers.push(
       deps.screen.onDisplaysChanged(() => {
         this.displayCache = null;
@@ -233,7 +256,9 @@ export class OverlayService implements OverlayControl {
 
   private async show<T extends DrawTool>(tool: T, input: InputOf<T>): Promise<ToolResult> {
     const kind = kindOf(tool);
+    if (kind.invalid?.(input)) return { ok: false, visible: false, reason: "invalid_input" };
     const slots = kind.slots(input);
+    const displayGen = this.relayoutGen;
     const call: InFlight = {
       expires: expiryOf(input),
       // Any coordinate target (incl. anatomy callouts: the crop is a snapshot) goes stale on a context change.
@@ -280,17 +305,20 @@ export class OverlayService implements OverlayControl {
     for (const d of dismissed) this.startExit(d.id, { type: "overlay.dismissed", overlayId: d.id, by: "model", reason: d.reason });
 
     this.refresh(l);
+    this.reflowCovering(l);
     this.expiry.track({ id: l.id, expires: call.expires, elementIds: kindOfLive(l).selectionElementIds(l), coordinateOnly: call.coordinateOnly });
     this.trackAnchors(l);
     this.publish();
     if (l.toolName === "show_explainer") this.loadExplainerAsync(l);
+    // Displays changed while we were resolving: re-check this annotation against the new layout.
+    if (this.relayoutGen !== displayGen) void this.relayoutAll();
 
     // A card whose anchor can't be resolved is still shown (centred-right); report why it's unanchored.
     return ok(l.id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
   }
 
   private createLive<T extends DrawTool>(tool: T, input: InputOf<T>, base: Pick<Live, "id" | "slots" | "resolved" | "elements">): Live {
-    const common = { ...base, item: null, shown: false, exitTimer: null, graceTimer: null, ended: false };
+    const common = { ...base, item: null, shown: false, exitTimer: null, graceTimer: null, ended: false, placements: new Map() };
     switch (tool) {
       case "show_steps": {
         const s = input as ShowStepsInput;
@@ -302,6 +330,19 @@ export class OverlayService implements OverlayControl {
       }
       default:
         return { ...common, toolName: tool, input } as Live;
+    }
+  }
+
+  /**
+   * Never cover the thing being explained: an older label or card that sits on a control this new
+   * annotation points at is re-laid out (it now avoids that control; its side is kept if possible).
+   */
+  private reflowCovering(l: Live): void {
+    const targets = [...l.resolved.values()].flatMap((r) => (r ? [r.bounds] : []));
+    if (targets.length === 0) return;
+    for (const other of this.live.values()) {
+      if (other === l || other.ended || !other.item) continue;
+      if (movableBoxes(other.item).some((b) => targets.some((t) => intersects(b, t)))) this.refresh(other);
     }
   }
 
@@ -416,6 +457,16 @@ export class OverlayService implements OverlayControl {
     }
   }
 
+  /** A picture the renderer couldn't decode: fall back to its icon everywhere and tell the controller. */
+  private handleImageFailed(id: string, panel: number): void {
+    const l = this.live.get(id);
+    if (!l || l.ended || l.toolName !== "show_explainer") return;
+    if (!this.explainers.markFailed(l.explainer, panel)) return; // another window already reported it
+    this.refresh(l);
+    this.publish();
+    this.emit({ type: "explainer.image_failed", overlayId: id, panel });
+  }
+
   private handleAnchorMoved(id: string, elementId: string, bounds: ElementBounds): void {
     const l = this.live.get(id);
     if (!l || l.ended) return;
@@ -428,14 +479,14 @@ export class OverlayService implements OverlayControl {
     }
     this.manager.update(id, { resolvedBounds: this.primaryBounds(l) ?? null, displayId: kindOfLive(l).primary(l)?.displayId ?? null });
     this.refresh(l);
-    this.publish();
+    this.anchorsMoved = true; // published when the anchor check completes
   }
 
   private handleAnchorLost(id: string, elementId: string): void {
     const l = this.live.get(id);
     if (!l || l.ended) return;
     this.applyLostSlots(l, l.elements.get(elementId) ?? []);
-    if (!l.ended) this.publish();
+    if (!l.ended) this.anchorsMoved = true; // re-laid out without it; published after the check
   }
 
   /**
@@ -512,21 +563,21 @@ export class OverlayService implements OverlayControl {
     return kindOfLive(l).primary(l)?.bounds;
   }
 
-  /** Other annotations' drawings + the avatar window, for placement avoidance. */
+  /**
+   * Other annotations' drawings + everything they are about (every resolved slot: targets, step
+   * controls, explainer anchors and anatomy regions, drag targets) + the avatar window.
+   */
   private avoidFor(exceptId: string): Rect[] {
     const rects: Rect[] = [...(this.deps.avoidRects?.getAvoidRects() ?? [])];
     for (const l of this.live.values()) {
       if (l.id === exceptId || l.ended || !l.item) continue;
+      for (const r of l.resolved.values()) if (r) rects.push(r.bounds);
       const it = l.item;
       if (it.kind === "explainer") rects.push(it.card);
-      if (it.kind === "highlight" || it.kind === "pointer") {
-        rects.push(it.target.bounds);
-        if (it.label) rects.push(it.label.rect);
-      }
+      if ((it.kind === "highlight" || it.kind === "pointer") && it.label) rects.push(it.label.rect);
       if (it.kind === "pointer") rects.push(pointerBody(it.rest, it.angle));
       if (it.kind === "steps") {
         for (const s of it.steps) {
-          if (s.target) rects.push(s.target.bounds);
           if (s.hint) rects.push(squareAt(s.hint, theme.stepHintSize));
           if (s.labelBox) rects.push(s.labelBox.rect);
         }
@@ -535,9 +586,26 @@ export class OverlayService implements OverlayControl {
     return rects;
   }
 
-  private placeLabel(text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[]): RenderLabel | null {
+  private placeLabel(
+    l: Live,
+    key: string,
+    text: string | undefined,
+    tone: Tone | undefined,
+    around: Rect,
+    display: DisplayInfo,
+    avoid: Rect[],
+  ): RenderLabel | null {
     if (!text) return null;
-    const res = placeBeside({ target: around, size: measureLabel(text, tone !== undefined), workArea: display.workArea, avoid, allowShrink: false });
+    const prefer = l.placements.get(key);
+    const res = placeBeside({
+      target: around,
+      size: measureLabel(text, tone !== undefined),
+      workArea: display.workArea,
+      avoid,
+      allowShrink: false,
+      ...(prefer ? { prefer } : {}),
+    });
+    l.placements.set(key, res.placement);
     return { text, rect: res.rect, ...(tone ? { tone } : {}), connector: res.placement === "corner" ? res.connector : null };
   }
 
@@ -556,7 +624,9 @@ export class OverlayService implements OverlayControl {
       avoid: () => (avoid ??= this.avoidFor(l.id)),
       displayOf: (r) => this.displayOf(r),
       otherDisplayBounds: (d) => this.displays().filter((o) => o.id !== d.id).map((o) => o.bounds),
-      placeLabel: (text, tone, around, display, rects) => this.placeLabel(text, tone, around, display, rects),
+      placeLabel: (key, text, tone, around, display, rects) => this.placeLabel(l, key, text, tone, around, display, rects),
+      previousSide: (key) => l.placements.get(key),
+      rememberSide: (key, side) => void l.placements.set(key, side),
       explainerBody: (state) => this.explainers.body(state),
     };
     const item = kindOfLive(l).layout(l, ctx);

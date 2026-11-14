@@ -33,6 +33,9 @@ const h = vi.hoisted(() => {
     setOpacity(o: number) {
       this.opacity = o;
     }
+    getOpacity() {
+      return this.opacity;
+    }
     isDestroyed() {
       return this.destroyed;
     }
@@ -138,6 +141,8 @@ describe("OverlayWindowManager", () => {
       expect(h.FakeBrowserWindow.all.every((w) => w.opacity === 0)).toBe(true);
     });
     expect(inner).toBe(0);
+    // Fades back in (never an abrupt blink).
+    await new Promise((r) => setTimeout(r, 250));
     expect(h.FakeBrowserWindow.all.every((w) => w.opacity === 1)).toBe(true);
   });
 

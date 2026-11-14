@@ -1,19 +1,26 @@
-import { useState, type CSSProperties } from "react";
+import { createContext, useContext, useState, type CSSProperties } from "react";
 import type { ImageSlot as Slot } from "@pointy/shared/overlay/render";
 import { Icon } from "../icons/Icon";
+
+/** Set by the card: reports a picture that failed to decode (panel index). */
+export const ImageErrorContext = createContext<(panel: number) => void>(() => {});
 
 /** Image area: calm shimmer while loading, the picture when ready, a large icon on failure. */
 export function ImageSlotView({
   slot,
+  panel = 0,
   fit = "cover",
   style,
   children,
 }: {
   slot: Slot;
+  /** Which picture of the card this is (concept panel / compare side / anatomy = 0). */
+  panel?: number;
   fit?: "cover" | "contain";
   style?: CSSProperties;
   children?: React.ReactNode;
 }) {
+  const reportError = useContext(ImageErrorContext);
   // A ready image that fails to decode (corrupt file / bad response) falls back like a failed one.
   const [broken, setBroken] = useState<string | null>(null);
   const effective: Slot =
@@ -26,7 +33,10 @@ export function ImageSlotView({
           src={effective.src}
           alt=""
           draggable={false}
-          onError={() => setBroken(effective.src)}
+          onError={() => {
+            setBroken(effective.src);
+            reportError(panel);
+          }}
         />
       ) : (
         <>

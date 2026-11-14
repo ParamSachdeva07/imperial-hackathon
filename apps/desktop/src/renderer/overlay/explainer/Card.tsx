@@ -3,6 +3,7 @@ import { Connector } from "../primitives/Connector";
 import { AnatomyTemplate } from "./AnatomyTemplate";
 import { CompareTemplate } from "./CompareTemplate";
 import { ConceptPanels } from "./ConceptPanel";
+import { ImageErrorContext } from "./ImageSlot";
 import { SequenceTemplate } from "./SequenceTemplate";
 
 function Body({ item }: { item: ExplainerItem }) {
@@ -37,7 +38,9 @@ export function CardView({ item }: { item: ExplainerItem }) {
           <div className="card-flow">
             <h2 className="card-title">{item.title}</h2>
             <div className="card-body">
-              <Body item={item} />
+              <ImageErrorContext.Provider value={(panel) => window.pointyOverlay?.imageFailed({ overlayId: item.id, panel })}>
+                <Body item={item} />
+              </ImageErrorContext.Provider>
             </div>
           </div>
         </div>

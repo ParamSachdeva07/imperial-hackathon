@@ -138,6 +138,7 @@ describe("OverlayRoot", () => {
       },
       onImage: () => () => {},
       onImageDrop: () => () => {},
+      imageFailed: vi.fn(),
       painted,
       ready,
     };
@@ -198,5 +199,18 @@ describe("paint acks are per display", () => {
     const item = scene("ring-labeled").items[0]!;
     expect(isOnThisDisplay(item, { x: 0, y: 0, width: 1280, height: 800 })).toBe(true);
     expect(isOnThisDisplay(item, { x: 5000, y: 0, width: 1280, height: 800 })).toBe(false);
+  });
+});
+
+describe("image decode failures reach main", () => {
+  it("a card reports which picture failed, with its overlay id and panel", async () => {
+    const { render, fireEvent } = await import("@testing-library/react");
+    const imageFailed = vi.fn();
+    window.pointyOverlay = { onScene: () => () => {}, onImage: () => () => {}, onImageDrop: () => () => {}, imageFailed, painted: vi.fn(), ready: vi.fn() };
+    const base = scene("explainer-concept-ready");
+    const { container } = render(<OverlayScene scene={base} reduceMotion={false} />);
+    const imgs = container.querySelectorAll("img");
+    fireEvent.error(imgs[1]!);
+    expect(imageFailed).toHaveBeenCalledWith({ overlayId: base.items[0]!.id, panel: 1 });
   });
 });

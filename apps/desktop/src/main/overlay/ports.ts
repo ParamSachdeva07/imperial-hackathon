@@ -17,6 +17,8 @@ export interface SceneSink {
   publish(items: RenderItem[], opts: { reduceMotion: boolean }): void;
   /** Item ids reported painted by any overlay window. Returns unsubscribe. */
   onPainted(cb: (ids: string[]) => void): () => void;
+  /** A ready picture failed to decode in an overlay window. Returns unsubscribe. */
+  onImageFailed(cb: (overlayId: string, panel: number) => void): () => void;
   /** Native window ids (macOS CGWindowID) of the overlay windows. */
   getWindowIds(): number[];
   withHidden<T>(fn: () => Promise<T>): Promise<T>;

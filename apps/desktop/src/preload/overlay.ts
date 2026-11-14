@@ -18,6 +18,9 @@ const api: PointyOverlayApi = {
     ipcRenderer.on(IPC.imageDrop, listener);
     return () => ipcRenderer.removeListener(IPC.imageDrop, listener);
   },
+  imageFailed(msg) {
+    ipcRenderer.send(IPC.imageFailed, msg);
+  },
   painted(msg: PaintedMessage) {
     ipcRenderer.send(IPC.painted, msg);
   },

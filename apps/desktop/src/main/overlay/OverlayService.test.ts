@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DisplayInfo, OverlayEvent, RenderItem } from "@pointy/shared/overlay";
+import type { DisplayInfo, OverlayEvent, Rect, RenderItem } from "@pointy/shared/overlay";
 import { OverlayService } from "./OverlayService";
 import type { SceneSink, ScreenSource } from "./ports";
 import { FakeBoundsProvider, FakeClock, flushPromises } from "./testing/fakeClock";
@@ -23,6 +23,14 @@ class FakeSink implements SceneSink {
   publishes = 0;
   hiddenCalls = 0;
   private painted = new Set<(ids: string[]) => void>();
+  private imageFailed = new Set<(id: string, panel: number) => void>();
+  onImageFailed(cb: (id: string, panel: number) => void) {
+    this.imageFailed.add(cb);
+    return () => this.imageFailed.delete(cb);
+  }
+  failImage(id: string, panel: number) {
+    for (const cb of this.imageFailed) cb(id, panel);
+  }
   publish(items: RenderItem[]) {
     this.items = items;
     this.publishes += 1;
@@ -752,5 +760,132 @@ describe("OverlayService", () => {
     expect(after.state).toBe("exiting");
     expect(after.label?.rect).toEqual(before.label?.rect); // frozen, not re-placed on the primary display
     expect(after.target.bounds).toEqual(before.target.bounds);
+  });
+
+  describe("fixes pass: lifecycle", () => {
+    it("rejects a drag lesson without a destination", async () => {
+      expect(await svc.handleTool("point_at", { target: el("attach"), motion: "drag_to" })).toEqual({ ok: false, visible: false, reason: "invalid_input" });
+    });
+
+    it("an anatomy card needs its region on screen", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        title: "Parts",
+        spec: { kind: "anatomy", region: el("ghost"), callouts: [{ target: el("attach"), label: "Attach" }] },
+      });
+      expect(r).toEqual({ ok: true, visible: false, reason: "target_not_found" });
+    });
+
+    it("an anatomy card fades when the region it explains goes away", async () => {
+      bounds.set("toolbar", { rect: rect(100, 300, 900, 60), displayId: "1" });
+      const r = await svc.handleTool("show_explainer", {
+        title: "Parts",
+        spec: { kind: "anatomy", region: el("toolbar"), callouts: [{ target: el("attach"), label: "Attach" }] },
+        expires: "manual",
+      });
+      bounds.set("toolbar", null);
+      clock.advance(300);
+      await flushPromises();
+      clock.advance(300);
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("redraws once per anchor check, however many anchors moved", async () => {
+      await svc.handleTool("highlight", { target: el("send"), expires: "manual" });
+      await svc.handleTool("point_at", { target: el("attach"), expires: "manual" });
+      const before = sink.publishes;
+      bounds.set("send", { rect: rect(640, 400), displayId: "1" });
+      bounds.set("attach", { rect: rect(340, 400), displayId: "1" });
+      bounds.fireChange();
+      await flushPromises();
+      expect(sink.publishes - before).toBe(1);
+    });
+
+    it("re-checks a call whose display went away while it was resolving", async () => {
+      bounds.set("leftbtn", { rect: rect(-1500, 300), displayId: "2" });
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((res) => (release = res));
+      const pending = svc.handleTool("highlight", { target: el("leftbtn"), expires: "manual" });
+      screen.displays = [PRIMARY];
+      screen.change();
+      bounds.gate = null;
+      release();
+      const r = await pending;
+      await flushPromises();
+      // Either the lookup already saw the new displays (nothing drawn), or it drew against the old
+      // ones and the re-check then fades it — never a drawing left on a display that is gone.
+      if (r.visible) expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+      else expect(r.reason).toBe("target_offscreen");
+      expect(sink.items.filter((i) => i.state === "visible")).toHaveLength(0);
+    });
+  });
+
+  describe("fixes pass: layout", () => {
+    it("a label keeps its side when its target moves a little", async () => {
+      const r = await svc.handleTool("highlight", { target: el("send"), label: "Send it", expires: "manual" });
+      const before = sink.byId(r.overlayId!);
+      if (before?.kind !== "highlight" || !before.label) throw new Error();
+      const sideOf = (lab: Rect, t: Rect) => (lab.x >= t.x + t.width ? "right" : lab.x + lab.width <= t.x ? "left" : lab.y >= t.y ? "below" : "above");
+      const side = sideOf(before.label.rect, before.target.bounds);
+      bounds.set("send", { rect: rect(610, 405), displayId: "1" });
+      bounds.fireChange();
+      await flushPromises();
+      const after = sink.byId(r.overlayId!);
+      if (after?.kind !== "highlight" || !after.label) throw new Error();
+      expect(sideOf(after.label.rect, after.target.bounds)).toBe(side);
+    });
+
+    it("moves an older card off a control that a new highlight points at", async () => {
+      const card = await svc.handleTool("show_explainer", {
+        anchor: el("attach"),
+        title: "How to attach",
+        spec: { kind: "sequence", steps: [{ icon: "attach", caption: "Press Attach" }, { icon: "send", caption: "Press Send" }] },
+        expires: "manual",
+      });
+      const c = sink.byId(card.overlayId!);
+      if (c?.kind !== "explainer") throw new Error();
+      // Put a control right under the card, then highlight it.
+      bounds.set("under", { rect: { x: c.card.x + 20, y: c.card.y + 20, width: 80, height: 30 }, displayId: "1" });
+      await svc.handleTool("highlight", { target: el("under"), expires: "manual" });
+      const moved = sink.byId(card.overlayId!);
+      if (moved?.kind !== "explainer") throw new Error();
+      const u = { x: c.card.x + 20, y: c.card.y + 20, width: 80, height: 30 };
+      const overlaps = moved.card.x < u.x + u.width && u.x < moved.card.x + moved.card.width && moved.card.y < u.y + u.height && u.y < moved.card.y + moved.card.height;
+      expect(overlaps).toBe(false);
+    });
+
+    it("moves an older label off the control a new explainer card is about", async () => {
+      const hl = await svc.handleTool("highlight", { target: el("send"), label: "Send it", expires: "manual" });
+      const h = sink.byId(hl.overlayId!);
+      if (h?.kind !== "highlight" || !h.label) throw new Error();
+      // A control right under the label, then a card explaining it.
+      const u = { x: h.label.rect.x + 10, y: h.label.rect.y + 4, width: 60, height: 30 };
+      bounds.set("under", { rect: u, displayId: "1" });
+      await svc.handleTool("show_explainer", {
+        anchor: el("under"),
+        title: "What this does",
+        spec: { kind: "sequence", steps: [{ icon: "attach", caption: "Press it" }, { icon: "send", caption: "Then Send" }] },
+        expires: "manual",
+      });
+      const moved = sink.byId(hl.overlayId!);
+      if (moved?.kind !== "highlight" || !moved.label) throw new Error();
+      const l = moved.label.rect;
+      expect(l.x < u.x + u.width && u.x < l.x + l.width && l.y < u.y + u.height && u.y < l.y + l.height).toBe(false);
+    });
+  });
+
+  it("a picture the renderer can't decode falls back to its icon and reports image_failed once", async () => {
+    const r = await svc.handleTool("show_explainer", {
+      title: "What is the cloud?",
+      spec: { kind: "concept", panels: [{ caption: "A", imagePrompt: "a cloud" }] },
+    });
+    clock.advance(50);
+    await flushPromises();
+    sink.failImage(r.overlayId!, 0);
+    sink.failImage(r.overlayId!, 0); // a second window reporting the same picture
+    const item = sink.byId(r.overlayId!);
+    if (item?.kind !== "explainer" || item.body.kind !== "concept") throw new Error();
+    expect(item.body.panels[0]!.image).toMatchObject({ status: "failed" });
+    expect(events.filter((e) => e.type === "explainer.image_failed")).toHaveLength(1);
   });
 });

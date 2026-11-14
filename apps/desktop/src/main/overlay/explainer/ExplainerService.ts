@@ -88,6 +88,36 @@ export class ExplainerService {
     return state.body;
   }
 
+  /**
+   * A "ready" picture couldn't be decoded by the renderer: show its large fallback icon instead.
+   * Returns false if that panel wasn't a ready picture (unknown panel, or already handled).
+   */
+  markFailed(state: ExplainerState, panel: number): boolean {
+    const fail = (slot: ImageSlot | null | undefined): ImageSlot | null =>
+      slot?.status === "ready" ? { status: "failed", fallbackIcon: slot.fallbackIcon ?? "photo" } : null;
+    const b = state.body;
+    if (b.kind === "concept") {
+      const next = fail(b.panels[panel]?.image);
+      if (!next) return false;
+      state.body = { ...b, panels: b.panels.map((p, i) => (i === panel ? { ...p, image: next } : p)) };
+      return true;
+    }
+    if (b.kind === "compare") {
+      const side = panel === 0 ? "left" : panel === 1 ? "right" : null;
+      const next = side ? fail(b[side].image) : null;
+      if (!side || !next) return false;
+      state.body = { ...b, [side]: { ...b[side], image: next } };
+      return true;
+    }
+    if (b.kind === "anatomy" && panel === 0) {
+      const next = fail(b.image);
+      if (!next) return false;
+      state.body = { ...b, image: next };
+      return true;
+    }
+    return false;
+  }
+
   /** Start async loading. Never throws; failures become "failed" slots + events. */
   load(state: ExplainerState, spec: ExplainerSpec, hooks: ExplainerLoadHooks): void {
     switch (spec.kind) {
