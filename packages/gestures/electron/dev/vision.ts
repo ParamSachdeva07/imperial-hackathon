@@ -12,7 +12,10 @@ const show = params.get("show") === "1";
 void startVisionRenderer({
   wasmPath: "./mediapipe-wasm",
   modelPath: "./models/gesture_recognizer.task",
-  ...(show && preview && side ? { previewParent: preview, onFrame: createDebugView(preview, side) } : {}),
+  // The video is always placed in the page (as before the debug view existed); the debug
+  // drawing only runs when the window is shown.
+  ...(preview ? { previewParent: preview } : {}),
+  ...(show && preview && side ? { onFrame: createDebugView(preview, side) } : {}),
   ...(params.get("selftest") === "1" ? { source: selfTestSource() } : {}),
 }).catch((err: unknown) => {
   if (status) status.textContent = `error: ${String(err)}`;

@@ -55,10 +55,15 @@ async function cameraSource(opts: VisionRendererOptions): Promise<FrameSource> {
   video.muted = true;
   video.playsInline = true;
   video.srcObject = stream;
+  // Always keep the video in the page. A detached <video> in a hidden window can be
+  // deprioritised by Chromium (fewer / late frames), which degrades fine gestures.
   if (opts.previewParent) {
     video.style.width = "100%";
     video.style.transform = "scaleX(-1)";
     opts.previewParent.append(video);
+  } else {
+    Object.assign(video.style, { position: "fixed", left: "0", top: "0", width: "2px", height: "2px", opacity: "0.01" });
+    document.body.append(video);
   }
   await video.play();
 
