@@ -14,10 +14,11 @@ export type ControlOptions = {
   port?: number;
   filePath?: string;
 };
-export type ControlServer = { close(): Promise<void>; port: number };
+export type ControlServer = { close(): Promise<void>; removeFileSync(): void; port: number };
 
 const DEFAULT_PORT = 47630;
 const BODY_LIMIT = 4096;
+const REQUEST_TIMEOUT_MS = 5000;
 
 function send(res: http.ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -65,7 +66,7 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
   const wanted = opts.port ?? (Number.isInteger(envPort) && envPort >= 0 && envPort < 65536 ? envPort : DEFAULT_PORT);
   let port = 0;
 
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer({ connectionsCheckingInterval: 1000 }, async (req, res) => {
     try {
       if (!tokenMatches(req.headers['x-anam-control-token'], token)) {
         return send(res, 401, { ok: false, reason: 'unauthorized' });
@@ -100,6 +101,9 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
     }
   });
 
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = REQUEST_TIMEOUT_MS;
+
   try { port = await listen(server, wanted); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE' || wanted === 0) throw error;
@@ -119,14 +123,21 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
     throw error;
   }
 
+  // Unlinks the discovery file only if it still holds our token+pid. Synchronous so it
+  // can run right before the process exits.
+  const removeFileSync = () => {
+    try {
+      const current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { token?: unknown; pid?: unknown };
+      if (current.token === token && current.pid === process.pid) fs.unlinkSync(filePath);
+    } catch { /* already gone or replaced */ }
+  };
+
   return {
     port,
+    removeFileSync,
     async close() {
+      removeFileSync();
       await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });
-      try {
-        const current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { token?: unknown; pid?: unknown };
-        if (current.token === token && current.pid === process.pid) fs.unlinkSync(filePath);
-      } catch { /* already gone or replaced */ }
     },
   };
 }

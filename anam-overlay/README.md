@@ -80,7 +80,7 @@ Electron's [window documentation](https://www.electronjs.org/docs/latest/tutoria
 
 ## External control (Pointy)
 
-On startup the overlay runs a small local control server on `127.0.0.1` (default port `47630`, falling back to an ephemeral port if taken). It writes `{ "port", "token", "pid" }` (mode 0600) to `~/.pointy/anam-control.json` and removes it on quit. Every request needs the header `x-anam-control-token`; requests with an `Origin` header or a non-local `Host` are rejected.
+On startup the overlay runs a small local control server on `127.0.0.1` (default port `47630`, falling back to an ephemeral port if taken). It writes `{ "port", "token", "pid" }` (mode 0600) to `~/.pointy/anam-control.json` and removes it on quit (synchronously on `will-quit`; only if it still holds this process's token and pid). Requests that take longer than 5 s to send are timed out. Every request needs the header `x-anam-control-token`; requests with an `Origin` header or a non-local `Host` are rejected.
 
 - `GET /state` returns `{ ok, state: { expanded, dragging, bounds, workArea, displayId } }` (503 `no_window` if there is no window).
 - `POST /move` with `{ "x": number, "y": number }` (top-left, DIP, clamped to the display work area) returns `{ ok, bounds }`. It returns 409 `collapsed` while the launcher dot is shown, 409 `dragging` during a user drag, and 400 `invalid_input` for bad bodies.

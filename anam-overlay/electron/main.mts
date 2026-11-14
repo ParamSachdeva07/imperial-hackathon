@@ -14,6 +14,7 @@ const dev = process.env.OVERLAY_DEV === '1';
 const rendererURL = dev ? 'http://127.0.0.1:5173/' : pathToFileURL(rendererFile).href;
 let overlay: BrowserWindow | null = null;
 let control: ControlServer | null = null;
+let quitting = false;
 const DOT_SIZE = 56;
 const CONTROLS_HEIGHT = 80;
 let expanded = false;
@@ -236,9 +237,11 @@ void app.whenReady().then(() => {
       placeWindow({ ...overlay.getBounds(), x, y });
       return overlay.getBounds();
     },
-  }).then((server) => { control = server; }, (error) => console.error('control server failed to start', error));
+  }).then((server) => {
+    if (quitting) { server.removeFileSync(); void server.close(); } else control = server;
+  }, (error) => console.error('control server failed to start', error));
 });
-const stopControl = () => { void control?.close(); control = null; };
+const stopControl = () => { quitting = true; control?.removeFileSync(); void control?.close(); control = null; };
 app.on('before-quit', stopControl);
 app.on('will-quit', stopControl);
 app.on('window-all-closed', () => app.quit());

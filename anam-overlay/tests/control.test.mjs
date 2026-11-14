@@ -33,6 +33,32 @@ test('control file is private, matches server, and is removed on close', async (
   await rm(t.dir, { recursive: true });
 });
 
+test('removeFileSync unlinks synchronously, only when owned', async () => {
+  const { existsSync, writeFileSync } = await import('node:fs');
+  const t = await setup();
+  t.server.removeFileSync();
+  assert.equal(existsSync(t.filePath), false);
+  writeFileSync(t.filePath, JSON.stringify({ port: 1, token: 'other', pid: 1 }));
+  t.server.removeFileSync();
+  assert.equal(existsSync(t.filePath), true);
+  await t.server.close();
+  await rm(t.dir, { recursive: true });
+});
+
+test('stalled request bodies are timed out', async () => {
+  const net = await import('node:net');
+  const t = await setup();
+  const sock = net.connect(t.server.port, '127.0.0.1');
+  sock.write(`POST /move HTTP/1.1\r\nHost: 127.0.0.1:${t.server.port}\r\nx-anam-control-token: ${t.info.token}\r\nContent-Length: 50\r\n\r\n{`);
+  sock.resume(); // drain the 408 so 'close' can fire
+  const closed = new Promise((resolve) => { sock.on('close', resolve); sock.on('error', resolve); });
+  const start = Date.now();
+  await closed;
+  assert.ok(Date.now() - start < 9000);
+  await t.server.close();
+  await rm(t.dir, { recursive: true });
+});
+
 test('close leaves a file owned by someone else', async () => {
   const t = await setup();
   const { writeFile } = await import('node:fs/promises');
