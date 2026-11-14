@@ -1,12 +1,7 @@
 /**
  * Pure rect/point math in global DIP. No Electron imports.
- * STUB (Phase 0): implemented by the logic track.
  */
 import type { Point, Rect } from "@pointy/shared/overlay";
-
-const todo = (name: string): never => {
-  throw new Error(`not implemented: geometry.${name}`);
-};
 
 export const rightOf = (r: Rect): number => r.x + r.width;
 export const bottomOf = (r: Rect): number => r.y + r.height;
@@ -16,46 +11,76 @@ export function center(r: Rect): Point {
 }
 
 /** True when a and b overlap with positive area (touching edges do not count). */
-export function intersects(_a: Rect, _b: Rect): boolean {
-  return todo("intersects");
+export function intersects(a: Rect, b: Rect): boolean {
+  return a.x < rightOf(b) && b.x < rightOf(a) && a.y < bottomOf(b) && b.y < bottomOf(a);
 }
 
 /** Overlapping area of a and b, or null when they don't overlap with positive area. */
-export function intersection(_a: Rect, _b: Rect): Rect | null {
-  return todo("intersection");
+export function intersection(a: Rect, b: Rect): Rect | null {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(rightOf(a), rightOf(b));
+  const bottom = Math.min(bottomOf(a), bottomOf(b));
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 /** True when `inner` lies entirely inside `outer` (edges may touch). */
-export function containsRect(_outer: Rect, _inner: Rect): boolean {
-  return todo("containsRect");
+export function containsRect(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    rightOf(inner) <= rightOf(outer) &&
+    bottomOf(inner) <= bottomOf(outer)
+  );
 }
 
 /** True when p lies inside r (edges inclusive). */
-export function containsPoint(_r: Rect, _p: Point): boolean {
-  return todo("containsPoint");
+export function containsPoint(r: Rect, p: Point): boolean {
+  return p.x >= r.x && p.x <= rightOf(r) && p.y >= r.y && p.y <= bottomOf(r);
 }
 
 /** Grow (or shrink, with negative values) a rect on every side. */
-export function inflate(_r: Rect, _dx: number, _dy?: number): Rect {
-  return todo("inflate");
+export function inflate(r: Rect, dx: number, dy: number = dx): Rect {
+  return { x: r.x - dx, y: r.y - dy, width: r.width + 2 * dx, height: r.height + 2 * dy };
 }
 
-export function union(_a: Rect, _b: Rect): Rect {
-  return todo("union");
+export function union(a: Rect, b: Rect): Rect {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(rightOf(a), rightOf(b)) - x,
+    height: Math.max(bottomOf(a), bottomOf(b)) - y,
+  };
 }
 
-export function translate(_r: Rect, _dx: number, _dy: number): Rect {
-  return todo("translate");
+export function translate(r: Rect, dx: number, dy: number): Rect {
+  return { ...r, x: r.x + dx, y: r.y + dy };
 }
 
 /** Bounding rect of a set of points; at least 1×1 so it remains a valid Rect. */
-export function boundsOfPoints(_points: Point[]): Rect {
-  return todo("boundsOfPoints");
+export function boundsOfPoints(points: Point[]): Rect {
+  if (points.length === 0) return { x: 0, y: 0, width: 1, height: 1 };
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.max(...xs) - x),
+    height: Math.max(1, Math.max(...ys) - y),
+  };
 }
 
 /** The point on (or inside) r closest to p. Returns p itself when p is inside r. */
-export function nearestPointOnRect(_r: Rect, _p: Point): Point {
-  return todo("nearestPointOnRect");
+export function nearestPointOnRect(r: Rect, p: Point): Point {
+  return {
+    x: Math.min(Math.max(p.x, r.x), rightOf(r)),
+    y: Math.min(Math.max(p.y, r.y), bottomOf(r)),
+  };
 }
 
 export function distance(a: Point, b: Point): number {
@@ -63,6 +88,11 @@ export function distance(a: Point, b: Point): number {
 }
 
 /** Rects equal within `eps` DIP on every edge. */
-export function rectsEqual(_a: Rect, _b: Rect, _eps = 0.5): boolean {
-  return todo("rectsEqual");
+export function rectsEqual(a: Rect, b: Rect, eps = 0.5): boolean {
+  return (
+    Math.abs(a.x - b.x) <= eps &&
+    Math.abs(a.y - b.y) <= eps &&
+    Math.abs(rightOf(a) - rightOf(b)) <= eps &&
+    Math.abs(bottomOf(a) - bottomOf(b)) <= eps
+  );
 }
