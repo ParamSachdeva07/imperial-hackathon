@@ -7,6 +7,7 @@
  */
 import {
   DEFAULT_EXPIRY,
+  COMPACT_IMAGE_SCALE,
   measureCard,
   measureLabel,
   parseToolInput,
@@ -28,6 +29,7 @@ import {
   type ScreenCaptureProvider,
   type ShowExplainerInput,
   type ShowStepsInput,
+  type Size,
   type Target,
   type ToolResult,
   type Tone,
@@ -92,6 +94,18 @@ type ResolveFailureReason = "target_not_found" | "target_offscreen" | "display_n
 /** How long a step that isn't on screen yet may take to appear after the guide advances to it. */
 const STEP_APPEAR_GRACE_MS = 2000;
 
+/** The resting pointer's body: a pointerSize square behind the tip, opposite the pointing direction. */
+function pointerBodyRect(rest: { x: number; y: number }, angle: number): Rect {
+  const size = theme.pointerSize;
+  const rad = (angle * Math.PI) / 180;
+  const cx = rest.x - (Math.cos(rad) * size) / 2;
+  const cy = rest.y - (Math.sin(rad) * size) / 2;
+  return { x: cx - size / 2, y: cy - size / 2, width: size, height: size };
+}
+
+const hasImages = (spec: ShowExplainerInput["spec"]): boolean =>
+  spec.kind === "concept" || spec.kind === "anatomy" || (spec.kind === "compare" && Boolean(spec.left.imagePrompt || spec.right.imagePrompt));
+
 const lastStepElement = (input: ShowStepsInput): string[] => {
   const last = input.steps[input.steps.length - 1]?.target;
   return last?.kind === "element" ? [last.elementId] : [];
@@ -99,10 +113,6 @@ const lastStepElement = (input: ShowStepsInput): string[] => {
 export interface ToolCallOptions {
   caller?: Caller;
 }
-
-/** Targets that position the annotation (the anatomy crop region doesn't). */
-const placementTargets = (slots: Map<Slot, Target>): Target[] =>
-  [...slots].filter(([slot]) => slot !== "region").map(([, t]) => t);
 
 const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResult> = {}): ToolResult => ({
   ok: true,
@@ -124,6 +134,8 @@ export class OverlayService implements OverlayControl {
   private readonly disposers: (() => void)[] = [];
   /** Bumped by clear("all") and new turns: tool calls still resolving targets are then dropped. */
   private epoch = 0;
+  /** Bumped on context change: calls with coordinate targets still resolving are then stale. */
+  private contextEpoch = 0;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
@@ -188,6 +200,7 @@ export class OverlayService implements OverlayControl {
   }
 
   onContextChange(): void {
+    this.contextEpoch += 1;
     this.expiry.onContextChange();
   }
 
@@ -249,9 +262,14 @@ export class OverlayService implements OverlayControl {
     const resolved = new Map<Slot, ResolvedTarget | null>();
     const failures = new Map<Slot, ResolveFailureReason>();
     const epoch = this.epoch;
+    const contextEpoch = this.contextEpoch;
     const results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
     // clear("all") or a new turn arrived while we were resolving: this call is stale.
     if (epoch !== this.epoch) return { ok: false, visible: false, reason: "replaced" };
+    // A context change mid-resolution makes coordinate targets stale (spec §5.4).
+    if (contextEpoch !== this.contextEpoch && [...slots.values()].some(isCoordinateOnly)) {
+      return { ok: false, visible: false, reason: "replaced" };
+    }
     for (const [slot, r] of results) {
       if (r.ok) {
         resolved.set(slot, r.target);
@@ -309,7 +327,8 @@ export class OverlayService implements OverlayControl {
       // A step guide "selected" means its LAST step was selected (earlier selections advance it).
       elementIds: toolName === "show_steps" ? lastStepElement(input as ShowStepsInput) : [...elements.keys()],
       // Any coordinate target goes stale on a context change (spec §5.4), even next to element targets.
-      coordinateOnly: placementTargets(slots).some(isCoordinateOnly),
+      // (includes an anatomy region: its crop and callouts are a snapshot of that context)
+      coordinateOnly: [...slots.values()].some(isCoordinateOnly),
     });
     if (elements.size) {
       const initial = new Map<string, ElementBounds>();
@@ -389,9 +408,13 @@ export class OverlayService implements OverlayControl {
       this.emit({ type: "steps.completed", stepsId });
       this.layout(l);
       this.publish();
-      const hold = this.deps.stepsCompletedHoldMs ?? 1200;
-      this.expiry.untrack(stepsId);
-      this.expiry.track({ id: stepsId, expires: { ms: Math.max(500, hold) }, elementIds: [], coordinateOnly: false });
+      // Show all ✓ briefly, then end — unless the caller explicitly asked for a manual or timed lifetime.
+      const explicit = (l.input as ShowStepsInput).expires;
+      if (explicit !== "manual" && typeof explicit !== "object") {
+        const hold = this.deps.stepsCompletedHoldMs ?? 1200;
+        this.expiry.untrack(stepsId);
+        this.expiry.track({ id: stepsId, expires: { ms: Math.max(500, hold) }, elementIds: [], coordinateOnly: false });
+      }
       return ok(stepsId, this.primaryBounds(l), { visible: true });
     }
     this.emit({ type: "steps.advanced", stepsId, index: l.steps.current });
@@ -515,7 +538,14 @@ export class OverlayService implements OverlayControl {
     for (const l of this.live.values()) {
       if (l.ended) continue;
       for (const [slot, target] of l.slots) {
-        if (target.kind === "element") continue;
+        if (target.kind === "element") {
+          // Element bounds may be unchanged while their display went away: re-check the display.
+          const cur = l.resolved.get(slot);
+          if (!cur) continue;
+          const d = displayForRect(cur.bounds, this.displays());
+          l.resolved.set(slot, d ? { ...cur, displayId: d.id } : null);
+          continue;
+        }
         const r = await this.resolver.resolve(target);
         l.resolved.set(slot, r.ok ? r.target : null);
       }
@@ -589,7 +619,15 @@ export class OverlayService implements OverlayControl {
       if (it.kind === "explainer") rects.push(it.card);
       if ((it.kind === "highlight" || it.kind === "pointer") && it.label) rects.push(it.label.rect);
       if (it.kind === "highlight" || it.kind === "pointer") rects.push(it.target.bounds);
-      if (it.kind === "steps") for (const s of it.steps) if (s.target) rects.push(s.target.bounds);
+      if (it.kind === "pointer") rects.push(pointerBodyRect(it.rest, it.angle));
+      if (it.kind === "steps") {
+        const half = theme.stepBadgeSize / 2;
+        for (const s of it.steps) {
+          if (s.target) rects.push(s.target.bounds);
+          if (s.badge) rects.push({ x: s.badge.x - half, y: s.badge.y - half, width: theme.stepBadgeSize, height: theme.stepBadgeSize });
+          if (s.labelBox) rects.push(s.labelBox.rect);
+        }
+      }
     }
     return rects;
   }
@@ -688,22 +726,40 @@ export class OverlayService implements OverlayControl {
     if (l.toolName === "show_explainer" && l.explainer) {
       const i = l.input as ShowExplainerInput;
       const anchorResolved = l.resolved.get("anchor") ?? null;
+      const region = l.resolved.get("region") ?? null;
       const designSize = measureCard(i.title, i.spec);
-      const display = this.displayOf(anchorResolved);
+      const display = this.displayOf(anchorResolved ?? region);
+      // Never cover the thing being explained: an anatomy card also avoids its crop region.
+      const cardAvoid = region ? [...avoid, region.bounds] : avoid;
       const anchor = anchorResolved ? { bounds: anchorResolved.bounds, shape: anchorResolved.shape } : null;
       const prev = l.item?.kind === "explainer" ? l.item : null;
+      const place = (size: Size) => {
+        if (anchor) {
+          const res = placeBeside({ target: anchor.bounds, size, workArea: display.workArea, avoid: cardAvoid });
+          return { rect: res.rect, scale: res.scale, connector: res.connector as ExplainerItem["connector"] };
+        }
+        const res = placeCentredRight(size, display.workArea, cardAvoid);
+        return { rect: res.rect, scale: res.scale, connector: null };
+      };
       let placement: { rect: Rect; scale: number; connector: ExplainerItem["connector"] };
+      let imageScale = 1;
+      let size = designSize;
       if (prev && l.ended) {
         placement = { rect: prev.card, scale: prev.scale, connector: prev.connector };
-      } else if (anchor) {
-        // Never cover the thing being explained: an anatomy card also avoids its crop region.
-        const region = l.resolved.get("region");
-        const cardAvoid = region ? [...avoid, region.bounds] : avoid;
-        const res = placeBeside({ target: anchor.bounds, size: designSize, workArea: display.workArea, avoid: cardAvoid });
-        placement = { rect: res.rect, scale: res.scale, connector: res.connector };
+        imageScale = prev.imageScale;
+        size = prev.designSize;
       } else {
-        const res = placeCentredRight(designSize, display.workArea, avoid);
-        placement = { rect: res.rect, scale: res.scale, connector: null };
+        placement = place(designSize);
+        // Reflow before shrinking text: retry with smaller pictures at full text size (fontMin).
+        if (placement.scale < 1 && hasImages(i.spec)) {
+          const compact = measureCard(i.title, i.spec, COMPACT_IMAGE_SCALE);
+          const retry = place(compact);
+          if (retry.scale >= placement.scale) {
+            placement = retry;
+            imageScale = COMPACT_IMAGE_SCALE;
+            size = compact;
+          }
+        }
       }
       l.item = {
         kind: "explainer",
@@ -711,7 +767,8 @@ export class OverlayService implements OverlayControl {
         state,
         title: i.title,
         anchor,
-        designSize,
+        designSize: size,
+        imageScale,
         scale: placement.scale,
         card: placement.rect,
         connector: placement.connector,

@@ -103,16 +103,16 @@ async function run(argv: string[]): Promise<number> {
       return 0;
     case "tool": {
       const waitShown = wantsWaitShown(argv);
-      let shownAt: number | null = null;
+      // Buffer every overlay.shown: the paint can arrive before the HTTP response tells us the id.
+      const shownTimes = new Map<string, number>();
       const wanted: { id?: string | undefined } = {};
       let resolveShown: () => void = () => {};
       const shown = new Promise<void>((r) => (resolveShown = r));
       const stop = waitShown
         ? await subscribe(conn, (e) => {
-            if (e.event.type === "overlay.shown" && e.event.overlayId === wanted.id) {
-              shownAt = e.at;
-              resolveShown();
-            }
+            if (e.event.type !== "overlay.shown" || !e.event.overlayId) return;
+            shownTimes.set(e.event.overlayId, e.at);
+            if (e.event.overlayId === wanted.id) resolveShown();
           })
         : () => {};
       const t0 = Date.now();
@@ -121,9 +121,10 @@ async function run(argv: string[]): Promise<number> {
         result: { ok: boolean; overlayId?: string; visible: boolean };
       };
       wanted.id = out.result.overlayId;
-      if (waitShown && wanted.id && out.result.visible) {
+      if (waitShown && wanted.id && out.result.visible && !shownTimes.has(wanted.id)) {
         await Promise.race([shown, new Promise((r) => setTimeout(r, 3000))]);
       }
+      const shownAt = wanted.id ? (shownTimes.get(wanted.id) ?? null) : null;
       stop();
       const report: Record<string, unknown> = { result: out.result };
       if (waitShown) report.shownMs = shownAt === null ? null : shownAt - t0;

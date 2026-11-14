@@ -88,15 +88,16 @@ function explainer(
   body: ExplainerBody,
   spec: ExplainerSpec,
   at: { x: number; y: number },
-  opts: { scale?: number; anchor?: RenderTarget; state?: ExplainerItem["state"] } = {},
+  opts: { scale?: number; anchor?: RenderTarget; state?: ExplainerItem["state"]; imageScale?: number } = {},
 ): ExplainerItem {
-  const designSize = measureCard(title, spec);
+  const imageScale = opts.imageScale ?? 1;
+  const designSize = measureCard(title, spec, imageScale);
   const scale = opts.scale ?? 1;
   const card = rect(at.x, at.y, designSize.width * scale, designSize.height * scale);
   const connector = opts.anchor
     ? { from: { x: card.x, y: card.y + Math.min(80, card.height / 2) }, to: { x: opts.anchor.bounds.x + opts.anchor.bounds.width + 4, y: centre(opts.anchor.bounds).y } }
     : null;
-  return { id, kind: "explainer", state: opts.state ?? "visible", title, anchor: opts.anchor ?? null, designSize, scale, card, connector, body };
+  return { id, kind: "explainer", state: opts.state ?? "visible", title, anchor: opts.anchor ?? null, designSize, imageScale, scale, card, connector, body };
 }
 
 const callout = (n: number, label: string, nx: number, ny: number, nw: number, nh: number, inside = true): AnatomyCallout => ({ n, label, nx, ny, nw, nh, inside });

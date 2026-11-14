@@ -142,6 +142,8 @@ export interface ExplainerItem extends ItemBase {
   anchor: RenderTarget | null;
   /** Card content is laid out at this size... */
   designSize: Size;
+  /** Image heights relative to normal (1, or COMPACT_IMAGE_SCALE when re-laid out to fit at full text size). */
+  imageScale: number;
   /** ...then scaled by `scale` (1, or 0.8 when the LayoutEngine had to shrink it)... */
   scale: number;
   /** ...to occupy this on-screen rect (global DIP). */

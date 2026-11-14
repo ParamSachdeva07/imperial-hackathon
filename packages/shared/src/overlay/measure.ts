@@ -121,9 +121,17 @@ export const COMPARE_IMAGE_H = Math.round(COMPARE_COL * 0.75);
 export const ANATOMY_IMAGE_H = Math.round(CARD_INNER * 0.62);
 export const CONCEPT_IMAGE_H = Math.round(CARD_INNER * 0.56);
 /** Concept image height shrinks with the panel count so a 3-panel card still fits a laptop screen. */
-export function conceptImageHeight(panels: number): number {
-  return panels >= 3 ? Math.round(CARD_INNER * 0.34) : panels === 2 ? Math.round(CARD_INNER * 0.42) : CONCEPT_IMAGE_H;
+export function conceptImageHeight(panels: number, imageScale = 1): number {
+  const base = panels >= 3 ? Math.round(CARD_INNER * 0.34) : panels === 2 ? Math.round(CARD_INNER * 0.42) : CONCEPT_IMAGE_H;
+  return Math.round(base * imageScale);
 }
+/**
+ * Image heights for a given image scale. A card that doesn't fit is first re-laid out with smaller
+ * images (COMPACT_IMAGE_SCALE) at full text size, before any whole-card shrink makes text smaller.
+ */
+export const COMPACT_IMAGE_SCALE = 0.6;
+export const compareImageHeight = (imageScale = 1): number => Math.round(COMPARE_IMAGE_H * imageScale);
+export const anatomyImageHeight = (imageScale = 1): number => Math.round(ANATOMY_IMAGE_H * imageScale);
 
 const rows = (heights: number[]) => heights.reduce((a, b) => a + b, 0) + CARD.rowGap * Math.max(0, heights.length - 1);
 const textH = (text: string, width: number, size: number = BODY, lh: number = BODY_LH, cw: number = 1) =>
@@ -138,28 +146,31 @@ interface Side {
   imagePrompt?: string | undefined;
 }
 
-export function compareSideHeight(s: Side, hasImage = Boolean(s.imagePrompt)): number {
+export function compareSideHeight(s: Side, hasImage = Boolean(s.imagePrompt), imageScale = 1): number {
   const head = textH(s.title, COMPARE_COL, BODY, BODY_LH, BOLD_FACTOR);
   const pts = s.points.length > 0 ? CARD.rowGap + rows(s.points.map((p) => textH(p, bulletTextWidth))) : 0;
-  return (hasImage ? COMPARE_IMAGE_H + CARD.gap : 0) + head + pts;
+  return (hasImage ? compareImageHeight(imageScale) + CARD.gap : 0) + head + pts;
 }
 
 /** Unscaled design size of an explainer card. Width is always cardMaxWidth. */
-export function measureCard(title: string, spec: ExplainerSpec): Size {
+export function measureCard(title: string, spec: ExplainerSpec, imageScale = 1): Size {
   let body = 0;
   switch (spec.kind) {
     case "sequence":
       body = CARD.tile + CARD.gap + rows(spec.steps.map((s) => textH(s.caption, captionTextWidth)));
       break;
     case "compare":
-      body = Math.max(compareSideHeight(spec.left), compareSideHeight(spec.right));
+      body = Math.max(
+        compareSideHeight(spec.left, Boolean(spec.left.imagePrompt), imageScale),
+        compareSideHeight(spec.right, Boolean(spec.right.imagePrompt), imageScale),
+      );
       break;
     case "anatomy":
-      body = ANATOMY_IMAGE_H + CARD.gap + rows(spec.callouts.map((c) => textH(c.label, captionTextWidth)));
+      body = anatomyImageHeight(imageScale) + CARD.gap + rows(spec.callouts.map((c) => textH(c.label, captionTextWidth)));
       break;
     case "concept":
       body =
-        spec.panels.reduce((sum, p) => sum + conceptImageHeight(spec.panels.length) + CARD.rowGap + textH(p.caption, CARD_INNER), 0) +
+        spec.panels.reduce((sum, p) => sum + conceptImageHeight(spec.panels.length, imageScale) + CARD.rowGap + textH(p.caption, CARD_INNER), 0) +
         CARD.gap * (spec.panels.length - 1);
       break;
   }

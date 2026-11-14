@@ -7,15 +7,16 @@ import { SequenceTemplate } from "./SequenceTemplate";
 
 function Body({ item }: { item: ExplainerItem }) {
   const { body } = item;
+  const imageScale = item.imageScale ?? 1;
   switch (body.kind) {
     case "sequence":
       return <SequenceTemplate body={body} />;
     case "compare":
-      return <CompareTemplate body={body} />;
+      return <CompareTemplate body={body} imageScale={imageScale} />;
     case "anatomy":
-      return <AnatomyTemplate body={body} />;
+      return <AnatomyTemplate body={body} imageScale={imageScale} />;
     case "concept":
-      return <ConceptPanels body={body} />;
+      return <ConceptPanels body={body} imageScale={imageScale} />;
   }
 }
 

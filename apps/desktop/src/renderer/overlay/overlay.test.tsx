@@ -140,3 +140,15 @@ describe("tone glyph badge placement", () => {
     expect(p.y - 24).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("image slot decode failure", () => {
+  it("swaps a ready image that fails to decode for the large fallback icon", async () => {
+    const { render, fireEvent } = await import("@testing-library/react");
+    const { ImageSlotView } = await import("./explainer/ImageSlot");
+    const { container } = render(<ImageSlotView slot={{ status: "ready", src: "data:image/png;base64,broken" }} />);
+    const img = container.querySelector("img")!;
+    fireEvent.error(img);
+    expect(container.querySelector("[data-slot]")!.getAttribute("data-slot")).toBe("failed");
+    expect(container.querySelector("img")).toBeNull();
+  });
+});

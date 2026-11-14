@@ -516,4 +516,88 @@ describe("OverlayService", () => {
       expect(item.steps[0]!.badge).not.toBeNull();
     });
   });
+
+  describe("review round 2 (codex) regressions", () => {
+    const overlaps = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+      a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+    it("an anatomy card without an anchor still avoids its region", async () => {
+      const region = rect(700, 300, 700, 300); // under where centred-right would land
+      const r = await svc.handleTool("show_explainer", {
+        title: "Parts",
+        spec: { kind: "anatomy", region: { kind: "rect", displayId: "1", rect: region }, callouts: [{ target: el("attach"), label: "Attach" }] },
+      });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "explainer") throw new Error();
+      expect(overlaps(item.card, region)).toBe(false);
+    });
+
+    it("an anatomy card of a coordinate region expires on context change", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        anchor: el("attach"),
+        title: "Parts",
+        spec: { kind: "anatomy", region: { kind: "rect", displayId: "1", rect: rect(250, 380, 500, 100) }, callouts: [{ target: el("attach"), label: "Attach" }] },
+      });
+      svc.onContextChange();
+      expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
+    });
+
+    it("an element left on a removed display is lost", async () => {
+      bounds.set("leftbtn", { rect: rect(-1500, 300), displayId: "2" });
+      const r = await svc.handleTool("highlight", { target: el("leftbtn") });
+      screen.displays = [PRIMARY];
+      screen.change();
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("a context change while a coordinate call is resolving drops it", async () => {
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((res) => (release = res));
+      const pending = svc.handleTool("point_at", { target: el("attach"), motion: "drag_to", dragTo: { kind: "rect", displayId: "1", rect: rect(800, 600) } });
+      svc.onContextChange();
+      bounds.gate = null;
+      release();
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+    });
+
+    it("a completed step guide with an explicit manual lifetime stays until cleared", async () => {
+      const r = await svc.handleTool("show_steps", { steps: [{ target: el("attach"), label: "Attach" }], expires: "manual" });
+      await svc.handleTool("advance_step", { stepsId: r.overlayId });
+      clock.advance(5000);
+      expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+    });
+
+    it("later labels avoid an earlier pointer's resting arrow", async () => {
+      const p = await svc.handleTool("point_at", { target: el("attach") });
+      const h = await svc.handleTool("highlight", { target: el("to"), label: "Who it is for" });
+      const ptr = sink.byId(p.overlayId!);
+      const hl = sink.byId(h.overlayId!);
+      if (ptr?.kind !== "pointer" || hl?.kind !== "highlight") throw new Error();
+      const rad = (ptr.angle * Math.PI) / 180;
+      const body = { x: ptr.rest.x - Math.cos(rad) * 48 - 48, y: ptr.rest.y - Math.sin(rad) * 48 - 48, width: 96, height: 96 };
+      expect(overlaps(hl.label!.rect, body)).toBe(false);
+    });
+  });
+
+  it("re-lays a tall card out with smaller pictures before shrinking its text", async () => {
+    const small: DisplayInfo = { id: "1", bounds: { x: 0, y: 0, width: 1280, height: 720 }, workArea: { x: 0, y: 25, width: 1280, height: 695 }, scaleFactor: 2 };
+    screen.displays = [small];
+    const r = await svc.handleTool("show_explainer", {
+      title: "What is the cloud?",
+      spec: {
+        kind: "concept",
+        panels: [
+          { caption: "Your photos are copied from your computer", imagePrompt: "a" },
+          { caption: "to a safe building far away", imagePrompt: "b" },
+          { caption: "so you can see them anywhere", imagePrompt: "c" },
+        ],
+      },
+    });
+    const item = sink.byId(r.overlayId!);
+    if (item?.kind !== "explainer") throw new Error();
+    expect(item.imageScale).toBeLessThan(1);
+    expect(item.scale).toBe(1); // text stays at full size (fontMin)
+    expect(item.card.y + item.card.height).toBeLessThanOrEqual(720);
+  });
 });

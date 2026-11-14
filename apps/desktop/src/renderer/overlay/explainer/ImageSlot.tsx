@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import type { ImageSlot as Slot } from "@pointy/shared/overlay/render";
 import { Icon } from "../icons/Icon";
 
@@ -14,15 +14,29 @@ export function ImageSlotView({
   style?: CSSProperties;
   children?: React.ReactNode;
 }) {
+  // A ready image that fails to decode (corrupt file / bad response) falls back like a failed one.
+  const [broken, setBroken] = useState<string | null>(null);
+  const effective: Slot =
+    slot.status === "ready" && broken === slot.src ? { status: "failed", fallbackIcon: "photo" } : slot;
   return (
-    <div className={`slot slot-${slot.status}`} data-slot={slot.status} style={style}>
-      {slot.status === "ready" ? (
-        <img className={`slot-img fit-${fit}`} src={slot.src} alt="" draggable={false} />
+    <div className={`slot slot-${effective.status}`} data-slot={effective.status} style={style}>
+      {effective.status === "ready" ? (
+        <img
+          className={`slot-img fit-${fit}`}
+          src={effective.src}
+          alt=""
+          draggable={false}
+          onError={() => setBroken(effective.src)}
+        />
       ) : (
         <>
-          {slot.status === "loading" ? <div className="shimmer" /> : null}
+          {effective.status === "loading" ? <div className="shimmer" /> : null}
           <div className="slot-icon">
-            <Icon name={slot.fallbackIcon} size={slot.status === "failed" ? 128 : 96} strokeWidth={slot.status === "failed" ? 3.5 : 3} />
+            <Icon
+              name={effective.fallbackIcon}
+              size={effective.status === "failed" ? 128 : 96}
+              strokeWidth={effective.status === "failed" ? 3.5 : 3}
+            />
           </div>
         </>
       )}
