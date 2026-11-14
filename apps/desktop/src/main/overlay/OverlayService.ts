@@ -12,12 +12,14 @@ import {
   measureLabel,
   parseToolInput,
   theme,
+  type AvatarController,
   type AvoidRectsProvider,
   type BoundsProvider,
   type Caller,
   type DisplayInfo,
   type ElementBounds,
   type Expiry,
+  type MoveAvatarInput,
   type OverlayControl,
   type OverlayEvent,
   type Rect,
@@ -47,7 +49,8 @@ import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, expiresAtTurnStart, expiresOnContextChange } from "./ExpiryManager";
 import { ExplainerService } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
-import { intersects } from "./geometry";
+import { chooseAvatarPosition } from "./avatar/avatarPlacement";
+import { inflate, intersects, rectsEqual } from "./geometry";
 import { placeBeside, pointerBody } from "./LayoutEngine";
 import { OverlayManager } from "./OverlayManager";
 import type { OverlayDebug, SceneSink, ScreenSource } from "./ports";
@@ -60,6 +63,8 @@ export interface OverlayServiceDeps {
   screen: ScreenSource;
   sink: SceneSink;
   avoidRects?: AvoidRectsProvider;
+  /** The voice avatar window, when there is one: enables `move_avatar` and auto-dodge. */
+  avatar?: AvatarController;
   imageSource?: ImageSource;
   clock?: Clock;
   reduceMotion?: () => boolean;
@@ -72,6 +77,10 @@ export interface OverlayServiceDeps {
 }
 
 const EXIT_MARGIN_MS = 50;
+/** Auto-dodge: at most one automatic avatar move per this long (the avatar must not dart around). */
+const AUTO_DODGE_MIN_INTERVAL_MS = 1500;
+/** Auto-dodge triggers when the avatar comes within this distance of what a drawing points at. */
+const AUTO_DODGE_MARGIN = 16;
 /** How long a step that isn't on screen yet may take to appear after the guide advances to it. */
 const STEP_APPEAR_GRACE_MS = 2000;
 
@@ -92,6 +101,7 @@ const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResu
   ...(bounds ? { resolvedBounds: bounds } : {}),
   ...extra,
 });
+const AVATAR_UNAVAILABLE: ToolResult = { ok: false, visible: false, reason: "avatar_unavailable" };
 const CANCELLED: ToolResult = { ok: false, visible: false, reason: "cancelled" };
 
 /** The parts of a drawing that can be moved out of the way (labels and cards, not targets). */
@@ -126,6 +136,9 @@ export class OverlayService implements OverlayControl {
   private relayoutGen = 0;
   /** Anchors moved during the current check (published once when it completes). */
   private anchorsMoved = false;
+  /** Avatar moves (explicit and automatic) run one at a time. */
+  private avatarChain: Promise<unknown> = Promise.resolve();
+  private lastAutoDodgeAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
@@ -184,6 +197,8 @@ export class OverlayService implements OverlayControl {
         return this.clear((parsed.data as { overlayId: string }).overlayId, opts.caller ?? "model");
       case "advance_step":
         return this.advance((parsed.data as { stepsId: string }).stepsId);
+      case "move_avatar":
+        return this.moveAvatar(parsed.data as MoveAvatarInput);
       case "highlight":
       case "point_at":
       case "show_steps":
@@ -313,6 +328,8 @@ export class OverlayService implements OverlayControl {
     // Displays changed while we were resolving: re-check this annotation against the new layout.
     if (this.relayoutGen !== displayGen) void this.relayoutAll();
 
+    this.autoDodge(l);
+
     // A card whose anchor can't be resolved is still shown (centred-right); report why it's unanchored.
     return ok(l.id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
   }
@@ -355,6 +372,72 @@ export class OverlayService implements OverlayControl {
     }
     const tracked = kindOfLive(l).watchUnresolved ? [...l.elements.keys()] : [...initial.keys()];
     if (tracked.length) this.anchors.track(l.id, tracked, initial);
+  }
+
+  // ---------------------------------------------------------------- avatar
+
+  private moveAvatar(input: MoveAvatarInput): Promise<ToolResult> {
+    return this.serializeAvatar(() => this.performAvatarMove(input.position, input.avoid, input.displayId, []));
+  }
+
+  /**
+   * A drawing was just shown: if the avatar is (nearly) on top of what it points at, move the avatar
+   * away. Fire-and-forget (never delays or changes the tool result), serialized with other avatar
+   * moves, and rate-limited so the avatar can't dart around.
+   */
+  private autoDodge(l: Live): void {
+    const avatar = this.deps.avatar;
+    if (!avatar || l.ended) return;
+    const now = this.clock.now();
+    if (now - this.lastAutoDodgeAt < AUTO_DODGE_MIN_INTERVAL_MS) return;
+    const bounds = avatar.getBounds();
+    if (!bounds || !avatar.isMovable()) return;
+    // A step guide shows one control at a time; the other drawings every target they use.
+    const targets =
+      l.toolName === "show_steps"
+        ? [this.primaryBounds(l)].flatMap((b) => (b ? [b] : []))
+        : [...l.resolved.values()].flatMap((r) => (r ? [r.bounds] : []));
+    const near = targets.map((t) => inflate(t, AUTO_DODGE_MARGIN));
+    if (!near.some((t) => intersects(t, bounds))) return;
+    this.lastAutoDodgeAt = now;
+    void this.serializeAvatar(() => this.performAvatarMove("auto", undefined, undefined, near));
+  }
+
+  private serializeAvatar(fn: () => Promise<ToolResult>): Promise<ToolResult> {
+    const run = this.avatarChain.then(fn, fn).catch((): ToolResult => AVATAR_UNAVAILABLE);
+    this.avatarChain = run;
+    return run;
+  }
+
+  private async performAvatarMove(
+    position: MoveAvatarInput["position"],
+    avoidTarget: MoveAvatarInput["avoid"],
+    displayId: string | undefined,
+    extraAvoid: Rect[],
+  ): Promise<ToolResult> {
+    const avatar = this.deps.avatar;
+    if (!avatar || !avatar.isMovable() || !avatar.getBounds()) return AVATAR_UNAVAILABLE;
+    const avoid = [...extraAvoid];
+    if (avoidTarget) {
+      const r = await this.resolver.resolve(avoidTarget);
+      if (r.ok) avoid.push(r.target.bounds); // an avoid target that can't be resolved is ignored
+    }
+    const current = avatar.getBounds();
+    if (!current || !avatar.isMovable()) return AVATAR_UNAVAILABLE; // collapsed or grabbed while resolving
+    const displays = this.displays();
+    const own = displayForRect(current, displays);
+    const display = displayId ? findDisplay(displayId, displays) : (own ?? findDisplay(this.deps.screen.getPrimaryDisplayId(), displays) ?? displays[0]);
+    if (!display) return { ok: false, visible: false, reason: "display_not_found" };
+    // Everything on screen the avatar should stay off, but not the avatar itself.
+    avoid.push(...this.avoidFor("").filter((a) => !rectsEqual(a, current)));
+    const to = chooseAvatarPosition({ avatar: current, workArea: display.workArea, position, avoid, relocate: display.id !== own?.id });
+    if (to.x === current.x && to.y === current.y) return { ok: true, visible: true, resolvedBounds: current };
+    const moved = await avatar.moveTo(to);
+    if (!moved) return AVATAR_UNAVAILABLE;
+    // The avatar is an avoid rect for every label and card: lay them out again around its new spot.
+    for (const l of this.live.values()) if (!l.ended && l.item) this.refresh(l);
+    this.publish();
+    return { ok: true, visible: true, resolvedBounds: moved };
   }
 
   // ---------------------------------------------------------------- clear / steps

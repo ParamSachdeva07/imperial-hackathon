@@ -272,6 +272,7 @@ These matter as much as the code. Put them in `tools.ts` next to the schemas.
 - **advance_step**: "Move a step guide forward when the user has done the current step."
 - **show_explainer**: "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side; `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text."
 - **clear**: "Remove annotations. Call with `all` when the user says 'got it', 'okay' or changes topic."
+- **move_avatar** (additive): "Move the user's voice-assistant avatar bubble out of the way when it covers something you need to point at or show. `auto` picks the corner farthest from what is on screen; ... Only works during a call. Usually unnecessary: the overlay moves the avatar by itself." The overlay also dodges automatically after showing a drawing under the avatar.
 
 ---
 

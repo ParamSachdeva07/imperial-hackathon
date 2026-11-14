@@ -1378,5 +1378,162 @@
         "overlayId"
       ]
     }
+  },
+  {
+    "type": "function",
+    "name": "move_avatar",
+    "description": "Move the user's voice-assistant avatar bubble out of the way when it covers something you need to point at or show. `auto` picks the corner farthest from what is on screen; pass `avoid` to keep it clear of a specific target, or a corner name to choose one. Only works during a call. Usually unnecessary: the overlay moves the avatar by itself when a highlight or pointer would be under it.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "position": {
+          "default": "auto",
+          "type": "string",
+          "enum": [
+            "auto",
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right"
+          ]
+        },
+        "avoid": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "element"
+                },
+                "elementId": {
+                  "type": "string"
+                },
+                "snapshotRevision": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "elementId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "rect"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "rect": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    },
+                    "width": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "height": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "rect"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "point"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "point": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "point"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "polygon"
+                },
+                "displayId": {
+                  "type": "string"
+                },
+                "points": {
+                  "minItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "displayId",
+                "points"
+              ]
+            }
+          ]
+        },
+        "displayId": {
+          "type": "string"
+        }
+      }
+    }
   }
 ]

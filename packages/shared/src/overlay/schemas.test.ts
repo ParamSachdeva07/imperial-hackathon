@@ -5,6 +5,7 @@ import {
   Expiry,
   HighlightInput,
   MagnifyInput,
+  MoveAvatarInput,
   OverlayEvent,
   PointAtInput,
   PreviewActionInput,
@@ -13,6 +14,7 @@ import {
   ShowStepsInput,
   Target,
   ToolResult,
+  ToolResultReason,
 } from "./schemas";
 
 const el = (elementId: string) => ({ kind: "element" as const, elementId });
@@ -122,6 +124,14 @@ describe("Tool inputs", () => {
     expect(ClearInput.safeParse({}).success).toBe(false);
     expect(AdvanceStepInput.safeParse({ stepsId: "s1" }).success).toBe(true);
     expect(AdvanceStepInput.safeParse({}).success).toBe(false);
+  });
+
+  it("validates move_avatar, defaulting to auto", () => {
+    expect(MoveAvatarInput.parse({})).toEqual({ position: "auto" });
+    expect(MoveAvatarInput.safeParse({ position: "bottom_left", displayId: "2", avoid: el("x") }).success).toBe(true);
+    expect(MoveAvatarInput.safeParse({ position: "middle" }).success).toBe(false);
+    expect(MoveAvatarInput.safeParse({ avoid: { kind: "element" } }).success).toBe(false);
+    expect(ToolResultReason.safeParse("avatar_unavailable").success).toBe(true);
   });
 });
 

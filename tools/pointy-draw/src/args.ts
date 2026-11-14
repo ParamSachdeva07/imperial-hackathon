@@ -26,6 +26,7 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw advance STEPS_ID
   pointy-draw explainer --file PATH.json
   pointy-draw clear all|OVERLAY_ID
+  pointy-draw move-avatar [auto|top_left|top_right|bottom_left|bottom_right] [<target>]   move the voice avatar window
   pointy-draw tool NAME --json '{...}'          raw tool call
   pointy-draw sim move ELEMENT_ID dx,dy | sim remove ELEMENT_ID | sim restore [ELEMENT_ID]
   pointy-draw turn TURN_ID | context | select ELEMENT_ID | cue CUE_ID
@@ -148,6 +149,14 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       return { kind: "tool", name: "show_explainer", input: ctx.readJsonFile(v.file as string) as Record<string, unknown> };
     case "clear":
       return { kind: "tool", name: "clear", input: { overlayId: rest[0] ?? "all" } };
+    case "move-avatar": {
+      const hasAvoid = v.element || v.rect || v.point || v.polygon;
+      return {
+        kind: "tool",
+        name: "move_avatar",
+        input: { ...(rest[0] ? { position: rest[0].replace(/-/g, "_") } : {}), ...(hasAvoid ? { avoid: target(v, ctx) } : {}) },
+      };
+    }
     case "tool":
       if (!rest[0]) throw new UsageError("tool: give a tool name");
       return { kind: "tool", name: rest[0], input: v.json ? (JSON.parse(v.json as string) as Record<string, unknown>) : {} };

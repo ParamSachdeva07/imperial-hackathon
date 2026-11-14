@@ -18,6 +18,8 @@
  *   5. `ToolResult.reason` gains "cancelled": the call was overtaken before it could draw
  *      (`clear` all, a new turn, or a context change arrived while its targets were resolving).
  *      "replaced" keeps its §5.2 meaning: a drawing that was shown and then superseded.
+ *   6. `MoveAvatarInput` (new MVP tool `move_avatar`) and `ToolResult.reason` "avatar_unavailable"
+ *      (no avatar window to move: no call in progress, collapsed, being dragged, or not running).
  *
  * Lifetime note: for `show_steps`, `expires: "on_target_selected"` means "until the guide is
  * completed" (each selected step advances it; the last one ends it after a brief "All done"),
@@ -87,6 +89,15 @@ export const ShowStepsInput = z.object({
 });
 
 export const AdvanceStepInput = z.object({ stepsId: z.string() });
+
+// Additive: moves the voice avatar window out of the way. "auto" picks the corner farthest from
+// whatever is on screen (plus `avoid`, if given).
+export const MoveAvatarInput = z.object({
+  position: z.enum(["auto", "top_left", "top_right", "bottom_left", "bottom_right"]).default("auto"),
+  avoid: Target.optional(), // keep the avatar clear of this target
+  displayId: z.string().optional(), // default: the display the avatar is on
+  turnId: z.string().optional(),
+});
 
 // Fixed icon set for templates (render locally as SVG).
 export const IconName = z.enum([
@@ -190,6 +201,7 @@ export const ToolResultReason = z.enum([
   "replaced",
   "unknown_overlay", // additive
   "cancelled", // additive: overtaken (clear all / new turn / context change) before it drew
+  "avatar_unavailable", // additive: move_avatar with no movable avatar window (no call, collapsed, dragging)
 ]);
 
 export const ToolResult = z.object({
@@ -232,6 +244,7 @@ export type PointAtInput = z.infer<typeof PointAtInput>;
 export type HighlightInput = z.infer<typeof HighlightInput>;
 export type ShowStepsInput = z.infer<typeof ShowStepsInput>;
 export type AdvanceStepInput = z.infer<typeof AdvanceStepInput>;
+export type MoveAvatarInput = z.infer<typeof MoveAvatarInput>;
 export type ExplainerSpec = z.infer<typeof ExplainerSpec>;
 export type ConceptSpec = z.infer<typeof ConceptSpec>;
 export type SequenceSpec = z.infer<typeof SequenceSpec>;

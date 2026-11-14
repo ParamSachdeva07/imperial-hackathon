@@ -2,7 +2,7 @@
  * Interfaces to teammates (spec §6). The overlay depends only on these; mocks live in
  * apps/desktop/src/main/overlay/mocks and are swapped for the real implementations at integration.
  */
-import type { OverlayEvent, Rect, ToolResult } from "./schemas";
+import type { OverlayEvent, Point, Rect, ToolResult } from "./schemas";
 
 /** Bounds of an accessibility element, in global DIP. */
 export interface ElementBounds {
@@ -32,6 +32,19 @@ export interface ScreenCaptureProvider {
 /** Rects the overlay must not place cards/labels over (e.g. the avatar window). Global DIP. */
 export interface AvoidRectsProvider {
   getAvoidRects(): Rect[];
+}
+
+/**
+ * The voice avatar window (a separate process) that `move_avatar` and auto-dodge move out of the
+ * way. Implemented by AnamAvatarClient; absent in tests/dev without an avatar.
+ */
+export interface AvatarController {
+  /** Cached bounds (sync, global DIP); null when unknown or collapsed. */
+  getBounds(): Rect | null;
+  /** True when it can be moved right now: expanded (in a call) and not being dragged. */
+  isMovable(): boolean;
+  /** Move the window's top-left; resolves the new bounds, or null when it could not move. Never throws. */
+  moveTo(topLeft: Point): Promise<Rect | null>;
 }
 
 /** Who issued a tool call; reported as `by` on overlay.dismissed (e.g. the controller's clear on stop). */

@@ -32,6 +32,7 @@ const REQUESTS = process.argv.slice(2).length
       "What is the cloud?",
       "Can you point at the attach button?",
       "Is this email a scam? Show me how a real email differs from a scam one.",
+      "The bubble is in my way, can you move it to the other corner?",
       "Okay, got it, thanks.",
     ];
 

@@ -10,7 +10,7 @@
  */
 import { join } from "node:path";
 import type { BrowserWindow } from "electron";
-import type { AvoidRectsProvider, BoundsProvider, OverlayControl, ScreenCaptureProvider } from "@pointy/shared/overlay";
+import type { AvatarController, AvoidRectsProvider, BoundsProvider, OverlayControl, ScreenCaptureProvider } from "@pointy/shared/overlay";
 import { loadRendererPage, PRELOAD_DIR } from "../rendererPages";
 import { FalClient, type ImageSource } from "./explainer/falClient";
 import { OverlayService } from "./OverlayService";
@@ -27,6 +27,8 @@ export interface CreateOverlayOptions {
   captureProvider: ScreenCaptureProvider;
   /** Rects to keep clear, e.g. the avatar window. */
   avoidRects?: AvoidRectsProvider;
+  /** The voice avatar window: enables the `move_avatar` tool and auto-dodge. Usually the same object as `avoidRects`. */
+  avatar?: AvatarController;
   /**
    * Folder with pre-generated explainer pictures (assets/explainers). Enables concept/compare
    * pictures (local assets first, then the fal.ai broker). Without it — and without `imageSource` —
@@ -83,6 +85,7 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     screen,
     sink: windows,
     ...(opts.avoidRects ? { avoidRects: opts.avoidRects } : {}),
+    ...(opts.avatar ? { avatar: opts.avatar } : {}),
     ...(imageSource ? { imageSource } : {}),
     hideDuringCapture: dev.hideDuringCapture ?? false,
     reduceMotion: () => Boolean(dev.forceReduceMotion) || platform.prefersReducedMotion(),

@@ -11,6 +11,7 @@ import {
   ClearInput,
   HighlightInput,
   MagnifyInput,
+  MoveAvatarInput,
   PointAtInput,
   PreviewActionInput,
   ReplayLastInput,
@@ -18,7 +19,7 @@ import {
   ShowStepsInput,
 } from "./schemas";
 
-export const MVP_TOOL_NAMES = ["point_at", "highlight", "show_steps", "advance_step", "show_explainer", "clear"] as const;
+export const MVP_TOOL_NAMES = ["point_at", "highlight", "show_steps", "advance_step", "show_explainer", "clear", "move_avatar"] as const;
 export const STRETCH_TOOL_NAMES = ["magnify", "preview_action", "replay_last"] as const;
 export const TOOL_NAMES = [...MVP_TOOL_NAMES, ...STRETCH_TOOL_NAMES] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -79,6 +80,14 @@ export const TOOLS = {
     name: "clear",
     description: "Remove annotations. Call with `all` when the user says 'got it', 'okay' or changes topic.",
     input: ClearInput,
+    tier: "mvp",
+    audience: "model",
+  },
+  move_avatar: {
+    name: "move_avatar",
+    description:
+      "Move the user's voice-assistant avatar bubble out of the way when it covers something you need to point at or show. `auto` picks the corner farthest from what is on screen; pass `avoid` to keep it clear of a specific target, or a corner name to choose one. Only works during a call. Usually unnecessary: the overlay moves the avatar by itself when a highlight or pointer would be under it.",
+    input: MoveAvatarInput,
     tier: "mvp",
     audience: "model",
   },

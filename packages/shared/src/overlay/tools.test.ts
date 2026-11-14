@@ -4,7 +4,16 @@ import { describe, expect, it } from "vitest";
 import { exportToolDefinitions, MVP_TOOL_NAMES, parseToolInput, TOOLS, toolJsonSchema } from "./tools";
 
 describe("tool registry", () => {
-  it("exports the six MVP tools by default", () => {
+  it("offers move_avatar to the model as an MVP tool", () => {
+    expect(TOOLS.move_avatar).toMatchObject({ tier: "mvp", audience: "model" });
+    expect(MVP_TOOL_NAMES).toContain("move_avatar");
+    const schema = toolJsonSchema("move_avatar") as { properties: Record<string, { default?: unknown }>; required?: string[] };
+    expect(schema.properties.position?.default).toBe("auto");
+    expect(schema.required ?? []).toEqual([]);
+    expect(JSON.stringify(schema)).not.toContain("turnId");
+  });
+
+  it("exports the MVP tools by default", () => {
     expect(exportToolDefinitions().map((t) => t.name)).toEqual([...MVP_TOOL_NAMES]);
   });
 

@@ -7,7 +7,8 @@ the code on `feat/overlay-tools` (PR #1), and the TypeScript blocks compile agai
 marked *pseudo-code* stand in for your own model client.
 
 > **What the overlay is.** A drawing layer. The AI calls tools (`point_at`, `highlight`,
-> `show_steps`, `advance_step`, `show_explainer`, `clear`) and the overlay draws pointers, rings,
+> `show_steps`, `advance_step`, `show_explainer`, `clear`, plus `move_avatar` to shift the voice
+> avatar out of the way) and the overlay draws pointers, rings,
 > step-by-step guides and explainer cards **over the real macOS desktop**. It uses transparent,
 > click-through windows, one per display. It never clicks or types. It only draws, follows the
 > elements it points at, and reports back.
@@ -218,6 +219,25 @@ const { control } = overlay; // OverlayControl: the only object the controller t
 `getAvoidRects()` is called on every layout, so return **current** bounds. Use it for the avatar,
 the caption bar, and anything of yours that cards and labels must not cover.
 
+**The real Anam avatar.** The Anam voice avatar (`anam-overlay/`) is a separate Electron process with
+a local control API (discovery file `~/.pointy/anam-control.json`, or `ANAM_CONTROL_FILE`). Pointy
+ships a client for it, `AnamAvatarClient` (`overlay/avatar/AnamAvatarClient.ts`), which polls the
+avatar's bounds every 500 ms. It is both the `AvoidRectsProvider` (it reports bounds only while the
+avatar is expanded, i.e. during a call) and an `AvatarController`:
+
+```ts
+const anam = new AnamAvatarClient(); // anam.start() to poll, anam.dispose() on quit
+const overlay = createOverlayControl({ boundsProvider, captureProvider, avoidRects: anam, avatar: anam, assetsDir });
+```
+
+With `avatar` set, the `move_avatar` tool works and the overlay **auto-dodges**: when a highlight,
+pointer, step or card is shown and the avatar is on (or within 16 DIP of) what it points at, the
+avatar is moved to the clearest corner. This runs in the background (it never delays or changes the
+tool result) and at most once per 1.5 s. The avatar is only movable while expanded and not being
+dragged; collapsed, it is a small dot that is left alone. The dev app turns this on with
+`POINTY_AVATAR=anam` (or automatically when the discovery file exists). Without an `avatar`,
+`move_avatar` returns `avatar_unavailable`.
+
 ### 5.6 Give the tools to the model
 
 ```ts
@@ -290,6 +310,8 @@ for (const call of calls) outputs.push({ id: call.id, output: JSON.stringify(awa
 | false / false | `invalid_input` | Arguments didn't validate. |
 | false / false | `unknown_overlay` | `clear` / `advance_step` with an id that doesn't exist (anymore). |
 | false / false | `cancelled` | Overtaken before it drew (clear all, new turn, context change). |
+| true / true | none, on `move_avatar` | The avatar was moved (or was already clear). `resolvedBounds` is its new bounds. |
+| false / false | `avatar_unavailable` | `move_avatar` with no movable avatar: no call in progress (collapsed), being dragged, or Anam isn't running. Not an error to retry. |
 
 ### 5.8 The three lifecycle calls (the controller's job)
 

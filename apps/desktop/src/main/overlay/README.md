@@ -46,6 +46,16 @@ The build already places the overlay page and preload where `createOverlayContro
 | false / false | `invalid_input` | Arguments didn't validate (or a stretch tool that isn't enabled). |
 | false / false | `unknown_overlay` | `clear` / `advance_step` with an id that doesn't exist. |
 | false / false | `cancelled` | The call was overtaken (cleared, new turn, context change) before it could draw. |
+| true / true | none, on `move_avatar` | The voice avatar window was moved (or already clear); `resolvedBounds` is its new bounds. |
+| false / false | `avatar_unavailable` | `move_avatar` with no movable avatar (collapsed, being dragged, not running, or no `avatar` option). |
+
+## Avatar (`move_avatar`, auto-dodge)
+
+`createOverlayControl({ avatar })` takes an `AvatarController` (`avatar/AnamAvatarClient.ts` is the
+real one; it is also the `AvoidRectsProvider`). `move_avatar` picks a corner via
+`avatar/avatarPlacement.ts` and re-lays out live drawings around the avatar's new spot. After any
+drawing is shown, if the avatar is within 16 DIP of its target the service runs the same "auto" move in
+the background (serialized, at most one per 1.5 s, never affecting the tool result).
 
 ## Behaviour
 

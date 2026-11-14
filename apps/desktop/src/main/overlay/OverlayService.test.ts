@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DisplayInfo, OverlayEvent, Rect, RenderItem } from "@pointy/shared/overlay";
+import type { AvatarController, DisplayInfo, OverlayEvent, Point, Rect, RenderItem } from "@pointy/shared/overlay";
 import { OverlayService } from "./OverlayService";
 import type { SceneSink, ScreenSource } from "./ports";
 import { FakeBoundsProvider, FakeClock, flushPromises } from "./testing/fakeClock";
@@ -887,5 +887,189 @@ describe("OverlayService", () => {
     if (item?.kind !== "explainer" || item.body.kind !== "concept") throw new Error();
     expect(item.body.panels[0]!.image).toMatchObject({ status: "failed" });
     expect(events.filter((e) => e.type === "explainer.image_failed")).toHaveLength(1);
+  });
+});
+
+class FakeAvatar implements AvatarController {
+  bounds: Rect | null;
+  movable = true;
+  moves: Point[] = [];
+  /** When set, moveTo fails (resolves null). */
+  failMoves = false;
+  constructor(bounds: Rect) {
+    this.bounds = bounds;
+  }
+  getBounds() {
+    return this.bounds;
+  }
+  isMovable() {
+    return this.movable && this.bounds !== null;
+  }
+  async moveTo(p: Point) {
+    this.moves.push(p);
+    if (!this.bounds || this.failMoves) return null;
+    this.bounds = { ...this.bounds, x: p.x, y: p.y };
+    return this.bounds;
+  }
+  getAvoidRects() {
+    return this.bounds && this.movable ? [this.bounds] : [];
+  }
+}
+
+describe("OverlayService avatar (move_avatar and auto-dodge)", () => {
+  // 320x400 avatar in the top-right of PRIMARY's work area, 24 from the edges.
+  const TOP_RIGHT: Rect = { x: 1096, y: 49, width: 320, height: 400 };
+  let clock: FakeClock;
+  let bounds: FakeBoundsProvider;
+  let sink: FakeSink;
+  let avatar: FakeAvatar;
+  let svc: OverlayService;
+
+  const build = (withAvatar = true) => {
+    svc = new OverlayService({
+      boundsProvider: bounds,
+      captureProvider: { captureRegion: async () => Buffer.from([1]) },
+      screen: new FakeScreen(),
+      sink,
+      clock,
+      avoidRects: { getAvoidRects: () => avatar.getAvoidRects() },
+      ...(withAvatar ? { avatar } : {}),
+    });
+  };
+
+  beforeEach(() => {
+    clock = new FakeClock();
+    bounds = new FakeBoundsProvider();
+    sink = new FakeSink();
+    avatar = new FakeAvatar(TOP_RIGHT);
+    bounds.set("under", { rect: rect(1150, 100), displayId: "1" }); // under the avatar
+    bounds.set("near", { rect: rect(1096 - 120 - 8, 100), displayId: "1" }); // 8 DIP left of it
+    bounds.set("clear", { rect: rect(200, 500), displayId: "1" });
+    bounds.set("clear2", { rect: rect(200, 600), displayId: "1" });
+    build();
+  });
+
+  it("move_avatar moves to a corner and returns the new bounds", async () => {
+    const r = await svc.handleTool("move_avatar", { position: "bottom_left" });
+    expect(avatar.moves).toEqual([{ x: 24, y: 476 }]);
+    expect(r).toEqual({ ok: true, visible: true, resolvedBounds: { ...TOP_RIGHT, x: 24, y: 476 } });
+  });
+
+  it("move_avatar auto picks a corner away from what is on screen and re-lays out drawings", async () => {
+    const h = await svc.handleTool("highlight", { target: el("clear"), label: "Here" });
+    avatar.bounds = { ...TOP_RIGHT, x: 100, y: 450 }; // dropped onto the highlight's neighbourhood
+    const before = sink.publishes;
+    const r = await svc.handleTool("move_avatar", {});
+    expect(r).toMatchObject({ ok: true, visible: true });
+    expect(avatar.moves).toHaveLength(1);
+    const to = avatar.moves[0]!;
+    const moved = { ...TOP_RIGHT, x: to.x, y: to.y };
+    const target = rect(200, 500);
+    expect(to.x < target.x + target.width && target.x < to.x + moved.width && to.y < target.y + target.height && target.y < to.y + moved.height).toBe(false);
+    expect(sink.publishes).toBeGreaterThan(before);
+    expect(h.ok).toBe(true);
+  });
+
+  it("move_avatar keeps clear of the avoid target", async () => {
+    avatar.bounds = { ...TOP_RIGHT, x: 24, y: 476 }; // bottom-left, clear of everything
+    bounds.set("spot", { rect: rect(1200, 600), displayId: "1" }); // bottom-right area is where it would go next
+    const r = await svc.handleTool("move_avatar", { avoid: el("spot") });
+    expect(r.ok).toBe(true);
+    expect(avatar.moves).toEqual([]); // already clear of `spot`: stays put
+    avatar.bounds = { ...TOP_RIGHT, x: 1096, y: 476 };
+    await svc.handleTool("move_avatar", { avoid: el("spot") });
+    expect(avatar.moves).toHaveLength(1);
+    expect(avatar.moves[0]!.x).toBe(24);
+  });
+
+  it("move_avatar ignores an avoid target that does not resolve", async () => {
+    const r = await svc.handleTool("move_avatar", { position: "top_left", avoid: el("ghost") });
+    expect(r).toMatchObject({ ok: true, visible: true });
+    expect(avatar.moves).toEqual([{ x: 24, y: 49 }]);
+  });
+
+  it("move_avatar reports display_not_found for an unknown display", async () => {
+    expect(await svc.handleTool("move_avatar", { displayId: "99" })).toEqual({ ok: false, visible: false, reason: "display_not_found" });
+  });
+
+  it("move_avatar is unavailable when collapsed, grabbed, failing, or with no controller", async () => {
+    const unavailable = { ok: false, visible: false, reason: "avatar_unavailable" };
+    avatar.bounds = null; // collapsed / unknown
+    expect(await svc.handleTool("move_avatar", {})).toEqual(unavailable);
+    avatar.bounds = TOP_RIGHT;
+    avatar.movable = false; // being dragged
+    expect(await svc.handleTool("move_avatar", {})).toEqual(unavailable);
+    avatar.movable = true;
+    avatar.failMoves = true;
+    expect(await svc.handleTool("move_avatar", { position: "top_left" })).toEqual(unavailable);
+    build(false);
+    expect(await svc.handleTool("move_avatar", {})).toEqual(unavailable);
+  });
+
+  it("auto-dodge: a highlight under the avatar moves it away, without changing the tool result", async () => {
+    const r = await svc.handleTool("highlight", { target: el("under") });
+    expect(r).toMatchObject({ ok: true, visible: true, resolvedBounds: rect(1150, 100) });
+    expect(r.reason).toBeUndefined();
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    expect(avatar.moves[0]).not.toEqual({ x: TOP_RIGHT.x, y: TOP_RIGHT.y });
+  });
+
+  it("auto-dodge also fires when the target is within 16 DIP of the avatar", async () => {
+    await svc.handleTool("highlight", { target: el("near") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    // ...and it really cleared the inflated target.
+    const t = rect(1096 - 120 - 8, 100);
+    const a = avatar.bounds!;
+    const gap = Math.max(a.x - (t.x + t.width), t.x - (a.x + a.width), a.y - (t.y + t.height), t.y - (a.y + a.height));
+    expect(gap).toBeGreaterThanOrEqual(16);
+  });
+
+  it("no dodge when the drawing is nowhere near the avatar, or the avatar is not movable", async () => {
+    await svc.handleTool("highlight", { target: el("clear") });
+    await flushPromises();
+    expect(avatar.moves).toEqual([]);
+    avatar.movable = false;
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toEqual([]);
+    avatar.bounds = null;
+    avatar.movable = true;
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toEqual([]);
+  });
+
+  it("auto-dodge is rate-limited to one move per 1500 ms", async () => {
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1);
+    avatar.bounds = TOP_RIGHT; // something put it back under the target
+    clock.advance(1000);
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(1); // too soon
+    clock.advance(600);
+    await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(avatar.moves).toHaveLength(2);
+  });
+
+  it("explicit move_avatar is not rate-limited and does not block on auto-dodge", async () => {
+    await svc.handleTool("highlight", { target: el("under") });
+    await svc.handleTool("move_avatar", { position: "top_left" });
+    await flushPromises();
+    expect(avatar.moves.at(-1)).toEqual({ x: 24, y: 49 });
+  });
+
+  it("a failing avatar never breaks drawing", async () => {
+    avatar.moveTo = async () => {
+      throw new Error("boom");
+    };
+    const r = await svc.handleTool("highlight", { target: el("under") });
+    await flushPromises();
+    expect(r).toMatchObject({ ok: true, visible: true });
+    expect(await svc.handleTool("move_avatar", { position: "top_left" })).toMatchObject({ reason: "avatar_unavailable" });
   });
 });
