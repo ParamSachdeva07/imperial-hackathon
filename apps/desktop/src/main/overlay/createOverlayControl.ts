@@ -13,7 +13,6 @@ import type { BrowserWindow } from "electron";
 import type { AvatarController, AvoidRectsProvider, BoundsProvider, OverlayControl, ScreenCaptureProvider } from "@pointy/shared/overlay";
 import { loadRendererPage, PRELOAD_DIR } from "../rendererPages";
 import { FalClient, type ImageSource } from "./explainer/falClient";
-import { createGestureFeedbackBridge, type GestureEventSource } from "./GestureFeedbackBridge";
 import { OverlayService } from "./OverlayService";
 import { ElectronScreen, OverlayWindowManager } from "./OverlayWindowManager";
 import { getOverlayPlatform } from "./platform";
@@ -60,16 +59,6 @@ export interface OverlayHandle {
   control: OverlayControl;
   /** Dev-only introspection (dev server / CLI). */
   debug: OverlayDebug;
-  /**
-   * Hand-gesture feedback (cursor, hold rings, trail, selections) drawn on every display. Feed it a
-   * GestureService (`overlay.gestures.attach(gestureService)`) and mirror the controller's session
-   * flag with `setSessionActive`. Separate from `control`: it never touches the scene.
-   */
-  gestures: {
-    /** Subscribe to a source's events; returns detach. */
-    attach(source: GestureEventSource): () => void;
-    setSessionActive(active: boolean): void;
-  };
   dispose(): void;
 }
 
@@ -101,16 +90,10 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     hideDuringCapture: dev.hideDuringCapture ?? false,
     reduceMotion: () => Boolean(dev.forceReduceMotion) || platform.prefersReducedMotion(),
   });
-  const bridge = createGestureFeedbackBridge({ screen, sink: windows });
   return {
     control: service,
     debug: service.createDebug(),
-    gestures: {
-      attach: (source) => bridge.attach(source),
-      setSessionActive: (active) => bridge.setSessionActive(active),
-    },
     dispose() {
-      bridge.dispose();
       service.dispose();
       windows.stop();
     },

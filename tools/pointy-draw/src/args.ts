@@ -3,7 +3,7 @@
  */
 import { parseArgs } from "node:util";
 import { parseRect } from "@pointy/shared/overlay/geometry";
-import { circleEvents, dwellEvents, FRAME_MS, lostEvents, pointEvents } from "./gesture";
+import { circleEvents, dwellEvents, FRAME_MS, lostEvents, pointEvents, wakeEvents } from "./gesture";
 
 export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
@@ -36,6 +36,7 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw events | state | displays | elements
   pointy-draw gesture circle --center x,y --radius R [--ms 1500]   simulate a circled region (cursor, dwell, region_selected)
   pointy-draw gesture dwell x,y [--ms 800] | gesture point x,y | gesture lost
+  pointy-draw gesture wake x,y [--ms 700]     simulate a raised open palm held still (wake ring, then wake_requested)
   pointy-draw gesture session on|off          open/close the gesture session (feedback only shows while on)
   pointy-draw fixture                         open (or bring back) the fake mail test app
 
@@ -237,6 +238,8 @@ function gestureCommand(rest: string[], v: Values, ctx: ParseContext): Request {
     }
     case "dwell":
       return post(dwellEvents(xy("gesture dwell"), displayId, ms(800)));
+    case "wake":
+      return post(wakeEvents(xy("gesture wake"), displayId, ms(700)));
     case "point":
       return post(pointEvents(xy("gesture point"), displayId));
     case "lost":
@@ -245,5 +248,5 @@ function gestureCommand(rest: string[], v: Values, ctx: ParseContext): Request {
       if (arg !== "on" && arg !== "off") throw new UsageError("gesture session on|off");
       return { kind: "post", path: "/gesture/session", body: { active: arg === "on" } };
   }
-  throw new UsageError("gesture: circle | dwell | point | lost | session");
+  throw new UsageError("gesture: circle | dwell | point | lost | wake | session");
 }

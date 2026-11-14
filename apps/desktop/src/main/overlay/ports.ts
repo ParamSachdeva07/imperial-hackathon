@@ -4,7 +4,6 @@
  * (ScreenSource).
  */
 import type { DisplayInfo, Rect, RenderItem } from "@pointy/shared/overlay";
-import type { GestureFeedbackMessage } from "@pointy/shared/overlay/render";
 
 export interface ScreenSource {
   getDisplays(): DisplayInfo[];
@@ -23,12 +22,6 @@ export interface SceneSink {
   /** Native window ids (macOS CGWindowID) of the overlay windows. */
   getWindowIds(): number[];
   withHidden<T>(fn: () => Promise<T>): Promise<T>;
-}
-
-/** Where gesture feedback goes (the overlay windows). Kept off SceneSink: it is a separate ~30 fps stream. */
-export interface GestureSink {
-  /** Send one batch to every ready overlay window. No scene, no seq. */
-  sendGesture(msg: GestureFeedbackMessage): void;
 }
 
 /** Dev-only introspection (dev server / CLI), kept off the OverlayControl contract. */

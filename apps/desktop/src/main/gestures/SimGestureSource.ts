@@ -1,6 +1,6 @@
 /**
- * Camera-free gesture source (dev only). Same `{ onAny }` shape as the real GestureService, so it can
- * be attached to the overlay's gesture feedback bridge. `play()` replays a list of events one per
+ * Camera-free gesture source (dev only). Same `{ onAny }` shape as the real GestureService; SimGestureService
+ * builds on it to drive the gestures package's feedback window. `play()` replays a list of events one per
  * `intervalMs` (default 33 ms, about 30 fps). Pure: no Electron import, timers injectable.
  */
 import type { GestureEvent } from "@pointy/gestures";
@@ -17,6 +17,8 @@ export class SimGestureSource {
   private readonly timers: Timers;
   private handle: unknown = null;
   private resolveRun: (() => void) | null = null;
+  /** Last wake_progress > 0 that no wake_requested / zero-progress event has closed yet. */
+  private openWake: Extract<GestureEvent, { type: "wake_progress" }> | null = null;
 
   constructor(opts: SimGestureSourceOptions = {}) {
     this.timers = opts.timers ?? { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) };
@@ -54,6 +56,9 @@ export class SimGestureSource {
   cancel(): void {
     if (this.handle !== null) this.timers.clearTimeout(this.handle);
     this.finish();
+    // A replaced/cancelled replay must not leave a partial wake ring on screen: send the "hold broken" reset.
+    const w = this.openWake;
+    if (w) this.emit({ ...w, progress: 0 });
   }
 
   dispose(): void {
@@ -69,6 +74,8 @@ export class SimGestureSource {
   }
 
   private emit(e: GestureEvent): void {
+    if (e.type === "wake_progress") this.openWake = e.progress > 0 ? e : null;
+    else if (e.type === "wake_requested") this.openWake = null;
     for (const l of [...this.listeners]) l(e);
   }
 }

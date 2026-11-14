@@ -3,12 +3,12 @@
  * Rebuilds windows when displays are added, removed or change metrics.
  */
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from "electron";
-import { IPC, type GestureFeedbackMessage, type ImageFailedMessage, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
+import { IPC, type ImageFailedMessage, type PaintedMessage, type RenderItem, type RenderScene } from "@pointy/shared/overlay/render";
 import { ImageKeyRegistry } from "@pointy/shared/overlay/sceneImages";
 import type { DisplayInfo, Rect } from "@pointy/shared/overlay";
 import { toDisplayInfo } from "./coords";
 import type { OverlayPlatform } from "./platform";
-import type { GestureSink, SceneSink, ScreenSource } from "./ports";
+import type { SceneSink, ScreenSource } from "./ports";
 
 export interface OverlayWindowManagerOptions {
   platform: OverlayPlatform;
@@ -53,7 +53,7 @@ export class ElectronScreen implements ScreenSource {
   }
 }
 
-export class OverlayWindowManager implements SceneSink, GestureSink {
+export class OverlayWindowManager implements SceneSink {
   private windows = new Map<string, OverlayWindow>();
   private items: RenderItem[] = [];
   private imageKeys = new Set<string>();
@@ -63,8 +63,6 @@ export class OverlayWindowManager implements SceneSink, GestureSink {
   private paintedListeners = new Set<(ids: string[]) => void>();
   private imageFailedListeners = new Set<(overlayId: string, panel: number) => void>();
   private hiddenDepth = 0;
-  /** Last gesture session flag seen in sendGesture; replayed to a renderer that (re)loads mid-session. */
-  private gestureSession = false;
   private hiddenSettled: Promise<void> = Promise.resolve();
   private disposeDisplayListener: (() => void) | null = null;
 
@@ -105,14 +103,6 @@ export class OverlayWindowManager implements SceneSink, GestureSink {
     this.reduceMotion = opts.reduceMotion;
     this.seq += 1;
     for (const w of this.windows.values()) this.sendScene(w);
-  }
-
-  /** Gesture feedback (global DIP) to every ready window; each renderer clips via its own translate. */
-  sendGesture(msg: GestureFeedbackMessage): void {
-    for (const e of msg.events) if (e.kind === "session") this.gestureSession = e.active;
-    for (const w of this.windows.values()) {
-      if (w.ready && !w.win.isDestroyed()) w.win.webContents.send(IPC.gesture, msg);
-    }
   }
 
   onImageFailed(cb: (overlayId: string, panel: number) => void): () => void {
@@ -252,7 +242,6 @@ export class OverlayWindowManager implements SceneSink, GestureSink {
     w.ready = true;
     w.sentImages.clear(); // a (re)loaded page has no cached images
     this.sendScene(w);
-    if (this.gestureSession) w.win.webContents.send(IPC.gesture, { events: [{ kind: "session", active: true }] } satisfies GestureFeedbackMessage);
   };
 
   private handleImageFailed = (e: IpcMainEvent, msg: ImageFailedMessage) => {

@@ -75,3 +75,15 @@ export function pointEvents(p: Pt, displayId: number): SimGestureEvent[] {
 export function lostEvents(): SimGestureEvent[] {
   return [{ type: "hand_lost", hand: HAND, reason: "absent", t: 0 }];
 }
+
+/** Raised open palm held still: wake_progress ramp 0 to 1 (a ring around the hand), then wake_requested. */
+export function wakeEvents(p: Pt, displayId: number, ms = 700): SimGestureEvent[] {
+  const n = frames(ms);
+  const out: SimGestureEvent[] = [];
+  let t = 0;
+  for (let i = 0; i <= n; i++, t += FRAME_MS) {
+    out.push({ type: "wake_progress", hand: HAND, progress: Math.min(1, Math.max(0, round((i / n) * 1000) / 1000)), x: round(p.x), y: round(p.y), displayId, t });
+  }
+  out.push({ type: "wake_requested", source: "open_palm", hand: HAND, heldForMs: ms, t });
+  return out;
+}

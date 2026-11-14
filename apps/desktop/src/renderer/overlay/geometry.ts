@@ -68,11 +68,6 @@ export function polygonPath(pts: Point[]): string {
   return pts.map((p, i) => `${i === 0 ? "M" : "L"}${f(p.x)} ${f(p.y)}`).join(" ") + " Z";
 }
 
-/** Open polyline (no closing Z); empty for no points. */
-export function polylinePath(pts: Point[]): string {
-  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${f(p.x)} ${f(p.y)}`).join(" ");
-}
-
 /** Radius used when a `point` target is drawn as a circle. */
 export const POINT_TARGET_RADIUS = 28;
 

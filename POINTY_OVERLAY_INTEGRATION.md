@@ -476,29 +476,24 @@ function hitTest(els: readonly AxElement[], p: { x: number; y: number }): AxElem
 | `region_selected` | Give the model the circled region (`regionTarget(e)`). It can call `show_explainer` with `spec.kind: "anatomy"` and that region. |
 | `click` (dwell click) | Hit-test **before** dispatching the OS click (the UI may change after it), dispatch the click, then `onTargetSelected(id)`. This advances step guides. |
 | `scroll` (`phase: "end"`) | `onContextChange()`. |
-| `cursor_moved`, `mouse`, `dwell_progress`, `click_progress`, `hand_lost` | Nothing for you to call: the gesture feedback layer draws them (see below). |
+| `wake_progress`, `cursor_moved`, `mouse`, `dwell_progress`, `click_progress`, `hand_lost` | Nothing for the AI overlay: the gestures package draws them in its own feedback window (see below). |
 | Session closed (stop/timeout) | `interp.setSessionActive(false)` **and** `handleTool("clear", { overlayId: "all" }, { caller: "controller" })`. |
 
-### Gesture feedback (hand cursor, hold ring, trail, flashes)
+### Gesture feedback is not the AI overlay's job
 
-The overlay draws the hand-gesture feedback itself; the controller never calls a tool for it. Attach the
-gesture service once and mirror the session state:
-
-```ts
-const detach = overlay.gestures.attach(gestureService); // anything with { onAny(cb) }
-overlay.gestures.setSessionActive(true); // in step with gestureService.setSessionActive(...)
-```
-
-Events are converted from display-relative DIP to global DIP in main (`GestureFeedbackBridge`) and sent
-over `overlay:gesture`. Draw cursor = one finger, mouse cursor = two fingers, plus a hold ring
-(`dwell_progress` / `click_progress`), a fading trail, point/region/click flashes and a scroll badge.
-Nothing is recorded while the session is inactive; closing it clears the feedback.
+Agreed split (`packages/gestures/GESTURES_HANDOFF.md`): **gestures draw only what the user is doing with their
+hand** (cursor, trail, hold rings, wake ring, selected point/region) in their own click-through window
+(`startGestureFeedback`); **the AI overlay draws only what the AI shows**. Neither draws the other's content, and
+the overlay API has no gesture feedback entry points. The desktop app starts that window next to the gesture
+service (`apps/desktop/src/main/gestures/startGestures.ts`). `GesturesHandle.clearSelection()` removes the shown
+selection when the controller ends a turn.
 
 Dev env flags (see the header of `apps/desktop/src/main/index.ts`): `POINTY_GESTURES=1` starts the camera
 layer (`npm run gestures:assets` once, then `npm run app:gestures`), `POINTY_GESTURES_SHOW=1` shows the
-vision window, `POINTY_GESTURES_MOUSE=1` lets gestures drive the real OS mouse while the session is open,
-`POINTY_GESTURES_IDLE_MS` sets the session idle timeout. No camera needed to test the visuals:
-`npx pointy-draw gesture session on`, then `gesture circle --center 700,450 --radius 150`,
+vision window, `POINTY_GESTURES_MOUSE=1` lets gestures drive the real OS mouse (move, click, scroll) while the
+session is open, `POINTY_GESTURES_IDLE_MS` sets the session idle timeout, `POINTY_CAPTURABLE=1` makes the
+feedback window (and the overlay) visible to screenshots. No camera needed to test the visuals:
+`npx pointy-draw gesture wake 700,450`, `gesture session on`, then `gesture circle --center 700,450 --radius 150`,
 `gesture dwell 500,300`, `gesture point x,y`, `gesture lost`.
 
 ## 11. Testing your integration without a model

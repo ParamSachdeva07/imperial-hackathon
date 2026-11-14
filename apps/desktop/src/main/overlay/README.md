@@ -74,14 +74,12 @@ the background (serialized, at most one per 1.5 s, never affecting the tool resu
   (`explainer.image_ready` / `explainer.image_failed`). Cards keep text at full size: they first
   try smaller pictures, then a corner with a connector, before shrinking.
 
-## Gesture feedback
+## Gestures
 
-`handle.gestures.attach(source)` takes anything with `onAny(cb)` (the `GestureService`, or the dev
-`SimGestureSource`) and returns a detach function; `handle.gestures.setSessionActive(bool)` mirrors the
-session. `GestureFeedbackBridge` maps events to global-DIP `GestureFeedback`, batches per microtask and
-`OverlayWindowManager` sends them on `overlay:gesture` to ready windows (no scene seq bump). The renderer
-layer lives in `renderer/overlay/gesture/`. In dev, `POST /gesture` and `pointy-draw gesture ...` replay
-events without a camera; `POINTY_GESTURES=1` uses the real camera layer.
+This overlay draws only what the AI shows. What the user does with their hand (cursor, trail, rings,
+wake ring, selection) is drawn by the gestures package's own feedback window, started from
+`../gestures/`. Neither draws the other's content (split recorded in
+`packages/gestures/GESTURES_HANDOFF.md`). No camera needed to test: `npx pointy-draw gesture ...`.
 
 ## Dev only
 

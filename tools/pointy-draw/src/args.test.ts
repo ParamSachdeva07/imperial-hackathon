@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCommand, UsageError } from "./args";
-import { circleEvents, dwellEvents } from "./gesture";
+import { circleEvents, dwellEvents, wakeEvents } from "./gesture";
 
 const ctx = { primaryDisplayId: "1", readJsonFile: () => ({ title: "t", spec: { kind: "sequence", steps: [] } }) };
 const p = (s: string[]) => parseCommand(s, ctx);
@@ -91,6 +91,17 @@ describe("pointy-draw args (spec §8.1 commands)", () => {
       expect(events(["gesture", "point", "10,20", "--display", "7"]).map((e) => e.displayId)).toEqual([7, 7]);
       expect(events(["gesture", "lost"])).toEqual([{ type: "hand_lost", hand: "Right", reason: "absent", t: 0 }]);
       expect(p(["gesture", "point", "1,2"])).toMatchObject({ kind: "post", path: "/gesture", body: { intervalMs: 33 } });
+    });
+    it("wake: wake_progress ramp 0 to 1 at the palm, then wake_requested", () => {
+      const evs = events(["gesture", "wake", "700,450", "--ms", "330"]);
+      const prog = evs.filter((e) => e.type === "wake_progress");
+      expect(prog).toHaveLength(11);
+      expect(prog[0]).toMatchObject({ progress: 0, x: 700, y: 450, displayId: 1, hand: "Right" });
+      expect(prog.at(-1)?.progress).toBe(1);
+      expect(evs.at(-1)).toMatchObject({ type: "wake_requested", source: "open_palm", heldForMs: 330 });
+      expect(events(["gesture", "wake", "1,2"]).at(-1)).toMatchObject({ heldForMs: 700 });
+      expect(() => p(["gesture", "wake"])).toThrow(UsageError);
+      expect(wakeEvents({ x: 0, y: 0 }, 1)).toEqual(wakeEvents({ x: 0, y: 0 }, 1));
     });
     it("session on/off", () => {
       expect(p(["gesture", "session", "on"])).toEqual({ kind: "post", path: "/gesture/session", body: { active: true } });

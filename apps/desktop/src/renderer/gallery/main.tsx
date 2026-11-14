@@ -1,11 +1,10 @@
 import { createRoot } from "react-dom/client";
-import { GestureSurface } from "../overlay/gesture/GestureLayer";
 import { OverlayScene } from "../overlay/OverlayScene";
 import "../overlay/overlay.css";
 import "./gallery.css";
 import { showCheck } from "./check";
 import { Desktop } from "./Desktop";
-import { ALL_SCENES, findScene } from "./scenes";
+import { ALL_SCENES, SCENES, findScene } from "./scenes";
 
 /**
  * `?scene=<name>&bg=light|dark&t=<ms>`: t freezes every animation at that time (deterministic
@@ -32,7 +31,7 @@ async function boot() {
     root.className = "index";
     createRoot(root).render(
       <div>
-        {ALL_SCENES.filter((s) => !s.name.startsWith("check-")).map((s) => (
+        {SCENES.map((s) => (
           <a key={s.name} href={`?scene=${s.name}&bg=light`}>
             {s.name}: {s.title}
           </a>
@@ -48,7 +47,6 @@ async function boot() {
   createRoot(root).render(
     <Desktop bg={bg} targets={g.targets}>
       <OverlayScene scene={g.scene} reduceMotion={g.scene.reduceMotion} />
-      {g.gesture ? <GestureSurface state={g.gesture.state} now={g.gesture.now} display={g.scene.display.bounds} reduceMotion={g.scene.reduceMotion} still /> : null}
     </Desktop>,
   );
   await frame();

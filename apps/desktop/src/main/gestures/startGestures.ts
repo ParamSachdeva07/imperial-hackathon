@@ -7,11 +7,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { protocol, session } from "electron";
 import { startGestureService, type GestureService } from "@pointy/gestures/electron";
+import type { GestureFeedback } from "@pointy/gestures/electron/feedback";
 import { attachSystemMouse } from "@pointy/gestures/electron/mouse";
 import { loadRendererPage, PRELOAD_DIR } from "../rendererPages";
 import { GESTURE_ASSET_SCHEME, resolveAssetRequest } from "./assetResolver";
 import { DevSessionController } from "./DevSessionController";
+import type { CaptureHiding } from "./captureHiding";
+import { feedbackCaptureHiding, launchGestureFeedback } from "./feedbackHost";
 import { gateMouseToSession } from "./MouseGate";
+import { SimGestureService } from "./SimGestureService";
 
 /** Session partition the gesture service uses (service default); the asset scheme is handled on it only. */
 export const GESTURE_PARTITION = "pointy-gestures";
@@ -57,7 +61,18 @@ export interface StartGesturesOptions {
 
 export interface GesturesHandle {
   service: GestureService;
+  /**
+   * The real service merged with the camera-free simulation (dev server POST /gesture): the feedback
+   * window and the session controller see both. Simulated events never reach `service` (so never the real mouse).
+   */
+  sim: SimGestureService;
   session: DevSessionController;
+  /** The gesture package's own feedback window (user's hand drawing), or null if it failed to start. */
+  feedback: GestureFeedback | null;
+  /** Remove the selected point/region from the feedback window (e.g. when the controller ends the turn). */
+  clearSelection(): void;
+  /** Capture exclusion for all feedback windows, also the lazy simulation one (same contract as the overlay's getOverlayWindowIds/withOverlayHidden). */
+  captureHiding: CaptureHiding;
   dispose(): void;
 }
 
@@ -76,21 +91,36 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     disposers.push(() => service.dispose());
     disposers.push(service.onStatus((s) => log(`status: ${JSON.stringify(s)}`)));
 
+    // The service never queues events: subscribe the session controller right after it resolves, before
+    // any other slow work (opening the feedback window), so an early wake_requested is not lost.
+    // The merged adapter (real service + simulation) is what the controller and the feedback window see.
+    const sim = new SimGestureService({ base: service });
+    disposers.push(() => sim.dispose());
     const idleMs = Number(env.POINTY_GESTURES_IDLE_MS);
     const sessionCtl = new DevSessionController({
-      service,
+      service: sim,
       idleMs: Number.isFinite(idleMs) && idleMs > 0 ? idleMs : DEFAULT_IDLE_MS,
       log,
     });
     disposers.push(() => sessionCtl.dispose());
 
+    // Feedback failure is logged and must not stop gestures. Disposed before the service (disposers run in reverse).
+    const feedback = await launchGestureFeedback(sim, env, log);
+    if (feedback) disposers.push(() => feedback.dispose());
+
     if (env.POINTY_GESTURES_MOUSE === "1") {
+      // Real service only: simulated events must never move the real mouse. The gate attaches the system
+      // mouse (move, click and wheel scroll) only while the session is open, so everything is session-gated.
       disposers.push(gateMouseToSession(sessionCtl, () => attachSystemMouse(service, { log }), log));
     }
-    log(`started (show=${env.POINTY_GESTURES_SHOW === "1"}, mouse=${env.POINTY_GESTURES_MOUSE === "1"})`);
+    log(`started (show=${env.POINTY_GESTURES_SHOW === "1"}, mouse=${env.POINTY_GESTURES_MOUSE === "1"}, feedback=${feedback ? "on" : "off"})`);
     return {
       service,
+      sim,
       session: sessionCtl,
+      feedback,
+      clearSelection: () => feedback?.clearSelection(),
+      captureHiding: feedbackCaptureHiding,
       dispose() {
         for (const d of disposers.reverse()) {
           try {

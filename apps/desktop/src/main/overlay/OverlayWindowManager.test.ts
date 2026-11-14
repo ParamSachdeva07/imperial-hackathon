@@ -155,37 +155,4 @@ describe("OverlayWindowManager", () => {
     h.ipcHandlers.get("overlay:painted")!({ sender: { id: h.FakeBrowserWindow.all[0]!.webContents.id } }, { seq: 1, ids: ["x"] });
     expect(cb).toHaveBeenCalledWith(["x"]);
   });
-
-  it("sends gesture frames to ready windows only, without a scene or a seq bump", () => {
-    const { wm, ready } = setup([D1, D2]);
-    const [a, b] = h.FakeBrowserWindow.all as [InstanceType<typeof h.FakeBrowserWindow>, InstanceType<typeof h.FakeBrowserWindow>];
-    ready(a);
-    const rendersBefore = a.webContents.sent.filter((m) => m.channel === "overlay:render");
-    const seqBefore = (rendersBefore.at(-1)!.payload as { seq: number }).seq;
-    const msg = { events: [{ kind: "lost" as const }] };
-    wm.sendGesture(msg);
-    expect(a.webContents.sent.filter((m) => m.channel === "overlay:gesture")).toEqual([{ channel: "overlay:gesture", payload: msg }]);
-    expect(b.webContents.sent).toHaveLength(0); // not ready
-    const rendersAfter = a.webContents.sent.filter((m) => m.channel === "overlay:render");
-    expect(rendersAfter).toHaveLength(rendersBefore.length);
-    wm.publish([], { reduceMotion: false });
-    const last = a.webContents.sent.filter((m) => m.channel === "overlay:render").at(-1)!.payload as { seq: number };
-    expect(last.seq).toBe(seqBefore + 1); // only publish() bumps it
-    a.destroy();
-    expect(() => wm.sendGesture(msg)).not.toThrow();
-  });
-
-  it("replays an open gesture session to a renderer that becomes ready (or reloads) later", () => {
-    const { wm, ready } = setup([D1]);
-    const [a] = h.FakeBrowserWindow.all as [InstanceType<typeof h.FakeBrowserWindow>];
-    wm.sendGesture({ events: [{ kind: "session", active: true }] }); // before the renderer is ready
-    ready(a);
-    const sessionMsgs = () => a.webContents.sent.filter((m) => m.channel === "overlay:gesture");
-    expect(sessionMsgs()).toEqual([{ channel: "overlay:gesture", payload: { events: [{ kind: "session", active: true }] } }]);
-    ready(a); // reload
-    expect(sessionMsgs()).toHaveLength(2);
-    wm.sendGesture({ events: [{ kind: "session", active: false }] });
-    ready(a);
-    expect(sessionMsgs()).toHaveLength(3); // the close itself; nothing replayed afterwards
-  });
 });

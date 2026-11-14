@@ -53,15 +53,6 @@ export const themeVars: Record<string, string> = {
   "--easing": theme.anim.easing,
   "--card-enter-scale": String(theme.anim.cardEnterScale),
   "--pointer-size": px(theme.pointerSize),
-  "--gesture-cursor-size": px(theme.gesture.cursorSize),
-  "--gesture-ring-stroke": px(theme.gesture.ringStroke),
-  "--gesture-trail-width": px(theme.gesture.trailWidth),
-  "--gesture-trail-ms": ms(theme.gesture.trailMs),
-  "--gesture-flash-ms": ms(theme.gesture.flashMs),
-  "--gesture-draw": theme.colors.info,
-  "--gesture-mouse": theme.colors.success,
-  "--gesture-dwell": theme.colors.info,
-  "--gesture-click": theme.colors.success,
 };
 
 export const themeStyle = themeVars as CSSProperties;

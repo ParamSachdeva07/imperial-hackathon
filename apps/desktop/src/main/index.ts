@@ -21,8 +21,11 @@
  *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
  *   POINTY_GESTURES_MOUSE=1 let gestures drive the real OS mouse/clicks, only while the session is open
  *   POINTY_GESTURES_IDLE_MS gesture session idle timeout (default 20000)
+ *                           The user's own hand drawing (cursor, trail, rings, wake ring, selection) is the
+ *                           gestures package's feedback window (contentProtection follows POINTY_CAPTURABLE);
+ *                           the AI overlay draws none of it.
  *   (no flag needed to simulate gestures without a camera: dev server POST /gesture, CLI
- *   `pointy-draw gesture ...`; the overlay's gesture feedback layer is always attached in dev)
+ *   `pointy-draw gesture ...`; the feedback window then starts lazily on the first call)
  *   POINTY_DEV_PORT / POINTY_DEV_FILE   dev server port / connection file (isolated test runs)
  */
 import { join, resolve } from "node:path";
@@ -36,6 +39,9 @@ import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
 import { MockScreenCaptureProvider } from "./overlay/mocks/MockScreenCaptureProvider";
 import { ElectronScreen, OverlayWindowManager } from "./overlay/OverlayWindowManager";
 import { getOverlayPlatform } from "./overlay/platform";
+import type { ScreenCaptureProvider } from "@pointy/shared/overlay";
+import { hideFeedbackDuringCapture } from "./gestures/captureHiding";
+import { feedbackCaptureHiding } from "./gestures/feedbackHost";
 import { registerGestureAssetScheme, startGestures, type GesturesHandle } from "./gestures/startGestures";
 import { PRELOAD_DIR } from "./rendererPages";
 import { installDevLogging, startDevHarness } from "../dev/devHarness";
@@ -86,9 +92,14 @@ async function main(): Promise<void> {
   const anam = env("POINTY_AVATAR") === "mock" ? null : new AnamAvatarClient();
   anam?.start();
 
+  // Gesture feedback lives in its own windows, which the overlay's hideDuringCapture does not know:
+  // hide them around every capture too when that flag is on.
+  const hideFeedback = (p: ScreenCaptureProvider): ScreenCaptureProvider =>
+    env("POINTY_HIDE_DURING_CAPTURE") === "1" ? hideFeedbackDuringCapture(p, feedbackCaptureHiding) : p;
+
   const overlay = createOverlayControl({
     boundsProvider,
-    captureProvider: new MockScreenCaptureProvider(() => displays.getDisplays()),
+    captureProvider: hideFeedback(new MockScreenCaptureProvider(() => displays.getDisplays())),
     avoidRects: anam ? new CompositeAvoidRects(anam, new MockAvoidRects(primary)) : new MockAvoidRects(primary),
     ...(anam ? { avatar: anam } : {}),
     assetsDir,
@@ -100,16 +111,8 @@ async function main(): Promise<void> {
     },
   });
   gestures = await startGestures({ repoRoot });
-  // Gesture feedback: the real service feeds the overlay bridge; the session controller's open/close
-  // is mirrored into it. Quit order: detach from the service first, then dispose the service.
-  const detachGestures: (() => void)[] = [];
-  if (gestures) {
-    detachGestures.push(overlay.gestures.attach(gestures.service));
-    detachGestures.push(gestures.session.onChange((active) => overlay.gestures.setSessionActive(active)));
-  }
   app.on("before-quit", () => {
-    for (const d of detachGestures.splice(0)) d();
-    gestures?.dispose();
+    gestures?.dispose(); // feedback window first, then the gesture service (see startGestures)
     anam?.dispose();
     overlay.dispose();
   });
@@ -122,7 +125,7 @@ async function main(): Promise<void> {
       assetsDir,
       openFixture: env("POINTY_NO_FIXTURE") !== "1",
       openVoice: env("POINTY_VOICE") === "1",
-      gestureSession: gestures?.session ?? null,
+      gestures: gestures ? { sim: gestures.sim, session: gestures.session } : null,
     });
   }
   console.log(`[pointy] overlay ready (contentProtection=${contentProtection})`);
