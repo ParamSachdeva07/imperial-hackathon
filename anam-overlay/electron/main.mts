@@ -3,6 +3,8 @@ import type { IpcMainEvent, IpcMainInvokeEvent, Rectangle } from 'electron';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import type { TokenResult } from '../shared/bridge.js';
+import { startControlServer } from './control.mjs';
+import type { ControlServer } from './control.mjs';
 
 // Only FastAPI is allowed to read backend/.env.
 delete process.env.ANAM_API_KEY;
@@ -11,6 +13,7 @@ const rendererFile = path.join(directory, '../dist/index.html');
 const dev = process.env.OVERLAY_DEV === '1';
 const rendererURL = dev ? 'http://127.0.0.1:5173/' : pathToFileURL(rendererFile).href;
 let overlay: BrowserWindow | null = null;
+let control: ControlServer | null = null;
 const DOT_SIZE = 56;
 const CONTROLS_HEIGHT = 80;
 let expanded = false;
@@ -221,7 +224,23 @@ void app.whenReady().then(() => {
     contents === overlay?.webContents && !!contents && trustedURL(contents.getURL())
     && permission === 'media' && details.mediaType === 'audio');
   createWindow();
+  startControlServer({
+    getState: () => {
+      if (!overlay) return null;
+      const bounds = overlay.getBounds();
+      const display = screen.getDisplayMatching(bounds);
+      return { expanded, dragging: move !== null, bounds, workArea: display.workArea, displayId: String(display.id) };
+    },
+    moveTo: (x, y) => {
+      if (!overlay) return null;
+      placeWindow({ ...overlay.getBounds(), x, y });
+      return overlay.getBounds();
+    },
+  }).then((server) => { control = server; }, (error) => console.error('control server failed to start', error));
 });
+const stopControl = () => { void control?.close(); control = null; };
+app.on('before-quit', stopControl);
+app.on('will-quit', stopControl);
 app.on('window-all-closed', () => app.quit());
 app.on('activate', () => {
   if (!overlay || expanded) return;

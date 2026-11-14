@@ -78,6 +78,15 @@ The endpoint rejects browser origins and unexpected hosts, requires an Electron-
 
 Electron's [window documentation](https://www.electronjs.org/docs/latest/tutorial/custom-window-styles) says native resizing can break transparent windows. This app keeps native resizing off and changes the window bounds programmatically when expanding, collapsing or choosing an avatar size. The window background is transparent; the avatar video keeps whatever background Anam renders. Transparent margins do not provide click-through behavior.
 
+## External control (Pointy)
+
+On startup the overlay runs a small local control server on `127.0.0.1` (default port `47630`, falling back to an ephemeral port if taken). It writes `{ "port", "token", "pid" }` (mode 0600) to `~/.pointy/anam-control.json` and removes it on quit. Every request needs the header `x-anam-control-token`; requests with an `Origin` header or a non-local `Host` are rejected.
+
+- `GET /state` returns `{ ok, state: { expanded, dragging, bounds, workArea, displayId } }` (503 `no_window` if there is no window).
+- `POST /move` with `{ "x": number, "y": number }` (top-left, DIP, clamped to the display work area) returns `{ ok, bounds }`. It returns 409 `collapsed` while the launcher dot is shown, 409 `dragging` during a user drag, and 400 `invalid_input` for bad bodies.
+
+Env vars: `ANAM_CONTROL_PORT` (port) and `ANAM_CONTROL_FILE` (path of the control file).
+
 ## Troubleshooting
 
 - **Cannot reach local backend:** launch Uvicorn using the first command above. `curl http://127.0.0.1:8765/health` checks availability without exposing credentials.
