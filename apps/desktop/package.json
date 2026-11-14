@@ -11,6 +11,7 @@
     "capture:gallery": "electron-vite build && electron scripts/capture-gallery.mjs"
   },
   "dependencies": {
+    "@pointy/gestures": "*",
     "@pointy/shared": "*",
     "zod": "4.6.7"
   },
