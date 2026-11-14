@@ -101,6 +101,26 @@ describe("ImageService cache", () => {
 });
 
 describe("HTTP", () => {
+  it("rejects a foreign Host header (DNS rebinding can't spend fal.ai credits)", async () => {
+    const { service } = makeService();
+    await withServer(service, async (base) => {
+      const { request } = await import("node:http");
+      const port = Number(new URL(base).port);
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = request(
+          { host: "127.0.0.1", port, path: "/explainer/image", method: "POST", headers: { host: "evil.example", "content-type": "application/json" } },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+        req.end(JSON.stringify({ prompt: "a cat" }));
+      });
+      expect(status).toBe(403);
+    });
+  });
+
   it("POST returns a url that serves the cached bytes", async () => {
     const { service } = makeService();
     await withServer(service, async (base) => {

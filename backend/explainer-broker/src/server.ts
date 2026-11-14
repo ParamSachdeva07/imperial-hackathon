@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
+import { loadRepoEnv } from "@pointy/shared/node/env";
 import { fileURLToPath } from "node:url";
 import { createBrokerServer } from "./app.js";
 import { DEFAULT_MODEL_ID, fetchDownload, makeFalGenerate } from "./falGenerate.js";
@@ -8,14 +8,8 @@ import { ImageService } from "./imageService.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
 
-/** Loads FAL_KEY etc. from the repo-root .env (gitignored); a missing file is fine. */
-export function loadEnv(): void {
-  const file = path.join(root, ".env");
-  if (existsSync(file)) process.loadEnvFile(file);
-}
-
 function main(): void {
-  loadEnv();
+  loadRepoEnv(root);
   const apiKey = process.env["FAL_KEY"];
   if (!apiKey) {
     console.error("FAL_KEY is not set (put it in the repo-root .env). Exiting.");

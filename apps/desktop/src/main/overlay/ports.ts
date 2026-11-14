@@ -3,7 +3,7 @@
  * fakes. The Electron implementations are OverlayWindowManager (SceneSink) and ElectronScreen
  * (ScreenSource).
  */
-import type { DisplayInfo, RenderItem } from "@pointy/shared/overlay";
+import type { DisplayInfo, Rect, RenderItem } from "@pointy/shared/overlay";
 
 export interface ScreenSource {
   getDisplays(): DisplayInfo[];
@@ -20,4 +20,12 @@ export interface SceneSink {
   /** Native window ids (macOS CGWindowID) of the overlay windows. */
   getWindowIds(): number[];
   withHidden<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/** Dev-only introspection (dev server / CLI), kept off the OverlayControl contract. */
+export interface OverlayDebug {
+  /** One row per live annotation. */
+  state(): { id: string; tool: string; state: string; bounds: Rect | null; steps: unknown }[];
+  /** An anatomy card's captured image (data URL), to verify capture exclusion; null if none. */
+  anatomyImage(id: string): string | null;
 }

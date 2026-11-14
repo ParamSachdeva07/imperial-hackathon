@@ -2,6 +2,7 @@
  * Pure argument parsing for pointy-draw (spec §8.1). Turns argv into a request for the dev server.
  */
 import { parseArgs } from "node:util";
+import { parseRect } from "@pointy/shared/overlay/geometry";
 
 export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
@@ -48,8 +49,9 @@ function target(v: Values, ctx: ParseContext, prefix = ""): Record<string, unkno
   const displayId = (v.display as string | undefined) ?? ctx.primaryDisplayId;
   if (get("element")) return { kind: "element", elementId: get("element") };
   if (get("rect")) {
-    const [x, y, width, height] = nums(get("rect")!, 4, "--rect");
-    return { kind: "rect", displayId, rect: { x, y, width, height } };
+    const rect = parseRect(get("rect")!);
+    if (!rect) throw new UsageError(`--${prefix}rect: expected x,y,w,h with w,h > 0, got "${get("rect")}"`);
+    return { kind: "rect", displayId, rect };
   }
   if (get("point")) {
     const [x, y] = nums(get("point")!, 2, "--point");

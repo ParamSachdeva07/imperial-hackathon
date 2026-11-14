@@ -9,6 +9,8 @@ import { existsSync } from "node:fs";
 import { copyFile, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadRepoEnv } from "@pointy/shared/node/env";
+import { manifestPath as manifestFileOf, readManifest, type ManifestEntry } from "../apps/desktop/src/main/overlay/explainer/manifest";
 import { DEFAULT_MODEL_ID, fetchDownload, makeFalGenerate } from "../backend/explainer-broker/src/falGenerate.js";
 import { DEFAULT_STYLE_ID, ImageService } from "../backend/explainer-broker/src/imageService.js";
 
@@ -20,11 +22,6 @@ interface PromptSpec {
   prompt: string;
   styleId?: string;
 }
-interface Entry {
-  prompt: string;
-  styleId: string;
-  file: string;
-}
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
   try {
@@ -35,8 +32,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 async function main(): Promise<void> {
-  const envFile = path.join(root, ".env");
-  if (existsSync(envFile)) process.loadEnvFile(envFile);
+  loadRepoEnv(root);
   const apiKey = process.env["FAL_KEY"];
   if (!apiKey) {
     console.error("FAL_KEY is not set (repo-root .env); cannot generate images.");
@@ -44,8 +40,8 @@ async function main(): Promise<void> {
   }
   const modelId = process.env["FAL_MODEL_ID"] || DEFAULT_MODEL_ID;
   const prompts = await readJson<PromptSpec[]>(path.join(assetsDir, "prompts.json"), []);
-  const manifestPath = path.join(assetsDir, "manifest.json");
-  const manifest = await readJson<{ entries: Entry[] }>(manifestPath, { entries: [] });
+  const manifestPath = manifestFileOf(assetsDir);
+  const manifest: { entries: ManifestEntry[] } = { entries: await readManifest(assetsDir) };
   const service = new ImageService({
     modelId,
     cacheDir: path.join(root, "backend", "explainer-broker", ".cache"),

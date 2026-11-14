@@ -11,6 +11,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { delay } from "@pointy/shared/node/env";
 
 const root = resolve(fileURLToPath(import.meta.url), "../..");
 const cli = join(root, "node_modules/.bin/pointy-draw");
@@ -39,7 +40,7 @@ function draw(...args: string[]): { code: number; json: Record<string, unknown> 
 }
 
 const result = (r: ReturnType<typeof draw>) => (r.json?.result ?? {}) as { ok?: boolean; visible?: boolean; overlayId?: string; resolvedBounds?: { x: number } };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = delay;
 
 async function main() {
   rmSync(devFile, { force: true });

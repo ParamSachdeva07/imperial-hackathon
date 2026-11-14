@@ -51,10 +51,6 @@ body,
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes fade-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
 
 .layer {
   position: absolute;

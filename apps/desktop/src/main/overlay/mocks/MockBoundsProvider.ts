@@ -4,7 +4,7 @@
  * perturbed with simulated moves and removals (dev CLI `pointy-draw sim ...`).
  */
 import { readFileSync } from "node:fs";
-import type { BoundsProvider, ElementBounds, Rect } from "@pointy/shared/overlay";
+import type { BoundsProvider, ElementBounds, ElementRect, Rect } from "@pointy/shared/overlay";
 import { z } from "zod";
 
 const ElementsFile = z.record(
@@ -85,6 +85,14 @@ export class MockBoundsProvider implements BoundsProvider {
 
   async getBounds(elementId: string): Promise<ElementBounds | null> {
     return this.getBoundsSync(elementId);
+  }
+
+  /** Every element currently known (after simulation), with its rect — what the AI may point at. */
+  listElementRects(): ElementRect[] {
+    return this.listElementIds().flatMap((id) => {
+      const b = this.getBoundsSync(id);
+      return b ? [{ id, rect: b.rect }] : [];
+    });
   }
 
   listElementIds(): string[] {

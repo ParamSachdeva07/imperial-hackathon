@@ -226,7 +226,7 @@ describe("OverlayService", () => {
     // One step at a time: the number lives in the label; the next step isn't on screen yet → no hint.
     expect(item.steps[0]!.labelBox).toMatchObject({ text: "Step 1 of 3 · Attach", tone: "info" });
     expect(item.steps.map((s) => s.labelBox !== null)).toEqual([true, false, false]);
-    expect(item.steps.every((s) => s.badge === null)).toBe(true);
+    expect(item.steps.every((s) => s.hint === null)).toBe(true);
 
     svc.onTurnStart("t2"); // survives turns
     svc.onTargetSelected("attach");
@@ -241,7 +241,7 @@ describe("OverlayService", () => {
     // Now on step 2: its label carries the number; only step 3 (the next one) has the faint hint.
     expect(item.steps[1]!.labelBox?.text).toBe("Step 2 of 3 · Appears later");
     expect(item.steps.map((s) => s.labelBox !== null)).toEqual([false, true, false]);
-    expect(item.steps.map((s) => s.badge !== null)).toEqual([false, false, true]);
+    expect(item.steps.map((s) => s.hint !== null)).toEqual([false, false, true]);
 
     await svc.handleTool("advance_step", { stepsId: r.overlayId });
     await svc.handleTool("advance_step", { stepsId: r.overlayId });
@@ -251,7 +251,7 @@ describe("OverlayService", () => {
     expect(item.steps.every((s) => s.status === "past")).toBe(true);
     // Finished: "✓ All done" on the last control, no hint, then it fades after ~1.5 s.
     expect(item.steps[2]!.labelBox).toMatchObject({ text: "All done", tone: "success" });
-    expect(item.steps.every((s) => s.badge === null)).toBe(true);
+    expect(item.steps.every((s) => s.hint === null)).toBe(true);
     clock.advance(1400);
     expect(sink.byId(r.overlayId!)?.state).toBe("visible");
     clock.advance(200);
@@ -701,5 +701,56 @@ describe("OverlayService", () => {
       svc.onTurnStart("t2");
       expect(events).toContainEqual({ type: "overlay.expired", overlayId: r.overlayId });
     });
+  });
+
+  describe("simplify pass: unified rules", () => {
+    it("a card beside an anchor fades when that anchor disappears (element lost or display removed alike)", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        anchor: el("attach"),
+        title: "T",
+        spec: { kind: "sequence", steps: [{ icon: "click", caption: "a" }, { icon: "send", caption: "b" }] },
+        expires: "manual",
+      });
+      bounds.set("attach", null);
+      clock.advance(300);
+      await flushPromises();
+      clock.advance(300);
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("an unanchored card reports no resolvedBounds (nothing on screen is 'the target')", async () => {
+      const r = await svc.handleTool("show_explainer", {
+        title: "T",
+        spec: { kind: "sequence", steps: [{ icon: "click", caption: "a" }, { icon: "send", caption: "b" }] },
+      });
+      expect(r.ok).toBe(true);
+      expect(r.resolvedBounds).toBeUndefined();
+    });
+
+    it("a context change cancels an in-flight call that would expire on it (expires: context_change)", async () => {
+      let release: () => void = () => {};
+      bounds.gate = new Promise<void>((res) => (release = res));
+      const pending = svc.handleTool("highlight", { target: el("send"), expires: "context_change" });
+      svc.onContextChange();
+      bounds.gate = null;
+      release();
+      expect(await pending).toEqual({ ok: false, visible: false, reason: "replaced" });
+    });
+  });
+
+  it("a drawing that loses its target on a display change fades exactly where it was", async () => {
+    bounds.set("leftbtn2", { rect: rect(-1500, 300), displayId: "2" });
+    const h = await svc.handleTool("highlight", { target: el("leftbtn2"), label: "Here", expires: "manual" });
+    const before = sink.byId(h.overlayId!);
+    if (before?.kind !== "highlight") throw new Error();
+    screen.displays = [PRIMARY];
+    screen.change();
+    await flushPromises();
+    const after = sink.byId(h.overlayId!);
+    if (after?.kind !== "highlight") throw new Error();
+    expect(after.state).toBe("exiting");
+    expect(after.label?.rect).toEqual(before.label?.rect); // frozen, not re-placed on the primary display
+    expect(after.target.bounds).toEqual(before.target.bounds);
   });
 });

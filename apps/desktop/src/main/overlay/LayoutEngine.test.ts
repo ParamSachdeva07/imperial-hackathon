@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { theme } from "@pointy/shared/overlay";
 import type { Rect } from "@pointy/shared/overlay";
 import {
-  badgePlacement,
+  placeCard,
+  hintPlacement,
   connectorBetween,
   placeBeside,
   placeCentredRight,
@@ -348,42 +349,73 @@ describe("placeBeside: oversized boxes", () => {
   });
 });
 
-describe("badgePlacement", () => {
+describe("hintPlacement", () => {
   it("does not cover a neighbouring control when another side is free", () => {
     const left = r(100, 300, 80, 40);
     const me = r(190, 300, 80, 40); // a badge on my left would cover `left`
-    const p = badgePlacement(me, wa, 40, [left]);
+    const p = hintPlacement(me, wa, 40, [left]);
     const box = r(p.x - 20, p.y - 20, 40, 40);
     expect(intersects(box, left)).toBe(false);
   });
 
   it("left of the target, vertically centred, 8 DIP gap", () => {
-    const p = badgePlacement(r(200, 300, 100, 50), wa, 40);
+    const p = hintPlacement(r(200, 300, 100, 50), wa, 40);
     expect(p).toEqual({ x: 200 - 8 - 20, y: 325 });
   });
   it("defaults to the theme badge size", () => {
-    const p = badgePlacement(r(200, 300, 100, 50), wa);
-    expect(p.x).toBe(200 - 8 - theme.stepBadgeSize / 2);
+    const p = hintPlacement(r(200, 300, 100, 50), wa);
+    expect(p.x).toBe(200 - 8 - theme.stepHintSize / 2);
   });
   it("falls back to right when left does not fit", () => {
-    const p = badgePlacement(r(10, 300, 100, 50), wa, 40);
+    const p = hintPlacement(r(10, 300, 100, 50), wa, 40);
     expect(p).toEqual({ x: 110 + 28, y: 325 });
   });
   it("falls back to above when neither side fits", () => {
-    const p = badgePlacement(r(0, 300, 1000, 50), wa, 40);
+    const p = hintPlacement(r(0, 300, 1000, 50), wa, 40);
     expect(p).toEqual({ x: 500, y: 300 - 28 });
   });
   it("falls back to below when above does not fit either", () => {
-    const p = badgePlacement(r(0, 0, 1000, 50), wa, 40);
+    const p = hintPlacement(r(0, 0, 1000, 50), wa, 40);
     expect(p).toEqual({ x: 500, y: 50 + 28 });
   });
   it("clamps into the work area when nothing fits", () => {
-    const p = badgePlacement(r(0, 0, 1000, 800), wa, 40);
+    const p = hintPlacement(r(0, 0, 1000, 800), wa, 40);
     expect(p).toEqual({ x: 20, y: 400 });
   });
   it("respects a work area with a top inset", () => {
     const area = r(0, 25, 1000, 775);
-    const p = badgePlacement(r(0, 25, 1000, 40), area, 40);
+    const p = hintPlacement(r(0, 25, 1000, 40), area, 40);
     expect(p.y).toBe(25 + 40 + 28);
+  });
+});
+
+describe("placeCard (explainer card fallback chain)", () => {
+  const work = r(0, 0, 1000, 800);
+  const fixed = (w: number, h: number) => () => ({ width: w, height: h });
+
+  it("goes beside the anchor at full size when it fits", () => {
+    const p = placeCard({ anchor: r(100, 300, 80, 40), measure: fixed(300, 200), hasImages: false, workArea: work, avoid: [], compactImageScale: 0.6 });
+    expect(p).toMatchObject({ scale: 1, imageScale: 1 });
+    expect(p.connector).not.toBeNull();
+  });
+
+  it("re-lays out with smaller pictures before shrinking the text", () => {
+    // 700 tall doesn't fit beside (800 work area, 24 gap… only with shrink); compact (420) does at full size.
+    const measure = (s: number) => ({ width: 520, height: s === 1 ? 900 : 420 });
+    const p = placeCard({ anchor: r(100, 300, 80, 40), measure, hasImages: true, workArea: work, avoid: [], compactImageScale: 0.6 });
+    expect(p).toMatchObject({ scale: 1, imageScale: 0.6, designSize: { width: 520, height: 420 } });
+  });
+
+  it("prefers a full-size corner (with a connector) over shrinking a card that has no pictures", () => {
+    // The anchor fills the middle so no side fits at full size; a corner does.
+    const p = placeCard({ anchor: r(250, 200, 500, 400), measure: fixed(240, 180), hasImages: false, workArea: work, avoid: [], compactImageScale: 0.6 });
+    expect(p.scale).toBe(1);
+    expect(p.connector).not.toBeNull();
+  });
+
+  it("without an anchor it sits centred-right with no connector", () => {
+    const p = placeCard({ anchor: null, measure: fixed(300, 200), hasImages: false, workArea: work, avoid: [], compactImageScale: 0.6 });
+    expect(p.connector).toBeNull();
+    expect(p.rect.x + p.rect.width).toBe(1000 - 24);
   });
 });

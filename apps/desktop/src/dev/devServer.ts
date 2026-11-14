@@ -2,7 +2,7 @@
  * Dev server (spec §8.1): localhost-only HTTP API the `pointy-draw` CLI talks to. Dev builds only.
  *
  * Security: binds 127.0.0.1; every request needs the `X-Pointy-Token` header (random per run,
- * written to ~/.pointy/dev-server.json with mode 0600); Host must be 127.0.0.1/localhost (blocks
+ * written to devServerFile() with mode 0600); Host must be 127.0.0.1/localhost (blocks
  * DNS rebinding). Browsers can't add custom headers cross-origin without a CORS preflight, which
  * we never grant, so web pages cannot drive the overlay.
  *
@@ -10,33 +10,36 @@
  *   POST /control  { op: turnStart|contextChange|targetSelected|cue, arg? }
  *   POST /sim      { op: move|remove|restore, elementId?, dx?, dy? }
  *   GET  /events   Server-Sent Events: { at, event: OverlayEvent }
- *   GET  /state    debug snapshot     GET /displays     GET /elements
+ *   GET  /state    debug snapshot     GET /displays     GET /elements     GET /element-rects
+ *   GET  /debug/anatomy?id=…  an anatomy card's captured image (verify capture exclusion)
+ *   POST <route>   extra routes supplied by the dev harness (e.g. /fixture)
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { z } from "zod";
-import type { DisplayInfo, OverlayControl, OverlayEvent } from "@pointy/shared/overlay";
+import type { DisplayInfo, ElementRect, OverlayControl, OverlayEvent } from "@pointy/shared/overlay";
+import { DEFAULT_DEV_PORT, DEV_TOKEN_HEADER, devServerFile } from "@pointy/shared/node/devServerFile";
+import { isJsonRequest, isLocalHostHeader, readJsonBody, sendJson as send } from "@pointy/shared/node/http";
+import type { OverlayDebug } from "../main/overlay/ports";
 
-/** Connection file for the CLI (POINTY_DEV_FILE overrides, e.g. so e2e runs never touch a dev session). */
-export const DEV_SERVER_FILE = process.env.POINTY_DEV_FILE ?? join(homedir(), ".pointy", "dev-server.json");
 const MAX_BODY = 256 * 1024;
 
 export interface DevServerDeps {
-  control: OverlayControl & { debugState?: () => unknown; debugAnatomyImage?: (id: string) => string | null };
+  control: OverlayControl;
+  debug?: OverlayDebug;
   sim: {
     simMove(elementId: string, dx: number, dy: number): void;
     simRemove(elementId: string): void;
     simRestore(elementId?: string): void;
     listElementIds(): string[];
-    getBoundsSync?(elementId: string): { rect: { x: number; y: number; width: number; height: number } } | null;
+    listElementRects(): ElementRect[];
   };
   getDisplays: () => DisplayInfo[];
   getPrimaryDisplayId: () => string;
-  /** Extra POST routes (e.g. the realtime test harness). */
-  extraRoutes?: Record<string, (body: unknown) => Promise<unknown>>;
+  /** Extra POST routes from the dev harness (e.g. /fixture). */
+  routes?: Record<string, (body: unknown) => Promise<unknown>>;
 }
 
 const ToolBody = z.object({ name: z.string(), input: z.unknown(), caller: z.enum(["user", "model", "controller"]).optional() });
@@ -57,7 +60,8 @@ export interface DevServer {
   close(): Promise<void>;
 }
 
-export async function startDevServer(deps: DevServerDeps, port = Number(process.env.POINTY_DEV_PORT ?? 47615)): Promise<DevServer> {
+export async function startDevServer(deps: DevServerDeps, port = Number(process.env.POINTY_DEV_PORT ?? DEFAULT_DEV_PORT)): Promise<DevServer> {
+  const file = devServerFile();
   const token = randomBytes(24).toString("hex");
   const sseClients = new Set<ServerResponse>();
   const off = deps.control.onEvent((event: OverlayEvent) => {
@@ -74,9 +78,8 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
   });
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const host = (req.headers.host ?? "").split(":")[0];
-    if (host !== "127.0.0.1" && host !== "localhost") return send(res, 403, { error: "bad host" });
-    if (req.headers["x-pointy-token"] !== token) return send(res, 403, { error: "bad token" });
+    if (!isLocalHostHeader(req)) return send(res, 403, { error: "bad host" });
+    if (req.headers[DEV_TOKEN_HEADER] !== token) return send(res, 403, { error: "bad token" });
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
     if (req.method === "GET") {
@@ -88,29 +91,22 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
           req.on("close", () => sseClients.delete(res));
           return;
         case "/state":
-          return send(res, 200, deps.control.debugState?.() ?? []);
+          return send(res, 200, deps.debug?.state() ?? []);
         case "/displays":
           return send(res, 200, { primary: deps.getPrimaryDisplayId(), displays: deps.getDisplays() });
         case "/elements":
           return send(res, 200, deps.sim.listElementIds());
         case "/element-rects":
-          return send(
-            res,
-            200,
-            deps.sim.listElementIds().flatMap((id) => {
-              const b = deps.sim.getBoundsSync?.(id);
-              return b ? [{ id, rect: b.rect }] : [];
-            }),
-          );
+          return send(res, 200, deps.sim.listElementRects());
         case "/debug/anatomy":
-          return send(res, 200, { src: deps.control.debugAnatomyImage?.(url.searchParams.get("id") ?? "") ?? null });
+          return send(res, 200, { src: deps.debug?.anatomyImage(url.searchParams.get("id") ?? "") ?? null });
       }
       return send(res, 404, { error: "not found" });
     }
 
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
-    if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { error: "json only" });
-    const body = await readJson(req);
+    if (!isJsonRequest(req)) return send(res, 415, { error: "json only" });
+    const body = await readJsonBody(req, MAX_BODY);
 
     switch (url.pathname) {
       case "/tool": {
@@ -133,7 +129,7 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
         return send(res, 200, { ok: true });
       }
     }
-    const extra = deps.extraRoutes?.[url.pathname];
+    const extra = deps.routes?.[url.pathname];
     if (extra) return send(res, 200, await extra(body));
     return send(res, 404, { error: "not found" });
   }
@@ -143,9 +139,9 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
     server.listen(port, "127.0.0.1", () => resolve());
   });
   const actualPort = (server.address() as { port: number }).port;
-  mkdirSync(dirname(DEV_SERVER_FILE), { recursive: true, mode: 0o700 });
-  writeFileSync(DEV_SERVER_FILE, JSON.stringify({ port: actualPort, token, pid: process.pid }), { mode: 0o600 });
-  chmodSync(DEV_SERVER_FILE, 0o600);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, JSON.stringify({ port: actualPort, token, pid: process.pid }), { mode: 0o600 });
+  chmodSync(file, 0o600);
 
   return {
     port: actualPort,
@@ -153,26 +149,8 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
       new Promise<void>((resolve) => {
         off();
         for (const r of sseClients) r.end();
-        rmSync(DEV_SERVER_FILE, { force: true });
+        rmSync(file, { force: true });
         server.close(() => resolve());
       }),
   };
-}
-
-function send(res: ServerResponse, status: number, data: unknown): void {
-  if (res.headersSent) return;
-  const text = JSON.stringify(data);
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(text);
-}
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY) throw new Error("body too large");
-    chunks.push(chunk as Buffer);
-  }
-  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 }

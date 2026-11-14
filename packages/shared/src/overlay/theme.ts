@@ -54,8 +54,6 @@ export const theme = {
     cardEnterScale: 0.96,
   },
   pointerSize: 96,
-  /** Diameter (px) of a numbered step badge. Derived (not in the spec table). */
-  stepBadgeSize: 56,
   /** Diameter (px) of the small, faint "next step" hint on step guides (one step at a time). */
   stepHintSize: 32,
   cardMaxWidth: 520,
@@ -66,10 +64,6 @@ export const theme = {
 
 export type Theme = typeof theme;
 
-/** Colour for a tone. */
-export function toneColor(tone: Tone): string {
-  return theme.colors[tone];
-}
 
 /**
  * Icon glyph paired with each tone, so colour is never the only signal.

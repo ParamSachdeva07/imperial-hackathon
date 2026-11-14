@@ -1,51 +1,56 @@
 /**
  * OverlayService (spec §5): the OverlayControl the session controller calls.
- * Validates tool input, resolves targets, applies the OverlayManager rules, lays out labels/cards,
- * tracks anchors and expiry, builds the render scene, and emits OverlayEvents.
+ * Owns the shared lifecycle of every annotation —
+ *   validate → resolve targets → OverlayManager rules → expiry + anchor tracking → publish → fade/exit
+ * and delegates everything tool-specific (targets, required/critical targets, selection, layout) to
+ * the per-tool kinds in annotations.ts.
  *
  * Electron-free: windows and displays come in through the SceneSink / ScreenSource ports.
  */
 import {
   DEFAULT_EXPIRY,
-  COMPACT_IMAGE_SCALE,
-  measureCard,
   measureLabel,
   parseToolInput,
   theme,
   type AvoidRectsProvider,
   type BoundsProvider,
+  type Caller,
   type DisplayInfo,
   type ElementBounds,
   type Expiry,
-  type ExplainerItem,
-  type HighlightInput,
   type OverlayControl,
   type OverlayEvent,
-  type Point,
-  type PointAtInput,
   type Rect,
   type RenderItem,
   type RenderLabel,
-  type RenderStep,
   type ScreenCaptureProvider,
-  type ShowExplainerInput,
   type ShowStepsInput,
-  type Size,
-  type Target,
+  type ToolCallOptions,
   type ToolResult,
   type Tone,
 } from "@pointy/shared/overlay";
 import { AnchorTracker } from "./AnchorTracker";
-import { realClock, type Clock, type TimerHandle } from "./clock";
+import {
+  contextTargets,
+  kindOf,
+  kindOfLive,
+  squareAt,
+  stepSlot,
+  type DrawTool,
+  type InputOf,
+  type LayoutContext,
+  type Live,
+  type Slot,
+} from "./annotations";
+import { realClock, type Clock } from "./clock";
 import { displayForRect, findDisplay } from "./coords";
-import { ExpiryManager, type ExpireCause } from "./ExpiryManager";
-import { ExplainerService, type ExplainerState } from "./explainer/ExplainerService";
+import { ExpiryManager, expiresAtTurnStart, expiresOnContextChange } from "./ExpiryManager";
+import { ExplainerService } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
-import { center } from "./geometry";
-import { badgePlacement, placeBeside, placeCentredRight, pointerPlacement } from "./LayoutEngine";
-import { OverlayManager, type Dismissal } from "./OverlayManager";
-import type { SceneSink, ScreenSource } from "./ports";
-import { advanceSteps, startSteps, statusOf, type StepsState } from "./steps";
+import { placeBeside, pointerBody } from "./LayoutEngine";
+import { OverlayManager } from "./OverlayManager";
+import type { OverlayDebug, SceneSink, ScreenSource } from "./ports";
+import { advanceSteps, startSteps } from "./steps";
 import { isCoordinateOnly, TargetResolver, type ResolvedTarget } from "./TargetResolver";
 
 export interface OverlayServiceDeps {
@@ -65,55 +70,19 @@ export interface OverlayServiceDeps {
   hideDuringCapture?: boolean;
 }
 
-/** Placement slots + "region" (anatomy crop region: avoided by the card, never required). */
-type Slot = "target" | "dragTo" | "anchor" | "region" | `step:${number}`;
-
-/** Service-side state for one annotation. */
-interface Live {
-  id: string;
-  toolName: "point_at" | "highlight" | "show_steps" | "show_explainer";
-  input: PointAtInput | HighlightInput | ShowStepsInput | ShowExplainerInput;
-  slots: Map<Slot, Target>;
-  resolved: Map<Slot, ResolvedTarget | null>;
-  /** Element id → slots that use it. */
-  elements: Map<string, Slot[]>;
-  item: RenderItem | null;
-  steps?: StepsState;
-  explainer?: ExplainerState;
-  shownAt: number | null;
-  createdAt: number;
-  exitTimer: TimerHandle | null;
-  /** Pending "current step never appeared" check. */
-  graceTimer: TimerHandle | null;
-  /** Ended (exiting or removed): ignore late async results. */
-  ended: boolean;
-}
-
 const EXIT_MARGIN_MS = 50;
-
-type Caller = "user" | "model" | "controller";
-type ResolveFailureReason = "target_not_found" | "target_offscreen" | "display_not_found";
-
 /** How long a step that isn't on screen yet may take to appear after the guide advances to it. */
 const STEP_APPEAR_GRACE_MS = 2000;
 
-/** The resting pointer's body: a pointerSize square behind the tip, opposite the pointing direction. */
-function pointerBodyRect(rest: { x: number; y: number }, angle: number): Rect {
-  const size = theme.pointerSize;
-  const rad = (angle * Math.PI) / 180;
-  const cx = rest.x - (Math.cos(rad) * size) / 2;
-  const cy = rest.y - (Math.sin(rad) * size) / 2;
-  return { x: cx - size / 2, y: cy - size / 2, width: size, height: size };
+/** A show() call still resolving its targets; cancelled by the same rules that would expire it. */
+interface InFlight {
+  expires: Expiry;
+  coordinateOnly: boolean;
+  cancelled: boolean;
 }
 
-const hasImages = (spec: ShowExplainerInput["spec"]): boolean =>
-  spec.kind === "concept" || spec.kind === "anatomy" || (spec.kind === "compare" && Boolean(spec.left.imagePrompt || spec.right.imagePrompt));
-
-const calloutTargets = (input: Live["input"]): Target[] =>
-  "spec" in input && input.spec.kind === "anatomy" ? input.spec.callouts.map((c) => c.target) : [];
-export interface ToolCallOptions {
-  caller?: Caller;
-}
+type StepsLive = Extract<Live, { toolName: "show_steps" }>;
+type ExplainerLive = Extract<Live, { toolName: "show_explainer" }>;
 
 const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResult> = {}): ToolResult => ({
   ok: true,
@@ -122,6 +91,9 @@ const ok = (overlayId: string, bounds: Rect | undefined, extra: Partial<ToolResu
   ...(bounds ? { resolvedBounds: bounds } : {}),
   ...extra,
 });
+const STALE: ToolResult = { ok: false, visible: false, reason: "replaced" };
+
+const expiryOf = (input: { expires?: Expiry | undefined }): Expiry => input.expires ?? DEFAULT_EXPIRY;
 
 export class OverlayService implements OverlayControl {
   private readonly clock: Clock;
@@ -133,18 +105,17 @@ export class OverlayService implements OverlayControl {
   private readonly live = new Map<string, Live>();
   private readonly listeners = new Set<(e: OverlayEvent) => void>();
   private readonly disposers: (() => void)[] = [];
-  /** Bumped by clear("all") and new turns: tool calls still resolving targets are then dropped. */
-  private epoch = 0;
-  /** Bumped by new turns: calls still resolving that would expire at this turn are dropped. */
-  private turnEpoch = 0;
-  /** Bumped on context change: calls with coordinate targets still resolving are then stale. */
-  private contextEpoch = 0;
+  private readonly inflight = new Set<InFlight>();
+  /** Cached display list (invalidated when displays change). */
+  private displayCache: DisplayInfo[] | null = null;
+  /** Bumped per display-change relayout; an older relayout's results are discarded. */
+  private relayoutGen = 0;
 
   constructor(private readonly deps: OverlayServiceDeps) {
     this.clock = deps.clock ?? realClock;
     this.manager = new OverlayManager({ now: () => this.clock.now() });
     this.resolver = new TargetResolver({ boundsProvider: deps.boundsProvider, getDisplays: () => this.displays() });
-    this.expiry = new ExpiryManager({ clock: this.clock, onExpire: (id, cause) => this.handleExpire(id, cause) });
+    this.expiry = new ExpiryManager({ clock: this.clock, onExpire: (id) => this.fade(id, { type: "overlay.expired", overlayId: id }) });
     this.anchors = new AnchorTracker({
       boundsProvider: deps.boundsProvider,
       clock: this.clock,
@@ -160,7 +131,12 @@ export class OverlayService implements OverlayControl {
     });
     this.anchors.start();
     this.disposers.push(deps.sink.onPainted((ids) => this.handlePainted(ids)));
-    this.disposers.push(deps.screen.onDisplaysChanged(() => void this.relayoutAll()));
+    this.disposers.push(
+      deps.screen.onDisplaysChanged(() => {
+        this.displayCache = null;
+        void this.relayoutAll();
+      }),
+    );
   }
 
   dispose(): void {
@@ -177,10 +153,6 @@ export class OverlayService implements OverlayControl {
 
   // ---------------------------------------------------------------- OverlayControl
 
-  /**
-   * @param opts.caller who issued the call (default "model"): reported as `by` on
-   *   overlay.dismissed for `clear` (e.g. the controller's clear("all") on stop/cancel).
-   */
   async handleTool(name: string, input: unknown, opts: ToolCallOptions = {}): Promise<ToolResult> {
     const parsed = parseToolInput(name, input);
     if (!parsed.success) return { ok: false, visible: false, reason: "invalid_input" };
@@ -193,36 +165,30 @@ export class OverlayService implements OverlayControl {
       case "point_at":
       case "show_steps":
       case "show_explainer":
-        return this.show(parsed.name, parsed.data as Live["input"]);
+        return this.show(parsed.name, parsed.data as InputOf<DrawTool>);
       default:
-        // Stretch tools are not enabled yet.
-        return { ok: false, visible: false, reason: "invalid_input" };
+        return { ok: false, visible: false, reason: "invalid_input" }; // stretch tools aren't enabled yet
     }
   }
 
   onTurnStart(turnId: string): void {
-    this.turnEpoch += 1;
+    this.cancelInFlight(expiresAtTurnStart);
     this.expiry.onTurnStart(turnId);
     for (const id of this.manager.endTurn()) this.endLive(id);
   }
 
   onContextChange(): void {
-    this.contextEpoch += 1;
+    this.cancelInFlight(expiresOnContextChange);
     this.expiry.onContextChange();
   }
 
   onTargetSelected(elementId: string): void {
     for (const l of [...this.live.values()]) {
       if (l.ended || !l.elements.has(elementId)) continue;
-      if (l.steps) {
-        // A guide is only "selected" through its current step (which also advances it).
-        const current = l.steps.completed ? undefined : l.slots.get(`step:${l.steps.current}`);
-        if (current?.kind !== "element" || current.elementId !== elementId) continue;
-        this.emit({ type: "overlay.target_selected", overlayId: l.id });
-        this.advance(l.id);
-        continue;
-      }
+      const action = kindOfLive(l).onSelected(l, elementId);
+      if (action === "ignore") continue;
       this.emit({ type: "overlay.target_selected", overlayId: l.id });
+      if (action === "advance") this.advance(l.id);
     }
     this.expiry.onTargetSelected(elementId);
   }
@@ -244,244 +210,187 @@ export class OverlayService implements OverlayControl {
     return this.deps.sink.withHidden(fn);
   }
 
-  /** Dev/debug: the data URL of an explainer's anatomy crop (or null), to verify capture exclusion. */
-  debugAnatomyImage(id: string): string | null {
-    const item = this.live.get(id)?.item;
-    if (item?.kind !== "explainer" || item.body.kind !== "anatomy" || item.body.image.status !== "ready") return null;
-    return item.body.image.src;
-  }
-
-  /** Debug snapshot (dev server). */
-  debugState() {
-    return [...this.live.values()].map((l) => ({
-      id: l.id,
-      tool: l.toolName,
-      state: this.manager.get(l.id)?.state ?? "removed",
-      bounds: this.primaryBounds(l) ?? null,
-      steps: l.steps ?? null,
-    }));
+  /** Dev-only introspection, handed to the dev server separately from the OverlayControl contract. */
+  createDebug(): OverlayDebug {
+    return {
+      state: () =>
+        [...this.live.values()].map((l) => ({
+          id: l.id,
+          tool: l.toolName,
+          state: this.manager.get(l.id)?.state ?? "removed",
+          bounds: this.primaryBounds(l) ?? null,
+          steps: l.toolName === "show_steps" ? l.steps : null,
+        })),
+      anatomyImage: (id) => {
+        const item = this.live.get(id)?.item;
+        if (item?.kind !== "explainer" || item.body.kind !== "anatomy" || item.body.image.status !== "ready") return null;
+        return item.body.image.src;
+      },
+    };
   }
 
   // ---------------------------------------------------------------- show
 
-  private async show(toolName: Live["toolName"], input: Live["input"]): Promise<ToolResult> {
-    const slots = this.slotsFor(toolName, input);
+  private async show<T extends DrawTool>(tool: T, input: InputOf<T>): Promise<ToolResult> {
+    const kind = kindOf(tool);
+    const slots = kind.slots(input);
+    const call: InFlight = {
+      expires: expiryOf(input),
+      // Any coordinate target (incl. anatomy callouts: the crop is a snapshot) goes stale on a context change.
+      coordinateOnly: contextTargets(tool, input, slots).some(isCoordinateOnly),
+      cancelled: false,
+    };
+    this.inflight.add(call);
+    let results: (readonly [Slot, Awaited<ReturnType<TargetResolver["resolve"]>>])[];
+    try {
+      results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
+    } finally {
+      this.inflight.delete(call);
+    }
+    // clear("all"), a new turn or a context change arrived while resolving and would have removed it.
+    if (call.cancelled) return STALE;
+
     const resolved = new Map<Slot, ResolvedTarget | null>();
-    const failures = new Map<Slot, ResolveFailureReason>();
-    const epoch = this.epoch;
-    const turnEpoch = this.turnEpoch;
-    const contextEpoch = this.contextEpoch;
-    const results = await Promise.all([...slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const));
-    // clear("all") or a new turn arrived while we were resolving: this call is stale.
-    if (epoch !== this.epoch) return { ok: false, visible: false, reason: "replaced" };
-    // A turn started mid-resolution: a next_turn annotation would already have expired.
-    if (turnEpoch !== this.turnEpoch && this.expiryFor(toolName, input) === "next_turn") {
-      return { ok: false, visible: false, reason: "replaced" };
-    }
-    // A context change mid-resolution makes coordinate targets stale (spec §5.4).
-    if (contextEpoch !== this.contextEpoch && [...slots.values(), ...calloutTargets(input)].some(isCoordinateOnly)) {
-      return { ok: false, visible: false, reason: "replaced" };
-    }
+    let anchorFailure: ToolResult["reason"];
     for (const [slot, r] of results) {
       if (r.ok) {
         resolved.set(slot, r.target);
-      } else {
-        resolved.set(slot, null);
-        failures.set(slot, r.reason);
-        if (this.isRequired(toolName, slot, input)) return { ok: true, visible: false, reason: r.reason };
+        continue;
       }
+      resolved.set(slot, null);
+      if (kind.required(input, slot)) return { ok: true, visible: false, reason: r.reason };
+      if (slot === "anchor") anchorFailure = r.reason;
     }
 
-    const prefix = { highlight: "hl", point_at: "pt", show_steps: "st", show_explainer: "ex" }[toolName];
-    const id = this.manager.nextId(prefix);
     const elements = new Map<string, Slot[]>();
     for (const [slot, target] of slots) {
-      if (target.kind !== "element") continue;
-      elements.set(target.elementId, [...(elements.get(target.elementId) ?? []), slot]);
+      if (target.kind === "element") elements.set(target.elementId, [...(elements.get(target.elementId) ?? []), slot]);
     }
-    const l: Live = {
-      id,
-      toolName,
-      input,
-      slots,
-      resolved,
-      elements,
-      item: null,
-      shownAt: null,
-      createdAt: this.clock.now(),
-      exitTimer: null,
-      graceTimer: null,
-      ended: false,
-    };
-    if (toolName === "show_steps") {
-      const si = input as ShowStepsInput;
-      l.steps = startSteps(si.steps.length, si.startAt);
-    }
-    if (toolName === "show_explainer") {
-      l.explainer = this.explainers.create((input as ShowExplainerInput).spec);
-    }
+    const l = this.createLive(tool, input, { id: this.manager.nextId(kind.idPrefix), slots, resolved, elements });
 
     const { dismissed } = this.manager.add({
-      id,
-      toolName,
+      id: l.id,
+      toolName: tool,
       input,
       resolvedBounds: this.primaryBounds(l) ?? null,
-      displayId: this.primaryResolved(l)?.displayId ?? null,
-      turnId: (input as { turnId?: string }).turnId,
+      displayId: kindOfLive(l).primary(l)?.displayId ?? null,
+      turnId: input.turnId,
     });
-    this.live.set(id, l);
-    this.handleDismissals(dismissed);
+    this.live.set(l.id, l);
+    for (const d of dismissed) this.startExit(d.id, { type: "overlay.dismissed", overlayId: d.id, by: "model", reason: d.reason });
 
-    this.layout(l);
-    this.expiry.track({
-      id,
-      expires: this.expiryFor(toolName, input),
-      // Step guides advance on selection instead of expiring on it.
-      // Step guides advance on selection; "on_target_selected" for a guide means it was completed
-      // (see advance()), so no element ids are registered here.
-      elementIds: toolName === "show_steps" ? [] : [...elements.keys()],
-      // Any coordinate target goes stale on a context change (spec §5.4), even next to element targets.
-      // (includes an anatomy region and callouts: the crop is a snapshot of that context)
-      coordinateOnly: [...slots.values(), ...calloutTargets(input)].some(isCoordinateOnly),
-    });
-    if (elements.size) {
-      const initial = new Map<string, ElementBounds>();
-      for (const [el, ss] of elements) {
-        const r = resolved.get(ss[0]!);
-        if (r) initial.set(el, { rect: r.bounds, displayId: r.displayId });
-      }
-      // Step guides also watch elements that aren't on screen yet (later steps may appear). Other
-      // annotations only follow what they actually attached to: an explainer shown unanchored
-      // (anchor not found) must not later fade because that anchor "was lost".
-      const tracked = toolName === "show_steps" ? [...elements.keys()] : [...initial.keys()];
-      if (tracked.length) this.anchors.track(id, tracked, initial);
-    }
+    this.refresh(l);
+    this.expiry.track({ id: l.id, expires: call.expires, elementIds: kindOfLive(l).selectionElementIds(l), coordinateOnly: call.coordinateOnly });
+    this.trackAnchors(l);
     this.publish();
-
-    if (l.explainer) this.loadExplainerAsync(l);
+    if (l.toolName === "show_explainer") this.loadExplainerAsync(l);
 
     // A card whose anchor can't be resolved is still shown (centred-right); report why it's unanchored.
-    const anchorFailure = toolName === "show_explainer" ? failures.get("anchor") : undefined;
-    return ok(id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
+    return ok(l.id, this.primaryBounds(l), anchorFailure ? { reason: anchorFailure } : {});
   }
 
-  private slotsFor(toolName: Live["toolName"], input: Live["input"]): Map<Slot, Target> {
-    const slots = new Map<Slot, Target>();
-    if (toolName === "highlight" || toolName === "point_at") {
-      const i = input as HighlightInput | PointAtInput;
-      slots.set("target", i.target);
-      if (toolName === "point_at") {
-        const p = input as PointAtInput;
-        if (p.motion === "drag_to" && p.dragTo) slots.set("dragTo", p.dragTo);
+  private createLive<T extends DrawTool>(tool: T, input: InputOf<T>, base: Pick<Live, "id" | "slots" | "resolved" | "elements">): Live {
+    const common = { ...base, item: null, shown: false, exitTimer: null, graceTimer: null, ended: false };
+    switch (tool) {
+      case "show_steps": {
+        const s = input as ShowStepsInput;
+        return { ...common, toolName: "show_steps", input: s, steps: startSteps(s.steps.length, s.startAt) };
       }
-    } else if (toolName === "show_steps") {
-      (input as ShowStepsInput).steps.forEach((s, i) => slots.set(`step:${i}`, s.target));
-    } else {
-      const e = input as ShowExplainerInput;
-      if (e.anchor) slots.set("anchor", e.anchor);
-      if (e.spec.kind === "anatomy") slots.set("region", e.spec.region);
+      case "show_explainer": {
+        const e = input as InputOf<"show_explainer">;
+        return { ...common, toolName: "show_explainer", input: e, explainer: this.explainers.create(e.spec) };
+      }
+      default:
+        return { ...common, toolName: tool, input } as Live;
     }
-    return slots;
   }
 
-  /** Slots that must resolve for the tool call to show anything. */
-  private isRequired(toolName: Live["toolName"], slot: Slot, input: Live["input"]): boolean {
-    if (toolName === "highlight" || toolName === "point_at") return slot === "target" || slot === "dragTo";
-    if (toolName === "show_steps") {
-      const s = input as ShowStepsInput;
-      const start = Math.min(s.startAt, s.steps.length - 1);
-      return slot === `step:${start}`;
+  /** Follow element targets — only what resolved, unless the kind watches for elements to appear. */
+  private trackAnchors(l: Live): void {
+    const initial = new Map<string, ElementBounds>();
+    for (const [el, slots] of l.elements) {
+      const r = l.resolved.get(slots[0]!);
+      if (r) initial.set(el, { rect: r.bounds, displayId: r.displayId });
     }
-    return false; // explainer: anchor optional (card falls back to centred-right)
-  }
-
-  /** The contract default (spec §4) applies to every tool; multi-turn step guides pass "manual". */
-  private expiryFor(_toolName: Live["toolName"], input: Live["input"]): Expiry {
-    return (input as { expires?: Expiry }).expires ?? DEFAULT_EXPIRY;
+    const tracked = kindOfLive(l).watchUnresolved ? [...l.elements.keys()] : [...initial.keys()];
+    if (tracked.length) this.anchors.track(l.id, tracked, initial);
   }
 
   // ---------------------------------------------------------------- clear / steps
 
   private clear(overlayId: string, by: Caller): ToolResult {
     if (overlayId === "all") {
-      this.epoch += 1;
-      for (const l of [...this.live.values()]) if (!l.ended) this.dismiss(l.id, by, "cleared");
+      this.cancelInFlight(() => true);
+      for (const l of [...this.live.values()]) {
+        if (!l.ended) this.fade(l.id, { type: "overlay.dismissed", overlayId: l.id, by, reason: "cleared" });
+      }
       return { ok: true, visible: false };
     }
     const l = this.live.get(overlayId);
     if (!l || l.ended) return { ok: false, visible: false, reason: "unknown_overlay" };
-    this.dismiss(overlayId, by, "cleared");
+    this.fade(overlayId, { type: "overlay.dismissed", overlayId, by, reason: "cleared" });
     return { ok: true, overlayId, visible: false };
   }
 
   private advance(stepsId: string): ToolResult {
     const l = this.live.get(stepsId);
-    if (!l || l.ended || !l.steps) return { ok: false, visible: false, reason: "unknown_overlay" };
+    if (!l || l.ended || l.toolName !== "show_steps") return { ok: false, visible: false, reason: "unknown_overlay" };
     if (l.steps.completed) return ok(stepsId, this.primaryBounds(l));
     l.steps = advanceSteps(l.steps);
     if (l.steps.completed) {
       this.emit({ type: "steps.completed", stepsId });
-      this.layout(l);
+      this.refresh(l);
       this.publish();
-      // Show all ✓ briefly, then end — unless the caller explicitly asked for a manual or timed lifetime.
-      const explicit = (l.input as ShowStepsInput).expires;
+      // "✓ All done" briefly, then end — unless the caller asked for a manual or timed lifetime.
+      const explicit = l.input.expires;
       if (explicit !== "manual" && typeof explicit !== "object") {
-        const hold = this.deps.stepsCompletedHoldMs ?? 1500;
-        this.expiry.untrack(stepsId);
-        this.expiry.track({ id: stepsId, expires: { ms: Math.max(500, hold) }, elementIds: [], coordinateOnly: false });
+        const hold = { ms: Math.max(500, this.deps.stepsCompletedHoldMs ?? 1500) };
+        this.expiry.track({ id: stepsId, expires: hold, elementIds: [], coordinateOnly: false });
       }
-      return ok(stepsId, this.primaryBounds(l), { visible: true });
+      return ok(stepsId, this.primaryBounds(l));
     }
     this.emit({ type: "steps.advanced", stepsId, index: l.steps.current });
-    this.layout(l);
+    this.refresh(l);
     this.publish();
     this.checkCurrentStepAppears(l);
-    return ok(stepsId, this.primaryBounds(l), { visible: !!l.resolved.get(`step:${l.steps.current}`) });
+    return ok(stepsId, this.primaryBounds(l), { visible: !!l.resolved.get(stepSlot(l.steps.current)) });
   }
 
   /**
    * After advancing to a step whose element isn't on screen yet (it may appear once the previous
    * step is done), give it a grace period; if it still hasn't appeared, the guide is lost.
    */
-  private checkCurrentStepAppears(l: Live): void {
-    if (!l.steps || l.steps.completed || l.resolved.get(`step:${l.steps.current}`)) return;
-    const index = l.steps.current;
+  private checkCurrentStepAppears(l: StepsLive): void {
+    const slot = stepSlot(l.steps.current);
+    if (l.resolved.get(slot)) return;
     if (l.graceTimer) this.clock.clearTimeout(l.graceTimer);
     l.graceTimer = this.clock.setTimeout(() => {
       l.graceTimer = null;
-      if (l.ended || !l.steps || l.steps.current !== index || l.resolved.get(`step:${index}`)) return;
-      this.emit({ type: "overlay.target_lost", overlayId: l.id });
-      this.fadeOut(l.id);
+      if (l.ended || l.steps.completed || stepSlot(l.steps.current) !== slot || l.resolved.get(slot)) return;
+      this.fade(l.id, { type: "overlay.target_lost", overlayId: l.id });
     }, STEP_APPEAR_GRACE_MS);
   }
 
   // ---------------------------------------------------------------- lifecycle
 
-  private handleDismissals(dismissed: Dismissal[]): void {
-    for (const d of dismissed) {
-      this.emit({ type: "overlay.dismissed", overlayId: d.id, by: "model", reason: d.reason });
-      this.beginExit(d.id);
-    }
+  private cancelInFlight(shouldCancel: (c: InFlight) => boolean): void {
+    for (const c of this.inflight) if (shouldCancel(c)) c.cancelled = true;
   }
 
-  private dismiss(id: string, by: "user" | "model" | "controller", reason: "cleared"): void {
-    if (!this.manager.beginExit(id)) return;
-    this.emit({ type: "overlay.dismissed", overlayId: id, by, reason });
-    this.afterExitStarted(id);
+  /** Begin fading an annotation (unless it's already leaving), announcing why. */
+  private fade(id: string, event: OverlayEvent): void {
+    if (this.manager.beginExit(id)) this.startExit(id, event);
   }
 
-  /** The manager already moved it to "exiting" (replaced/evicted). */
-  private beginExit(id: string): void {
-    this.afterExitStarted(id);
-  }
-
-  private afterExitStarted(id: string): void {
-    const l = this.live.get(id);
+  /** The manager has it as "exiting": announce, stop tracking, draw it fading, remove it after. */
+  private startExit(id: string, event: OverlayEvent): void {
+    this.emit(event);
     this.expiry.untrack(id);
     this.anchors.untrack(id);
+    const l = this.live.get(id);
     if (!l) return;
     l.ended = true;
-    this.refreshItem(l);
+    this.refresh(l);
     this.publish();
     l.exitTimer = this.clock.setTimeout(() => this.endLive(id), theme.anim.exitMs + EXIT_MARGIN_MS);
   }
@@ -498,21 +407,11 @@ export class OverlayService implements OverlayControl {
     this.publish();
   }
 
-  private fadeOut(id: string): void {
-    if (this.manager.beginExit(id)) this.afterExitStarted(id);
-  }
-
-  private handleExpire(id: string, _cause: ExpireCause): void {
-    if (!this.live.has(id)) return;
-    this.emit({ type: "overlay.expired", overlayId: id });
-    this.fadeOut(id);
-  }
-
   private handlePainted(ids: string[]): void {
     for (const id of ids) {
       const l = this.live.get(id);
-      if (!l || l.shownAt !== null || l.ended) continue;
-      l.shownAt = this.clock.now();
+      if (!l || l.shown || l.ended) continue;
+      l.shown = true;
       this.emit({ type: "overlay.shown", overlayId: id });
     }
   }
@@ -520,129 +419,115 @@ export class OverlayService implements OverlayControl {
   private handleAnchorMoved(id: string, elementId: string, bounds: ElementBounds): void {
     const l = this.live.get(id);
     if (!l || l.ended) return;
-    // Same rules as TargetResolver: the display is the one containing the element; an element
-    // moved fully off every display counts as lost.
+    // Same rules as TargetResolver: the display is the one containing the element; an element moved
+    // fully off every display counts as lost.
     const display = displayForRect(bounds.rect, this.displays());
     if (!display) return this.handleAnchorLost(id, elementId);
     for (const slot of l.elements.get(elementId) ?? []) {
       l.resolved.set(slot, { bounds: bounds.rect, displayId: display.id, shape: { kind: "rect" }, elementId });
     }
-    this.manager.update(id, { resolvedBounds: this.primaryBounds(l) ?? null, displayId: this.primaryResolved(l)?.displayId ?? null });
-    this.layout(l);
+    this.manager.update(id, { resolvedBounds: this.primaryBounds(l) ?? null, displayId: kindOfLive(l).primary(l)?.displayId ?? null });
+    this.refresh(l);
     this.publish();
   }
 
   private handleAnchorLost(id: string, elementId: string): void {
     const l = this.live.get(id);
     if (!l || l.ended) return;
-    const slots = l.elements.get(elementId) ?? [];
-    // Steps survive the loss of a non-current step (it may only appear later).
-    const critical =
-      l.steps !== undefined
-        ? !l.steps.completed && slots.includes(`step:${l.steps.current}`)
-        : slots.some((s) => s === "target" || s === "dragTo" || s === "anchor");
-    if (critical) {
-      // Keep the last geometry so the whole annotation fades out together (spec §5.4).
-      this.emit({ type: "overlay.target_lost", overlayId: id });
-      this.fadeOut(id);
-    } else {
-      for (const s of slots) l.resolved.set(s, null);
-      this.layout(l);
-      this.publish();
-    }
+    this.applyLostSlots(l, l.elements.get(elementId) ?? []);
+    if (!l.ended) this.publish();
   }
 
-  /** Displays changed: re-resolve every slot (elements too — their display may be gone or back). */
+  /**
+   * These slots just went away. If the kind can't draw without one of them: fade with target_lost,
+   * keeping the last geometry so the whole drawing fades together (spec §5.4). Otherwise forget them
+   * and re-lay out.
+   */
+  private applyLostSlots(l: Live, lost: Slot[]): void {
+    const kind = kindOfLive(l);
+    if (lost.some((s) => kind.critical(l, s))) {
+      this.fade(l.id, { type: "overlay.target_lost", overlayId: l.id });
+      return;
+    }
+    for (const s of lost) l.resolved.set(s, null);
+    this.refresh(l);
+  }
+
+  /** Displays changed: re-resolve every target (elements too — their display may be gone or back). */
   private async relayoutAll(): Promise<void> {
-    for (const l of [...this.live.values()]) {
+    const gen = ++this.relayoutGen;
+    const lives = [...this.live.values()].filter((l) => !l.ended);
+    const results = await Promise.all(
+      lives.map(async (l) => [l, await Promise.all([...l.slots].map(async ([slot, t]) => [slot, await this.resolver.resolve(t)] as const))] as const),
+    );
+    if (gen !== this.relayoutGen) return; // a newer display change superseded this one
+    for (const [l, rs] of results) {
       if (l.ended) continue;
-      for (const [slot, target] of l.slots) {
-        const r = await this.resolver.resolve(target);
-        l.resolved.set(slot, r.ok ? r.target : null);
+      const lost: Slot[] = [];
+      for (const [slot, r] of rs) {
+        if (r.ok) l.resolved.set(slot, r.target);
+        else if (l.resolved.get(slot)) lost.push(slot);
       }
-      if (l.ended) continue;
-      if (this.lostCriticalSlot(l)) {
-        this.emit({ type: "overlay.target_lost", overlayId: l.id });
-        this.fadeOut(l.id);
-        continue;
-      }
-      this.layout(l);
+      this.applyLostSlots(l, lost);
     }
     this.publish();
   }
 
-  /** The annotation can't be drawn meaningfully any more (its main target(s) are gone). */
-  private lostCriticalSlot(l: Live): boolean {
-    if (l.steps) return !l.steps.completed && !l.resolved.get(`step:${l.steps.current}`);
-    if (l.toolName === "show_explainer") return false; // falls back to centred-right
-    return [...l.slots.keys()].some((s) => (s === "target" || s === "dragTo") && !l.resolved.get(s));
-  }
-
   // ---------------------------------------------------------------- explainer async
 
-  private loadExplainerAsync(l: Live): void {
-    const input = l.input as ShowExplainerInput;
-    this.explainers.load(l.explainer!, input.spec, {
+  private loadExplainerAsync(l: ExplainerLive): void {
+    const resolveOrNull = async (t: Parameters<TargetResolver["resolve"]>[0]) => {
+      const r = await this.resolver.resolve(t);
+      return r.ok ? r.target : null;
+    };
+    this.explainers.load(l.explainer, l.input.spec, {
       withHidden: (fn) => this.deps.sink.withHidden(fn),
       onUpdate: () => {
         if (l.ended) return;
-        this.refreshItem(l);
+        this.refresh(l);
         this.publish();
       },
-      onImage: (panel, ok) => {
+      onImage: (panel, success) => {
         if (l.ended) return;
-        this.emit({ type: ok ? "explainer.image_ready" : "explainer.image_failed", overlayId: l.id, panel });
+        this.emit({ type: success ? "explainer.image_ready" : "explainer.image_failed", overlayId: l.id, panel });
       },
-      resolveCallouts: async (targets) => Promise.all(targets.map(async (t) => {
-        const r = await this.resolver.resolve(t);
-        return r.ok ? r.target : null;
-      })),
-      resolveRegion: async (t) => {
-        const r = await this.resolver.resolve(t);
-        return r.ok ? r.target : null;
-      },
+      resolveCallouts: (targets) => Promise.all(targets.map(resolveOrNull)),
+      resolveRegion: resolveOrNull,
     });
   }
 
   // ---------------------------------------------------------------- layout → render items
 
   private displays(): DisplayInfo[] {
-    return this.deps.screen.getDisplays();
+    return (this.displayCache ??= this.deps.screen.getDisplays());
   }
 
-  private displayOf(r: ResolvedTarget | null | undefined): DisplayInfo {
+  private displayOf(r: ResolvedTarget | null): DisplayInfo {
     const ds = this.displays();
     return (r && findDisplay(r.displayId, ds)) || findDisplay(this.deps.screen.getPrimaryDisplayId(), ds) || ds[0]!;
   }
 
-  private primaryResolved(l: Live): ResolvedTarget | null {
-    if (l.steps) {
-      const idx = Math.min(l.steps.current, l.steps.total - 1);
-      return l.resolved.get(`step:${idx}`) ?? null;
-    }
-    return l.resolved.get(l.toolName === "show_explainer" ? "anchor" : "target") ?? null;
-  }
-
+  /** The target the annotation is about (ToolResult.resolvedBounds); none for an unanchored card. */
   private primaryBounds(l: Live): Rect | undefined {
-    if (l.toolName === "show_explainer" && l.item?.kind === "explainer") return l.item.anchor?.bounds ?? l.item.card;
-    return this.primaryResolved(l)?.bounds;
+    return kindOfLive(l).primary(l)?.bounds;
   }
 
-  /** Rects of other visible annotations' drawings + the avatar, for placement avoidance. */
+  /** Other annotations' drawings + the avatar window, for placement avoidance. */
   private avoidFor(exceptId: string): Rect[] {
     const rects: Rect[] = [...(this.deps.avoidRects?.getAvoidRects() ?? [])];
     for (const l of this.live.values()) {
       if (l.id === exceptId || l.ended || !l.item) continue;
       const it = l.item;
       if (it.kind === "explainer") rects.push(it.card);
-      if ((it.kind === "highlight" || it.kind === "pointer") && it.label) rects.push(it.label.rect);
-      if (it.kind === "highlight" || it.kind === "pointer") rects.push(it.target.bounds);
-      if (it.kind === "pointer") rects.push(pointerBodyRect(it.rest, it.angle));
+      if (it.kind === "highlight" || it.kind === "pointer") {
+        rects.push(it.target.bounds);
+        if (it.label) rects.push(it.label.rect);
+      }
+      if (it.kind === "pointer") rects.push(pointerBody(it.rest, it.angle));
       if (it.kind === "steps") {
-        const half = theme.stepBadgeSize / 2;
         for (const s of it.steps) {
           if (s.target) rects.push(s.target.bounds);
-          if (s.badge) rects.push({ x: s.badge.x - half, y: s.badge.y - half, width: theme.stepBadgeSize, height: theme.stepBadgeSize });
+          if (s.hint) rects.push(squareAt(s.hint, theme.stepHintSize));
           if (s.labelBox) rects.push(s.labelBox.rect);
         }
       }
@@ -652,192 +537,44 @@ export class OverlayService implements OverlayControl {
 
   private placeLabel(text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[]): RenderLabel | null {
     if (!text) return null;
-    const size = measureLabel(text, tone !== undefined);
-    const res = placeBeside({ target: around, size, workArea: display.workArea, avoid, allowShrink: false });
-    return {
-      text,
-      rect: res.rect,
-      ...(tone ? { tone } : {}),
-      connector: res.placement === "corner" ? res.connector : null,
+    const res = placeBeside({ target: around, size: measureLabel(text, tone !== undefined), workArea: display.workArea, avoid, allowShrink: false });
+    return { text, rect: res.rect, ...(tone ? { tone } : {}), connector: res.placement === "corner" ? res.connector : null };
+  }
+
+  /**
+   * Recompute an annotation's render item. A leaving annotation keeps its last geometry (it fades
+   * exactly where it was), as does one whose target is gone.
+   */
+  private refresh(l: Live): void {
+    if (l.ended && l.item) {
+      l.item = { ...l.item, state: "exiting" } as RenderItem;
+      return;
+    }
+    let avoid: Rect[] | null = null;
+    const ctx: LayoutContext = {
+      state: l.ended ? "exiting" : "visible",
+      avoid: () => (avoid ??= this.avoidFor(l.id)),
+      displayOf: (r) => this.displayOf(r),
+      otherDisplayBounds: (d) => this.displays().filter((o) => o.id !== d.id).map((o) => o.bounds),
+      placeLabel: (text, tone, around, display, rects) => this.placeLabel(text, tone, around, display, rects),
+      explainerBody: (state) => this.explainers.body(state),
     };
-  }
-
-  private layout(l: Live): void {
-    this.refreshItem(l);
-  }
-
-  private refreshItem(l: Live): void {
-    const state = l.ended ? "exiting" : "visible";
-    const avoid = this.avoidFor(l.id);
-    const target = (slot: Slot) => {
-      const r = l.resolved.get(slot);
-      return r ? { bounds: r.bounds, shape: r.shape } : null;
-    };
-
-    if (l.toolName === "highlight") {
-      const i = l.input as HighlightInput;
-      const t = target("target");
-      if (!t) return this.keepGeometry(l, state);
-      const display = this.displayOf(l.resolved.get("target"));
-      l.item = {
-        kind: "highlight",
-        id: l.id,
-        state,
-        style: i.style,
-        tone: i.tone,
-        target: t,
-        label: this.placeLabel(i.label, i.tone, t.bounds, display, avoid),
-      };
-      return;
-    }
-
-    if (l.toolName === "point_at") {
-      const i = l.input as PointAtInput;
-      const t = target("target");
-      if (!t) return this.keepGeometry(l, state);
-      const display = this.displayOf(l.resolved.get("target"));
-      const others = this.displays().filter((d) => d.id !== display.id).map((d) => d.bounds);
-      const p = pointerPlacement(t.bounds, display.bounds, theme.pointerSize, others);
-      const drag = i.motion === "drag_to" ? target("dragTo") : null;
-      l.item = {
-        kind: "pointer",
-        id: l.id,
-        state,
-        motion: drag ? "drag_to" : i.motion === "drag_to" ? "tap" : i.motion,
-        target: t,
-        dragTo: drag,
-        entry: p.entry,
-        tap: p.tap,
-        dragEnd: drag ? center(drag.bounds) : null,
-        rest: p.rest,
-        angle: p.angle,
-        label: this.placeLabel(i.label, undefined, p.body, display, [...avoid, t.bounds]),
-      };
-      return;
-    }
-
-    if (l.toolName === "show_steps" && l.steps) {
-      // One step at a time: a ring + "Step i of n · label" on the current control, a small faint
-      // hint on the NEXT control, nothing for the others. Completed: "All done" on the last one.
-      const i = l.input as ShowStepsInput;
-      const st = l.steps;
-      const n = i.steps.length;
-      const focusIdx = st.completed ? n - 1 : st.current;
-      const hintIdx = st.completed ? -1 : st.current + 1;
-      const otherTargets = (idx: number) =>
-        i.steps.flatMap((_, j) => {
-          const o = j === idx ? null : l.resolved.get(`step:${j}`);
-          return o ? [o.bounds] : [];
-        });
-      const hintTarget = hintIdx >= 0 && hintIdx < n ? (l.resolved.get(`step:${hintIdx}`) ?? null) : null;
-      let hint: Point | null = null;
-      let hintRect: Rect | null = null;
-      if (hintTarget) {
-        const size = theme.stepHintSize;
-        hint = badgePlacement(hintTarget.bounds, this.displayOf(hintTarget).workArea, size, otherTargets(hintIdx));
-        hintRect = { x: hint.x - size / 2, y: hint.y - size / 2, width: size, height: size };
-      }
-      const steps: RenderStep[] = i.steps.map((s, idx) => {
-        const r = l.resolved.get(`step:${idx}`) ?? null;
-        let labelBox: RenderLabel | null = null;
-        if (r && idx === focusIdx) {
-          const text = st.completed ? "All done" : `Step ${idx + 1} of ${n} · ${s.label}`;
-          const tone: Tone = st.completed ? "success" : "info";
-          // Never cover the guide's other controls or the next-step hint.
-          const labelAvoid = [...avoid, ...otherTargets(idx), ...(hintRect ? [hintRect] : [])];
-          labelBox = this.placeLabel(text, tone, r.bounds, this.displayOf(r), labelAvoid);
-        }
-        return {
-          index: idx,
-          label: s.label,
-          status: statusOf(st, idx),
-          target: r ? { bounds: r.bounds, shape: r.shape } : null,
-          badge: idx === hintIdx ? hint : null,
-          labelBox,
-        };
-      });
-      l.item = { kind: "steps", id: l.id, state, current: l.steps.current, completed: l.steps.completed, steps };
-      return;
-    }
-
-    if (l.toolName === "show_explainer" && l.explainer) {
-      const i = l.input as ShowExplainerInput;
-      const anchorResolved = l.resolved.get("anchor") ?? null;
-      const region = l.resolved.get("region") ?? null;
-      const designSize = measureCard(i.title, i.spec);
-      const display = this.displayOf(anchorResolved ?? region);
-      // Never cover the thing being explained: an anatomy card also avoids its crop region.
-      const cardAvoid = region ? [...avoid, region.bounds] : avoid;
-      const anchor = anchorResolved ? { bounds: anchorResolved.bounds, shape: anchorResolved.shape } : null;
-      const prev = l.item?.kind === "explainer" ? l.item : null;
-      const place = (size: Size) => {
-        if (anchor) {
-          const res = placeBeside({ target: anchor.bounds, size, workArea: display.workArea, avoid: cardAvoid });
-          return { rect: res.rect, scale: res.scale, connector: res.connector as ExplainerItem["connector"] };
-        }
-        const res = placeCentredRight(size, display.workArea, cardAvoid);
-        return { rect: res.rect, scale: res.scale, connector: null };
-      };
-      let placement: { rect: Rect; scale: number; connector: ExplainerItem["connector"] };
-      let imageScale = 1;
-      let size = designSize;
-      if (prev && l.ended) {
-        placement = { rect: prev.card, scale: prev.scale, connector: prev.connector };
-        imageScale = prev.imageScale;
-        size = prev.designSize;
-      } else {
-        placement = place(designSize);
-        // Reflow before shrinking text: retry with smaller pictures at full text size (fontMin).
-        if (placement.scale < 1 && hasImages(i.spec)) {
-          const compact = measureCard(i.title, i.spec, COMPACT_IMAGE_SCALE);
-          const retry = place(compact);
-          if (retry.scale >= placement.scale) {
-            placement = retry;
-            imageScale = COMPACT_IMAGE_SCALE;
-            size = compact;
-          }
-        }
-        // Still shrunk? Text must stay ≥ fontMin for older eyes: a full-size card in a corner (with a
-        // connector to its anchor) beats a smaller card beside it.
-        if (placement.scale < 1 && anchor) {
-          const full = placeBeside({ target: anchor.bounds, size, workArea: display.workArea, avoid: cardAvoid, allowShrink: false });
-          if (full.scale === 1) placement = { rect: full.rect, scale: 1, connector: full.connector };
-        }
-      }
-      l.item = {
-        kind: "explainer",
-        id: l.id,
-        state,
-        title: i.title,
-        anchor,
-        designSize: size,
-        imageScale,
-        scale: placement.scale,
-        card: placement.rect,
-        connector: placement.connector,
-        body: this.explainers.body(l.explainer),
-      };
-    }
-  }
-
-  /** Target gone but still fading: keep the last geometry, just update state. */
-  private keepGeometry(l: Live, state: "visible" | "exiting"): void {
-    if (l.item) l.item = { ...l.item, state } as RenderItem;
+    const item = kindOfLive(l).layout(l, ctx);
+    if (item) l.item = item;
+    else if (l.item) l.item = { ...l.item, state: ctx.state } as RenderItem;
   }
 
   private publish(): void {
     const items: RenderItem[] = [];
     for (const a of this.manager.all()) {
       if (a.state === "pending") continue;
-      const l = this.live.get(a.id);
-      if (!l?.item) continue;
-      items.push(l.item);
+      const item = this.live.get(a.id)?.item;
+      if (item) items.push(item);
     }
     // Spotlight dims render underneath everything else, so pointers, labels and cards stay bright.
     const isSpotlight = (i: RenderItem) => i.kind === "highlight" && i.style === "spotlight";
     items.sort((a, b) => Number(isSpotlight(b)) - Number(isSpotlight(a)));
-    const reduceMotion = this.deps.reduceMotion?.() ?? theme.reduceMotion;
-    this.deps.sink.publish(items, { reduceMotion });
+    this.deps.sink.publish(items, { reduceMotion: this.deps.reduceMotion?.() ?? theme.reduceMotion });
   }
 
   private emit(e: OverlayEvent): void {

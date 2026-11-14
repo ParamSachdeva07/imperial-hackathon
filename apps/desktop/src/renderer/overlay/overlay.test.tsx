@@ -79,9 +79,9 @@ describe("OverlayScene", () => {
         s.index === 1
           ? { ...s, status: "past", labelBox: null }
           : s.index === 2
-            ? { ...s, status: "current", badge: null, labelBox: { ...item.steps[1]!.labelBox!, text: "Step 3 of 5 · Pick a person" } }
+            ? { ...s, status: "current", hint: null, labelBox: { ...item.steps[1]!.labelBox!, text: "Step 3 of 5 · Pick a person" } }
             : s.index === 4
-              ? { ...s, badge: { x: 10, y: 10 } }
+              ? { ...s, hint: { x: 10, y: 10 } }
               : s,
       ),
     };

@@ -4,6 +4,7 @@
  * bottom-right of the primary work area, where the avatar window usually sits.
  */
 import type { AvoidRectsProvider, DisplayInfo, Rect } from "@pointy/shared/overlay";
+import { parseRect } from "@pointy/shared/overlay/geometry";
 
 export class MockAvoidRects implements AvoidRectsProvider {
   constructor(
@@ -13,12 +14,8 @@ export class MockAvoidRects implements AvoidRectsProvider {
 
   getAvoidRects(): Rect[] {
     if (this.spec === "none") return [];
-    if (this.spec) {
-      const [x, y, width, height] = this.spec.split(",").map(Number);
-      if ([x, y, width, height].every((n) => Number.isFinite(n)) && width! > 0 && height! > 0) {
-        return [{ x: x!, y: y!, width: width!, height: height! }];
-      }
-    }
+    const given = this.spec ? parseRect(this.spec) : null;
+    if (given) return [given];
     const d = this.primary();
     if (!d) return [];
     const w = 320;

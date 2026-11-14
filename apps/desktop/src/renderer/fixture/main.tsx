@@ -51,11 +51,24 @@ function reportBounds(): void {
     if (right - left < 4 || bottom - top < 4) continue;
     elements.push({ id: el.dataset.elementId!, rect: { x: left, y: top, width: right - left, height: bottom - top } });
   }
+  // Skip the IPC when nothing moved (mutations/scrolls often leave every rect unchanged).
+  const key = JSON.stringify(elements);
+  if (key === lastReport) return;
+  lastReport = key;
   window.pointyFixture?.reportBounds({ elements });
 }
 
+let lastReport = "";
+let reportPending = false;
+
+/** Coalesce bursts of resize/scroll/mutation events into one layout read + report per frame. */
 function scheduleReport(): void {
-  requestAnimationFrame(reportBounds);
+  if (reportPending) return;
+  reportPending = true;
+  requestAnimationFrame(() => {
+    reportPending = false;
+    reportBounds();
+  });
 }
 
 function App() {

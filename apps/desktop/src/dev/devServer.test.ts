@@ -9,7 +9,8 @@ import type { DevServer } from "./devServer";
 
 // Never touch a running dev session's ~/.pointy/dev-server.json.
 process.env.POINTY_DEV_FILE = join(mkdtempSync(join(tmpdir(), "pointy-devserver-")), "dev-server.json");
-const { DEV_SERVER_FILE, startDevServer } = await import("./devServer");
+const { startDevServer } = await import("./devServer");
+const { devServerFile } = await import("@pointy/shared/node/devServerFile");
 
 describe("devServer", () => {
   let server: DevServer;
@@ -28,10 +29,10 @@ describe("devServer", () => {
 
   beforeAll(async () => {
     server = await startDevServer(
-      { control, sim: { simMove: vi.fn(), simRemove: vi.fn(), simRestore: vi.fn(), listElementIds: () => ["a"] }, getDisplays: () => [], getPrimaryDisplayId: () => "1" },
+      { control, sim: { simMove: vi.fn(), simRemove: vi.fn(), simRestore: vi.fn(), listElementIds: () => ["a"], listElementRects: () => [] }, getDisplays: () => [], getPrimaryDisplayId: () => "1" },
       0,
     );
-    token = (JSON.parse(readFileSync(DEV_SERVER_FILE, "utf8")) as { token: string }).token;
+    token = (JSON.parse(readFileSync(devServerFile(), "utf8")) as { token: string }).token;
   });
   afterAll(() => server.close());
 

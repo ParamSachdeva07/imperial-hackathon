@@ -1,12 +1,9 @@
 /** Pure geometry helpers for building SVG paths from global-DIP targets. */
 import type { Point, Rect } from "@pointy/shared/overlay/schemas";
 import type { RenderTarget } from "@pointy/shared/overlay/render";
+import { inflate as inflateRect } from "@pointy/shared/overlay/geometry";
 
 const f = (n: number) => Math.round(n * 100) / 100;
-
-export function inflateRect(r: Rect, by: number): Rect {
-  return { x: r.x - by, y: r.y - by, width: r.width + 2 * by, height: r.height + 2 * by };
-}
 
 /** Rounded rectangle path. Always the same command structure so CSS can interpolate `d`. */
 export function roundedRectPath(r: Rect, radius: number): string {
@@ -109,8 +106,4 @@ export function fitContain(box: { width: number; height: number }, aspect: numbe
     width = height * a;
   }
   return { x: (box.width - width) / 2, y: (box.height - height) / 2, width, height };
-}
-
-export function clamp(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, n));
 }

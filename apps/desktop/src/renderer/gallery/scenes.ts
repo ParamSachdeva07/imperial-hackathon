@@ -191,7 +191,7 @@ function step(
     label: text,
     status,
     target: found ? rt(r) : null,
-    badge: found && opts.hint ? { x: r.x - 26, y: r.y + r.height / 2 } : null,
+    hint: found && opts.hint ? { x: r.x - 26, y: r.y + r.height / 2 } : null,
     labelBox: found && opts.focus ? label(labelText, r.x, r.y + r.height + 28, opts.focus === "done" ? "success" : "info") : null,
   };
 }

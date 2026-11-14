@@ -29,6 +29,12 @@ export interface ExpiryEntry {
   coordinateOnly: boolean;
 }
 
+/** The expiry rules as pure predicates, so in-flight tool calls can be cancelled by the same rules. */
+export const expiresAtTurnStart = (e: Pick<ExpiryEntry, "expires">): boolean =>
+  e.expires === undefined || e.expires === "next_turn";
+export const expiresOnContextChange = (e: Pick<ExpiryEntry, "expires" | "coordinateOnly">): boolean =>
+  e.coordinateOnly || e.expires === "context_change";
+
 export interface ExpiryManagerOptions {
   clock?: Clock;
   onExpire: (id: string, cause: ExpireCause) => void;
@@ -73,11 +79,11 @@ export class ExpiryManager {
   }
 
   onTurnStart(_turnId: string): void {
-    this.expireWhere((e) => e.expires === undefined || e.expires === "next_turn", "next_turn");
+    this.expireWhere(expiresAtTurnStart, "next_turn");
   }
 
   onContextChange(): void {
-    this.expireWhere((e) => e.coordinateOnly || e.expires === "context_change", "context_change");
+    this.expireWhere(expiresOnContextChange, "context_change");
   }
 
   onTargetSelected(elementId: string): void {

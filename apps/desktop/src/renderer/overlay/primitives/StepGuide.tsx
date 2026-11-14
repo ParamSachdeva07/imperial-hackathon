@@ -6,7 +6,7 @@ import { Ring, RingHalo } from "./Ring";
 
 /** Small, faint numbered circle on the NEXT step's control — a hint of what comes next. */
 export function StepHint({ step }: { step: RenderStep }) {
-  const at = step.badge;
+  const at = step.hint;
   if (!at) return null;
   const size = theme.stepHintSize;
   return (
@@ -30,7 +30,7 @@ export function StepHint({ step }: { step: RenderStep }) {
  */
 export function StepsView({ item }: { item: StepsItem }) {
   const focus = item.steps.find((s) => s.labelBox) ?? item.steps.find((s) => s.status === "current" && s.target);
-  const hint = item.steps.find((s) => s.badge);
+  const hint = item.steps.find((s) => s.hint);
   const tone = item.completed ? "success" : "info";
   return (
     <div className={`item item-steps ${item.state}${item.completed ? " completed" : ""}`} data-item={item.id}>

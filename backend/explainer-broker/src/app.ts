@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { BodyTooLarge, isJsonRequest, isLocalHostHeader, readJsonBody, sendJson as send } from "@pointy/shared/node/http";
 import { z } from "zod";
 import { type ImageService } from "./imageService.js";
 
@@ -12,54 +13,25 @@ export const ImageRequest = z.object({
     .optional(),
 });
 
-function send(res: ServerResponse, status: number, body: unknown): void {
-  const text = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
-  res.end(text);
-}
-
-class BodyTooLarge extends Error {}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => {
-      size += c.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new BodyTooLarge());
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
-  });
-}
-
 export function createBrokerServer(service: ImageService, getBaseUrl: () => string): Server {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://localhost");
 
+    // Localhost only, also against DNS rebinding (a web page must not spend the user's fal.ai credits).
+    if (!isLocalHostHeader(req)) return send(res, 403, { error: "forbidden" });
+
     if (req.method === "POST" && url.pathname === "/explainer/image") {
-      if (!(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
-        return send(res, 415, { error: "content-type must be application/json" });
-      }
-      let raw: string;
+      if (!isJsonRequest(req)) return send(res, 415, { error: "content-type must be application/json" });
+      let json: unknown;
       try {
-        raw = await readBody(req);
+        json = await readJsonBody(req, MAX_BODY_BYTES);
       } catch (e) {
         if (e instanceof BodyTooLarge) {
           res.setHeader("connection", "close");
           return send(res, 413, { error: "body too large" });
         }
+        if (e instanceof SyntaxError) return send(res, 400, { error: "invalid JSON" });
         throw e;
-      }
-      let json: unknown;
-      try {
-        json = JSON.parse(raw);
-      } catch {
-        return send(res, 400, { error: "invalid JSON" });
       }
       const parsed = ImageRequest.safeParse(json);
       if (!parsed.success) return send(res, 400, { error: "invalid request: prompt (1-300 chars) required" });

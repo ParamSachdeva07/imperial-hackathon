@@ -4,7 +4,7 @@
  * negative origins. `local = global - display.bounds.{x,y}`. Pixels = DIP × scaleFactor.
  */
 import type { DisplayInfo, Point, Rect } from "@pointy/shared/overlay";
-import { bottomOf, center, intersection, intersects, rightOf } from "./geometry";
+import { bottomOf, center, containsPointHalfOpen, intersection, intersects, rightOf } from "./geometry";
 
 /** Structural subset of Electron's `Display`, so this module stays Electron-free. */
 export interface DisplayLike {
@@ -69,12 +69,7 @@ export function findDisplay(id: string, displays: DisplayInfo[]): DisplayInfo | 
 
 /** Display whose bounds contain p (edges: left/top inclusive, right/bottom exclusive). */
 export function displayContaining(p: Point, displays: DisplayInfo[]): DisplayInfo | null {
-  return (
-    displays.find(
-      (d) =>
-        p.x >= d.bounds.x && p.x < rightOf(d.bounds) && p.y >= d.bounds.y && p.y < bottomOf(d.bounds),
-    ) ?? null
-  );
+  return displays.find((d) => containsPointHalfOpen(d.bounds, p)) ?? null;
 }
 
 /** Display containing the rect's centre; otherwise the display with the largest overlap; else null. */

@@ -9,28 +9,18 @@
  *
  * Needs OPENAI_API_KEY in the repo-root .env. Dev-only.
  */
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DisplayInfo } from "@pointy/shared/overlay";
+import type { DisplayInfo, ElementRect } from "@pointy/shared/overlay";
+import { devCall, readDevConnection } from "@pointy/shared/node/devServerFile";
+import { delay, loadRepoEnv } from "@pointy/shared/node/env";
+import { readManifestPrompts } from "../apps/desktop/src/main/overlay/explainer/manifest";
 import { mintClientSecret, REALTIME_MODEL, type HarnessContext } from "../apps/desktop/src/dev/realtime/realtimeSession";
 
 const root = resolve(fileURLToPath(import.meta.url), "../..");
-process.loadEnvFile(join(root, ".env"));
-const conn = JSON.parse(readFileSync(process.env.POINTY_DEV_FILE ?? join(homedir(), ".pointy", "dev-server.json"), "utf8")) as {
-  port: number;
-  token: string;
-};
-
-async function dev(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(`http://127.0.0.1:${conn.port}${path}`, {
-    method,
-    headers: { "x-pointy-token": conn.token, ...(body ? { "content-type": "application/json" } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  return res.json();
-}
+loadRepoEnv(root);
+const conn = readDevConnection();
+const dev = <T = unknown>(method: "GET" | "POST", path: string, body?: unknown) => devCall<T>(conn, method, path, body);
 
 const REQUESTS = process.argv.slice(2).length
   ? process.argv.slice(2)
@@ -53,24 +43,18 @@ interface Call {
 
 async function main() {
   // Same context the voice window uses: live element list from the running app.
-  if (((await dev("GET", "/elements")) as string[]).length === 0) {
+  if ((await dev<string[]>("GET", "/elements")).length === 0) {
     console.log("No on-screen elements — opening the fake mail app first.");
     await dev("POST", "/fixture", {});
   }
-  const elements = (await dev("GET", "/element-rects")) as { id: string; rect: { x: number; y: number; width: number; height: number } }[];
-  const state = (await dev("GET", "/displays")) as { primary: string; displays: DisplayInfo[] };
+  const elements = await dev<ElementRect[]>("GET", "/element-rects");
+  const state = await dev<{ primary: string; displays: DisplayInfo[] }>("GET", "/displays");
+  const imagePrompts = await readManifestPrompts(join(root, "assets/explainers"));
   const ctx: HarnessContext = {
     listElements: () => elements,
     getDisplays: () => state.displays,
     primaryDisplayId: () => state.primary,
-    pregeneratedImagePrompts: () => {
-      try {
-        const m = JSON.parse(readFileSync(join(root, "assets/explainers/manifest.json"), "utf8")) as { entries: { prompt: string }[] };
-        return m.entries.map((e) => e.prompt);
-      } catch {
-        return [];
-      }
-    },
+    pregeneratedImagePrompts: async () => imagePrompts,
   };
   const secret = await mintClientSecret(process.env.OPENAI_API_KEY!, ctx);
   console.log(`model ${secret.model}, ${elements.length} on-screen elements\n`);
@@ -138,7 +122,7 @@ async function main() {
         } catch {
           args = c.arguments;
         }
-        const out = (await dev("POST", "/tool", { name: c.name, input: args })) as { result: unknown };
+        const out = await dev<{ result: unknown }>("POST", "/tool", { name: c.name, input: args });
         calls.push({ name: c.name, args, result: out.result });
         send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: c.call_id, output: JSON.stringify(out.result) } });
       }
@@ -153,7 +137,7 @@ async function main() {
     }
     if (calls.length === 0) console.log("   (no tool call)");
     console.log(`   says: ${text.slice(0, 160)}${text.length > 160 ? "…" : ""}\n`);
-    await new Promise((r) => setTimeout(r, 2500)); // leave it on screen briefly
+    await delay(2500); // leave it on screen briefly
   }
   ws.close();
   console.log(`${drawnTurns}/${REQUESTS.length} requests drew something visible.`);

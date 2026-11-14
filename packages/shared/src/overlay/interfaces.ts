@@ -34,6 +34,14 @@ export interface AvoidRectsProvider {
   getAvoidRects(): Rect[];
 }
 
+/** Who issued a tool call; reported as `by` on overlay.dismissed (e.g. the controller's clear on stop). */
+export type Caller = "user" | "model" | "controller";
+
+export interface ToolCallOptions {
+  /** Default "model". */
+  caller?: Caller;
+}
+
 /** Calls the controller makes into the overlay. */
 export interface OverlayControl {
   /**
@@ -41,7 +49,7 @@ export interface OverlayControl {
    * reported as `by` on the resulting `overlay.dismissed` events (e.g. the controller's
    * `clear("all")` on stop/cancel).
    */
-  handleTool(name: string, input: unknown, opts?: { caller?: "user" | "model" | "controller" }): Promise<ToolResult>;
+  handleTool(name: string, input: unknown, opts?: ToolCallOptions): Promise<ToolResult>;
   onTurnStart(turnId: string): void;
   onContextChange(): void;
   onTargetSelected(elementId: string): void;

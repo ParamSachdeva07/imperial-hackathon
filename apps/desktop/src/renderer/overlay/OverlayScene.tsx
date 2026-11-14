@@ -3,7 +3,7 @@ import type { RenderScene } from "@pointy/shared/overlay/render";
 import { CardView } from "./explainer/Card";
 import { HighlightView } from "./HighlightView";
 import { PointerView } from "./primitives/Pointer";
-import { StepsView } from "./primitives/StepBadges";
+import { StepsView } from "./primitives/StepGuide";
 import { allKeyframesCss } from "./pointerTimeline";
 import { themeStyle } from "./tokens";
 

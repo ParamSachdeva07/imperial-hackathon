@@ -92,7 +92,7 @@ export interface RenderStep {
    * Centre of the small faint "next step" hint (global DIP). Only the step right after the current
    * one has it (one step at a time); null for every other step.
    */
-  badge: Point | null;
+  hint: Point | null;
   /**
    * The step label ("Step i of n · …", tone info) — only on the current step; when the guide is
    * completed, "All done" (tone success) on the last step.
@@ -189,7 +189,13 @@ export const IPC = {
   fixtureBounds: "fixture:bounds",
 } as const;
 
+/** An element id with its rect (global DIP unless stated otherwise). */
+export interface ElementRect {
+  id: string;
+  rect: Rect;
+}
+
 /** Fixture window → main: element rects relative to the window's content (viewport) origin, DIP. */
 export interface FixtureBoundsMessage {
-  elements: { id: string; rect: Rect }[];
+  elements: ElementRect[];
 }

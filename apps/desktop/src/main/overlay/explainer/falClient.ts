@@ -10,12 +10,14 @@
  *  3. Images are returned as data URLs (renderer CSP allows only data: images).
  *  Never throws: failures resolve to { ok:false, error }.
  *
- * Manifest format: { "entries": [{ "prompt": string, "styleId": string, "file": string }] }, where
- * `file` is relative to assetsDir. Entries match by exact trimmed prompt + styleId ("default" when
- * styleId is omitted).
+ * Manifest (see manifest.ts): entries match by exact trimmed prompt + styleId ("default" when
+ * styleId is omitted), then by a conservative fuzzy prompt match.
  */
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_STYLE_ID, manifestPath, parseManifest, type ManifestEntry } from "./manifest";
+
+export { DEFAULT_STYLE_ID } from "./manifest";
 
 export type ImageResult =
   | { ok: true; dataUrl: string; source: "asset" | "broker" }
@@ -32,7 +34,6 @@ export interface FalClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-export const DEFAULT_STYLE_ID = "default";
 const DEFAULT_TIMEOUT_MS = 8000;
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -41,12 +42,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
 };
-
-interface ManifestEntry {
-  prompt: string;
-  styleId: string;
-  file: string;
-}
 
 class BrokerError extends Error {}
 class TimeoutError extends Error {}
@@ -80,6 +75,7 @@ export class FalClient implements ImageSource {
   private readonly fetchImpl: typeof fetch;
   /** Parsed manifest, keyed by its mtime so running `npm run pregen` while the app runs takes effect. */
   private manifest: { mtimeMs: number; entries: Promise<ManifestEntry[]> } | null = null;
+  private readonly assetCache = new Map<string, string>();
 
   constructor(private readonly opts: FalClientOptions) {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -102,7 +98,7 @@ export class FalClient implements ImageSource {
   }
 
   private async loadManifest(): Promise<ManifestEntry[]> {
-    const file = path.join(this.opts.assetsDir, "manifest.json");
+    const file = manifestPath(this.opts.assetsDir);
     let mtimeMs: number;
     try {
       mtimeMs = (await stat(file)).mtimeMs;
@@ -112,19 +108,7 @@ export class FalClient implements ImageSource {
     }
     if (this.manifest?.mtimeMs !== mtimeMs) {
       const entries = readFile(file, "utf8")
-        .then((text) => {
-          const parsed: unknown = JSON.parse(text);
-          const list = (parsed as { entries?: unknown }).entries;
-          if (!Array.isArray(list)) return [];
-          return list.filter(
-            (e): e is ManifestEntry =>
-              typeof e === "object" &&
-              e !== null &&
-              typeof (e as ManifestEntry).prompt === "string" &&
-              typeof (e as ManifestEntry).styleId === "string" &&
-              typeof (e as ManifestEntry).file === "string",
-          );
-        })
+        .then((text) => parseManifest(JSON.parse(text)))
         .catch(() => {
           this.manifest = null;
           return [] as ManifestEntry[];
@@ -150,11 +134,15 @@ export class FalClient implements ImageSource {
     if (!file.startsWith(root + path.sep)) return null;
     const mime = MIME_BY_EXT[path.extname(file).toLowerCase()];
     if (!mime) return null;
+    const cached = this.assetCache.get(file);
+    if (cached) return cached;
     try {
       const bytes = await readFile(file);
       const sniffed = sniffImageType(bytes);
       if (!sniffed) return null; // corrupt asset: fall through to the broker
-      return `data:${sniffed};base64,${bytes.toString("base64")}`;
+      const dataUrl = `data:${sniffed};base64,${bytes.toString("base64")}`;
+      this.assetCache.set(file, dataUrl); // pre-generated assets are fixed files: encode once
+      return dataUrl;
     } catch {
       return null; // missing asset file: fall through to the broker
     }

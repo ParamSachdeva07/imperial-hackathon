@@ -18,6 +18,7 @@ import type { Point, Rect, Segment, Size } from "@pointy/shared/overlay";
 import {
   bottomOf,
   center,
+  clamp,
   containsPoint,
   containsRect,
   distance,
@@ -51,7 +52,6 @@ const SHRINK = 0.8;
 const REST_GAP = 8;
 const BADGE_GAP = 8;
 
-const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), Math.max(lo, hi));
 
 const scaled = (size: Size, scale: number): Size => ({ width: size.width * scale, height: size.height * scale });
 
@@ -238,26 +238,27 @@ function placeFrom(entry: Point, tap: Point, target: Rect, pointerSize: number):
   const t = Math.min(ux !== 0 ? halfW / Math.abs(ux) : Infinity, uy !== 0 ? halfH / Math.abs(uy) : Infinity);
   const rest = { x: tap.x - ux * t, y: tap.y - uy * t };
 
-  const bodyCentre = { x: rest.x - (ux * pointerSize) / 2, y: rest.y - (uy * pointerSize) / 2 };
-  const body = {
-    x: bodyCentre.x - pointerSize / 2,
-    y: bodyCentre.y - pointerSize / 2,
-    width: pointerSize,
-    height: pointerSize,
-  };
-  return { entry, tap, rest, angle, body };
+  return { entry, tap, rest, angle, body: pointerBody(rest, angle, pointerSize) };
+}
+
+/** The resting pointer's body: a pointerSize square behind the tip, opposite the pointing direction. */
+export function pointerBody(rest: Point, angle: number, pointerSize: number = theme.pointerSize): Rect {
+  const rad = (angle * Math.PI) / 180;
+  const cx = rest.x - (Math.cos(rad) * pointerSize) / 2;
+  const cy = rest.y - (Math.sin(rad) * pointerSize) / 2;
+  return { x: cx - pointerSize / 2, y: cy - pointerSize / 2, width: pointerSize, height: pointerSize };
 }
 
 /**
- * Centre for a numbered step badge pinned beside (never on top of) the target: left of the target
+ * Centre for the small next-step hint pinned beside (never on top of) the target: left of the target
  * (vertically centred, 8 DIP gap) if it fits in the work area, else right, else above, else below.
  * When none fits, the left position is clamped into the work area.
  */
-export function badgePlacement(
+export function hintPlacement(
   target: Rect,
   workArea: Rect,
-  badgeSize: number = theme.stepBadgeSize,
-  /** Other controls (e.g. the guide's other steps) the badge must not cover, when possible. */
+  badgeSize: number = theme.stepHintSize,
+  /** Other controls (e.g. the guide's other steps) the hint must not cover, when possible. */
   avoid: Rect[] = [],
 ): Point {
   const c = center(target);
@@ -279,3 +280,61 @@ export function badgePlacement(
   };
 }
 
+
+export interface CardPlacementInput {
+  /** The thing the card explains (card goes beside it), or null → centred-right of the screen. */
+  anchor: Rect | null;
+  /** The card's design size at an image scale (1 = normal pictures). */
+  measure: (imageScale: number) => Size;
+  /** Whether the card has pictures that can be made smaller. */
+  hasImages: boolean;
+  workArea: Rect;
+  avoid: Rect[];
+  /** Picture scale for the compact re-layout. */
+  compactImageScale: number;
+}
+
+export interface CardPlacement {
+  rect: Rect;
+  /** Whole-card scale (1, or less when nothing else fits). */
+  scale: number;
+  connector: Segment | null;
+  imageScale: number;
+  designSize: Size;
+}
+
+/**
+ * Where an explainer card goes, keeping text at full size (fontMin) whenever possible:
+ *  1. beside the anchor (placeBeside) — or centred-right when there is no anchor;
+ *  2. if that had to shrink the card: re-lay it out with smaller pictures (compactImageScale);
+ *  3. still shrunk and anchored: a full-size card in a corner with a connector beats a smaller
+ *     card beside the anchor.
+ */
+export function placeCard(input: CardPlacementInput): CardPlacement {
+  const { anchor, workArea, avoid } = input;
+  const place = (size: Size): Omit<CardPlacement, "imageScale" | "designSize"> => {
+    if (anchor) {
+      const r = placeBeside({ target: anchor, size, workArea, avoid });
+      return { rect: r.rect, scale: r.scale, connector: r.connector };
+    }
+    const r = placeCentredRight(size, workArea, avoid);
+    return { rect: r.rect, scale: r.scale, connector: null };
+  };
+  let designSize = input.measure(1);
+  let imageScale = 1;
+  let placed = place(designSize);
+  if (placed.scale < 1 && input.hasImages) {
+    const compact = input.measure(input.compactImageScale);
+    const retry = place(compact);
+    if (retry.scale >= placed.scale) {
+      placed = retry;
+      imageScale = input.compactImageScale;
+      designSize = compact;
+    }
+  }
+  if (placed.scale < 1 && anchor) {
+    const full = placeBeside({ target: anchor, size: designSize, workArea, avoid, allowShrink: false });
+    if (full.scale === 1) placed = { rect: full.rect, scale: 1, connector: full.connector };
+  }
+  return { ...placed, imageScale, designSize };
+}

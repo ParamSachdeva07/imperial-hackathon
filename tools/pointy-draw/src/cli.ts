@@ -3,37 +3,16 @@
  * Connection details come from ~/.pointy/dev-server.json, written by the running app.
  */
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import { DEV_TOKEN_HEADER, devCall, readDevConnection, type DevConnection } from "@pointy/shared/node/devServerFile";
 import { fileURLToPath } from "node:url";
 import { parseCommand, UsageError, wantsWaitShown, type Request } from "./args";
 
-interface Conn {
-  port: number;
-  token: string;
-}
+type Conn = DevConnection;
 
 const CLI_DIR = resolve(fileURLToPath(import.meta.url), "../..");
 
-function connection(): Conn {
-  const file = process.env.POINTY_DEV_FILE ?? join(homedir(), ".pointy", "dev-server.json");
-  try {
-    return JSON.parse(readFileSync(file, "utf8")) as Conn;
-  } catch {
-    throw new Error(`Pointy dev app is not running (no ${file}). Start it with: npm run dev`);
-  }
-}
-
-async function call(conn: Conn, method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
-  const res = await fetch(`http://127.0.0.1:${conn.port}${path}`, {
-    method,
-    headers: { "x-pointy-token": conn.token, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const data: unknown = await res.json();
-  if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(data)}`);
-  return data;
-}
+const call = devCall;
 
 /** Resolve a JSON file relative to cwd, then to the CLI package (so examples/... works anywhere). */
 function readJsonFile(path: string): unknown {
@@ -56,7 +35,7 @@ interface SseEvent {
 /** Subscribe to /events; returns a stop function. */
 async function subscribe(conn: Conn, onEvent: (e: SseEvent) => void): Promise<() => void> {
   const ctrl = new AbortController();
-  const res = await fetch(`http://127.0.0.1:${conn.port}/events`, { headers: { "x-pointy-token": conn.token }, signal: ctrl.signal });
+  const res = await fetch(`http://127.0.0.1:${conn.port}/events`, { headers: { [DEV_TOKEN_HEADER]: conn.token }, signal: ctrl.signal });
   if (!res.ok || !res.body) throw new Error(`events: ${res.status}`);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -83,7 +62,7 @@ async function subscribe(conn: Conn, onEvent: (e: SseEvent) => void): Promise<()
 }
 
 async function run(argv: string[]): Promise<number> {
-  const conn = connection();
+  const conn = readDevConnection();
   const displays = (await call(conn, "GET", "/displays")) as { primary: string };
   const req: Request = parseCommand(argv, { primaryDisplayId: displays.primary, readJsonFile });
 

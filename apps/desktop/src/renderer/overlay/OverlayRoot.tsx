@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RenderItem, RenderScene } from "@pointy/shared/overlay/render";
 import type { Rect } from "@pointy/shared/overlay/schemas";
+import { intersects } from "@pointy/shared/overlay/geometry";
 import { rehydrateImages } from "@pointy/shared/overlay/sceneImages";
 import { OverlayScene } from "./OverlayScene";
 
@@ -31,11 +32,9 @@ function itemRects(item: RenderItem): Rect[] {
   }
 }
 
-const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-
 /** Only the window that actually shows an item acks its paint (multi-display). */
 export function isOnThisDisplay(item: RenderItem, display: Rect): boolean {
-  return itemRects(item).some((r) => overlaps(r, display));
+  return itemRects(item).some((r) => intersects(r, display));
 }
 
 export function OverlayRoot() {

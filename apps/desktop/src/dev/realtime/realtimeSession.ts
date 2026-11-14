@@ -7,17 +7,17 @@
  * (POST /v1/realtime/client_secrets) and hand only that to the voice window, which then does the
  * WebRTC SDP exchange with POST /v1/realtime/calls. (API verified against the OpenAI docs, Nov 2026.)
  */
-import { exportToolDefinitions, type DisplayInfo } from "@pointy/shared/overlay";
+import { exportToolDefinitions, type DisplayInfo, type ElementRect } from "@pointy/shared/overlay";
 
 export const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1";
 const SECRET_TTL_SECONDS = 600;
 
 export interface HarnessContext {
-  listElements(): { id: string; rect: { x: number; y: number; width: number; height: number } }[];
+  listElements(): ElementRect[];
   getDisplays(): DisplayInfo[];
   primaryDisplayId(): string;
   /** imagePrompts with pre-generated images (instant, offline). */
-  pregeneratedImagePrompts(): string[];
+  pregeneratedImagePrompts(): Promise<string[]>;
 }
 
 export function buildInstructions(ctx: HarnessContext): string {
@@ -54,7 +54,7 @@ export async function mintClientSecret(apiKey: string, ctx: HarnessContext): Pro
           input: { transcription: { model: "gpt-4o-transcribe" } },
           output: { voice: "marin" },
         },
-        tools: exportToolDefinitions({ pregeneratedImagePrompts: ctx.pregeneratedImagePrompts() }),
+        tools: exportToolDefinitions({ pregeneratedImagePrompts: await ctx.pregeneratedImagePrompts() }),
         tool_choice: "auto",
       },
     }),

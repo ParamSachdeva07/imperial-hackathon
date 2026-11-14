@@ -53,7 +53,6 @@ export const themeVars: Record<string, string> = {
   "--easing": theme.anim.easing,
   "--card-enter-scale": String(theme.anim.cardEnterScale),
   "--pointer-size": px(theme.pointerSize),
-  "--badge-size": px(theme.stepBadgeSize),
 };
 
 export const themeStyle = themeVars as CSSProperties;
