@@ -11,3 +11,5 @@ coverage/
 backend/explainer-broker/.cache/
 artifacts/
 .claude/
+
+apps/desktop/resources/bin/

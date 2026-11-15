@@ -15,7 +15,7 @@ import { DevSessionController } from "./DevSessionController";
 import type { CaptureHiding } from "./captureHiding";
 import { feedbackCaptureHiding, launchGestureFeedback } from "./feedbackHost";
 import { parseGestureConfig } from "./gestureConfig";
-import { gateMouseToSession } from "./MouseGate";
+import { gateMouseToSession, type MouseGateSession } from "./MouseGate";
 import { ACCESSIBILITY_HINT, createMouseOffHint, MOUSE_OFF_STARTUP } from "./MouseHint";
 import { SimGestureService } from "./SimGestureService";
 import { MouseEventSink, mergeMouseSources, type MouseSource } from "./SimMouseSink";
@@ -60,6 +60,8 @@ export interface StartGesturesOptions {
   /** Repo root (to find packages/gestures/.cache/public). */
   repoRoot: string;
   env?: NodeJS.ProcessEnv;
+  /** Production: the gesture session is opened/closed only by the caller (AssistantController); no idle timer. */
+  manualSession?: boolean;
 }
 
 export interface GesturesHandle {
@@ -74,6 +76,9 @@ export interface GesturesHandle {
   feedback: GestureFeedback | null;
   /** Remove the selected point/region from the feedback window (e.g. when the controller ends the turn). */
   clearSelection(): void;
+  /** Mouse kill switch: detaches the system mouse at once and blocks re-attach while off. No-op when mouse control was not enabled at start. */
+  setMouseEnabled(on: boolean): void;
+  readonly mouseEnabled: boolean;
   /** Capture exclusion for all feedback windows, also the lazy simulation one (same contract as the overlay's getOverlayWindowIds/withOverlayHidden). */
   captureHiding: CaptureHiding;
   dispose(): void;
@@ -110,6 +115,7 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
       service: sim,
       idleMs: Number.isFinite(idleMs) && idleMs > 0 ? idleMs : DEFAULT_IDLE_MS,
       log,
+      ...(opts.manualSession ? { manual: true } : {}),
     });
     disposers.push(() => sessionCtl.dispose());
 
@@ -117,13 +123,26 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     const feedback = await launchGestureFeedback(sim, env, log);
     if (feedback) disposers.push(() => feedback.dispose());
 
+    let mouseOn = mouseEnabled;
+    const mouseListeners = new Set<(active: boolean) => void>();
+    const gatedSession: MouseGateSession = {
+      isActive: () => sessionCtl.isActive() && mouseOn,
+      onChange(cb) {
+        mouseListeners.add(cb);
+        const off = sessionCtl.onChange(() => cb(gatedSession.isActive()));
+        return () => {
+          mouseListeners.delete(cb);
+          off();
+        };
+      },
+    };
     if (mouseEnabled) {
       // nut-js silently does nothing without Accessibility, while the log would still say "attached".
       if (process.platform === "darwin" && !systemPreferences.isTrustedAccessibilityClient(true)) log(ACCESSIBILITY_HINT);
       // Real events plus, because the flag is on, simulated ones (dev CLI) via the sink. attachSystemMouse is
       // attached only while the session is open, and the sim forwards only while it is open, so both are session-gated.
       const source = mergeMouseSources(service as MouseSource, mouseSink);
-      disposers.push(gateMouseToSession(sessionCtl, () => attachSystemMouse(source as unknown as GestureService, { log }), log));
+      disposers.push(gateMouseToSession(gatedSession, () => attachSystemMouse(source as unknown as GestureService, { log }), log));
     } else {
       log(MOUSE_OFF_STARTUP);
       disposers.push(service.onAny(createMouseOffHint(log)));
@@ -135,6 +154,15 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
       session: sessionCtl,
       feedback,
       clearSelection: () => feedback?.clearSelection(),
+      setMouseEnabled(on) {
+        if (!mouseEnabled || on === mouseOn) return;
+        mouseOn = on;
+        log(`mouse control ${on ? "enabled" : "DISABLED (kill switch)"}`);
+        for (const l of [...mouseListeners]) l(gatedSession.isActive());
+      },
+      get mouseEnabled() {
+        return mouseOn;
+      },
       captureHiding: feedbackCaptureHiding,
       dispose() {
         for (const d of disposers.reverse()) {

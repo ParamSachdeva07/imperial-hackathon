@@ -28,6 +28,10 @@ This project is a local Electron + React + TypeScript desktop overlay with a Pyt
 - Preserve the launcher fill `#D7EBBC`; use a simple `#0088FF` avatar border and Apple’s default/light system green `#34C759` and red `#FF383C` for the mute/end controls. Prefer SF Pro/system typography, readable dark glyphs on colored fills, and clear muted-state icons/labels. Respect reduced motion for reveal/expansion.
 - Keep loading/error feedback inside the circle, keyboard alternatives, focus visibility and reduced-motion support. Escape ends the call and collapses; restore launcher focus for keyboard actions, while pointer hangup allows it to hide. No transcript panel, text composer or title bar in this compact interface. Video retains the background produced by Anam; transparent window chrome is not video background removal.
 
+## Speak-only exception (`ANAM_SPEAK_ONLY=1`)
+
+When Pointy drives the avatar through the control API, the persona LLM is disabled and the avatar only speaks text sent via `talk()` / talk streams. This is the only exception to "clicking starts a call": a session may also be started by the control API, which is an explicit user action in Pointy (gesture or hotkey). In this mode never capture or request the microphone (`disableInputAudio: true`, permission handlers deny media) and never use `sendUserMessage` or `addContext`. End-call and the 3-minute idle stop still collapse to the dot. Without the env var, none of this code path is reachable and the rules above apply unchanged. Tests must set `ANAM_CONTROL_FILE`/`ANAM_CONTROL_PORT` and never use a paid session.
+
 ## Verification and commands
 
 - `npm run build` checks TypeScript and builds Electron plus React.

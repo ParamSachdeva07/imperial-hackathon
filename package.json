@@ -19,6 +19,7 @@
     "pregen": "tsx scripts/pregen-demo-images.ts",
     "postinstall": "node node_modules/electron/install.js",
     "voice": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_VOICE=1 npx electron .",
+    "pointy": "node scripts/pointy.mjs",
     "app": "npm run build -w @pointy/desktop && cd apps/desktop && npx electron .",
     "gestures:assets": "node packages/gestures/scripts/copy-wasm.mjs && npm run fetch-model -w @pointy/gestures",
     "app:gestures": "npm run build -w @pointy/desktop && cd apps/desktop && POINTY_GESTURES=1 npx electron .",

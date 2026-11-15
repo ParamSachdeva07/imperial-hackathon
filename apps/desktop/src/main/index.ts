@@ -30,6 +30,8 @@
  *   (no flag needed to simulate gestures without a camera: dev server POST /gesture, CLI
  *   `pointy-draw gesture ...`; the feedback window then starts lazily on the first call)
  *   POINTY_DEV_PORT / POINTY_DEV_FILE   dev server port / connection file (isolated test runs)
+ *   POINTY_MODE=production  the real-desktop composition in ./production.ts (`npm run pointy`); this file's
+ *                           dev composition is skipped. POINTY_DEV_SERVER=1 adds the dev server there.
  */
 import { join, resolve } from "node:path";
 import { app, dialog, screen } from "electron";
@@ -52,9 +54,12 @@ import { feedbackCaptureHiding } from "./gestures/feedbackHost";
 import { registerGestureAssetScheme, startGestures, type GesturesHandle } from "./gestures/startGestures";
 import { PRELOAD_DIR } from "./rendererPages";
 import { installDevLogging, startDevHarness } from "../dev/devHarness";
+import { resolveMode } from "./mode";
+import { startProduction } from "./production";
 
 const repoRoot = resolve(__dirname, "../../../..");
 const env = (name: string) => process.env[name];
+const mode = resolveMode(process.env, app.isPackaged);
 
 // Privileged schemes must be registered before app ready.
 registerGestureAssetScheme();
@@ -85,6 +90,11 @@ async function main(): Promise<void> {
   if (env("POINTY_PROBE") === "1") {
     startProbe(contentProtection);
     console.log(`[pointy] probe overlay started (contentProtection=${contentProtection})`);
+    return;
+  }
+
+  if (mode.production) {
+    await startProduction({ repoRoot, contentProtection, devServer: mode.devServer });
     return;
   }
 
@@ -176,7 +186,7 @@ app.on("window-all-closed", () => {
   // Overlay windows are always present; keep running until explicitly quit.
 });
 
-if (!app.isPackaged) installDevLogging(); // before any window exists, so overlay windows are covered too
+if (mode.devLogging) installDevLogging(); // before any window exists, so overlay windows are covered too
 
 // One Pointy per user session (isolated test runs with their own POINTY_DEV_FILE are exempt). A
 // second `npm run voice` hands over to the running instance, which opens its voice window.

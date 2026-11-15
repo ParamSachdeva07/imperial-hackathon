@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { SpeakController } from './speak.mjs';
 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type ControlState = { expanded: boolean; dragging: boolean; bounds: Rect; workArea: Rect; displayId: string };
@@ -13,11 +14,14 @@ export type ControlOptions = {
   moveTo(x: number, y: number): Rect | null;
   port?: number;
   filePath?: string;
+  /** Speak-only routes (ANAM_SPEAK_ONLY=1). Without it /session, /talk and /interrupt are 404. */
+  speak?: SpeakController;
 };
 export type ControlServer = { close(): Promise<void>; removeFileSync(): void; port: number };
 
 const DEFAULT_PORT = 47630;
 const BODY_LIMIT = 4096;
+const TALK_BODY_LIMIT = 16384; // 2000 chars of text may be 4 bytes each plus JSON escapes
 const REQUEST_TIMEOUT_MS = 5000;
 
 function send(res: http.ServerResponse, status: number, body: unknown) {
@@ -32,16 +36,16 @@ function tokenMatches(given: unknown, token: string) {
   return crypto.timingSafeEqual(a, b);
 }
 
-function readBody(req: http.IncomingMessage): Promise<string | null> {
+function readBody(req: http.IncomingMessage, limit = BODY_LIMIT): Promise<string | null> {
   return new Promise((resolve) => {
     let size = 0;
     const chunks: Buffer[] = [];
     // Oversized bodies are discarded (not buffered) so the 400 can still be delivered.
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size <= BODY_LIMIT) chunks.push(chunk);
+      if (size <= limit) chunks.push(chunk);
     });
-    req.on('end', () => resolve(size > BODY_LIMIT ? null : Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(size > limit ? null : Buffer.concat(chunks).toString('utf8')));
     req.on('error', () => resolve(null));
   });
 }
@@ -79,7 +83,39 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (req.method === 'GET' && url.pathname === '/state') {
         const state = opts.getState();
-        return state ? send(res, 200, { ok: true, state }) : send(res, 503, { ok: false, reason: 'no_window' });
+        if (!state) return send(res, 503, { ok: false, reason: 'no_window' });
+        if (opts.speak) {
+          const { connected, speaking, starting } = opts.speak.state();
+          return send(res, 200, { ok: true, state: { ...state, connected, speaking, starting } });
+        }
+        return send(res, 200, { ok: true, state });
+      }
+      const speak = opts.speak;
+      if (speak && req.method === 'POST' && (url.pathname === '/session' || url.pathname === '/talk' || url.pathname === '/interrupt')) {
+        const raw = await readBody(req, url.pathname === '/talk' ? TALK_BODY_LIMIT : BODY_LIMIT);
+        let parsed: unknown = null;
+        try { parsed = raw === null ? null : JSON.parse(raw); } catch { parsed = null; }
+        const body = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
+        if (url.pathname === '/session') {
+          if (body.action !== 'start' && body.action !== 'end') return send(res, 400, { ok: false, reason: 'invalid_input' });
+          if (!opts.getState()) return send(res, 503, { ok: false, reason: 'no_window' });
+          if (body.action === 'start') speak.start(); else speak.end();
+          return send(res, 200, { ok: true, state: speak.state() });
+        }
+        if (url.pathname === '/interrupt') {
+          speak.interrupt();
+          return send(res, 200, { ok: true });
+        }
+        const { turnId, text, final } = body;
+        if (typeof turnId !== 'string' || turnId.length < 1 || turnId.length > 64
+          || typeof text !== 'string' || text.length > 2000 || typeof final !== 'boolean'
+          || (text.length === 0 && !final)) {
+          return send(res, 400, { ok: false, reason: 'invalid_input' });
+        }
+        const result = speak.talk({ turnId, text, final });
+        if (result === 'no_call') return send(res, 503, { ok: false, reason: 'no_call' });
+        if (result === 'queue_full') return send(res, 429, { ok: false, reason: 'queue_full' });
+        return send(res, 200, { ok: true, queued: result === 'queued' });
       }
       if (req.method === 'POST' && url.pathname === '/move') {
         const raw = await readBody(req);
