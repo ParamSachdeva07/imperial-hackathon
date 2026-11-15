@@ -5,12 +5,20 @@ import path from 'node:path';
 import type { TokenResult } from '../shared/bridge.js';
 import { startControlServer } from './control.mjs';
 import type { ControlServer } from './control.mjs';
+import { createSpeakController } from './speak.mjs';
+import type { SpeakCommand } from './speak.mjs';
 
 // Only FastAPI is allowed to read backend/.env.
 delete process.env.ANAM_API_KEY;
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const rendererFile = path.join(directory, '../dist/index.html');
 const dev = process.env.OVERLAY_DEV === '1';
+// Speak-only: another local app (Pointy) drives the avatar as a mouth. No mic, no sendUserMessage.
+const speakOnly = process.env.ANAM_SPEAK_ONLY === '1';
+const speaker = speakOnly ? createSpeakController({
+  send: sendSpeakCommand,
+  setExpanded: (value) => setExpanded(value, false),
+}) : null;
 const rendererURL = dev ? 'http://127.0.0.1:5173/' : pathToFileURL(rendererFile).href;
 let overlay: BrowserWindow | null = null;
 let control: ControlServer | null = null;
@@ -96,7 +104,7 @@ function placeWindow(bounds: Rectangle) {
   });
 }
 
-function setExpanded(value: boolean) {
+function setExpanded(value: boolean, focus = true) {
   if (!overlay || expanded === value) return;
   const bounds = overlay.getBounds();
   expanded = value;
@@ -110,7 +118,15 @@ function setExpanded(value: boolean) {
   placeWindow({ x: value ? bounds.x + bounds.width - width : area.x + area.width - DOT_SIZE - 16,
     y: value ? bounds.y : area.y + 16, width, height });
   revealLauncher(false);
-  if (value) overlay.focus();
+  // Externally driven expansion must not steal focus from the app the user is working in.
+  if (value && focus) overlay.focus();
+}
+
+function sendSpeakCommand(command: SpeakCommand) {
+  const target = overlay?.webContents;
+  if (!target) return;
+  if (target.isLoading()) target.once('did-finish-load', () => target.send('anam:speak-command', command));
+  else target.send('anam:speak-command', command);
 }
 
 function resizeBy(amount: number) {
@@ -133,9 +149,20 @@ ipcMain.handle('anam:session-token', async (event): Promise<TokenResult> => {
 });
 ipcMain.handle('overlay:microphone', async (event) => {
   if (!trusted(event)) return false;
+  if (speakOnly) return false; // never request the microphone in speak-only mode
   if (process.platform !== 'darwin') return true;
   try { return await systemPreferences.askForMediaAccess('microphone'); }
   catch { return false; }
+});
+ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly }));
+ipcMain.on('anam:speak-report', (event, report: unknown) => {
+  if (!trusted(event) || !speaker || !report || typeof report !== 'object') return;
+  const { connected, speaking, session } = report as { connected?: unknown; speaking?: unknown; session?: unknown };
+  speaker.report({
+    ...(typeof connected === 'boolean' ? { connected } : {}),
+    ...(typeof speaking === 'boolean' ? { speaking } : {}),
+    ...(typeof session === 'number' && Number.isInteger(session) ? { session } : {}),
+  });
 });
 ipcMain.handle('overlay:expanded', (event, value: unknown) => {
   if (trusted(event) && typeof value === 'boolean') setExpanded(value);
@@ -176,6 +203,9 @@ function createWindow() {
     resizable: false, maximizable: false, fullscreenable: false,
     frame: false, transparent: true, backgroundColor: '#00000000',
     alwaysOnTop: true, hasShadow: false, show: false,
+    // macOS: an NSPanel (like Pointy's overlay) can float over another app's full-screen Space;
+    // a normal window stays on the desktop Space even with visibleOnFullScreen.
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {
       preload: path.join(directory, 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -218,14 +248,15 @@ app.setName('Anam Overlay');
 void app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     callback(contents === overlay?.webContents && trustedURL(contents.getURL())
-      && details.isMainFrame && permission === 'media'
+      && !speakOnly && details.isMainFrame && permission === 'media'
       && 'mediaTypes' in details && details.mediaTypes?.length === 1 && details.mediaTypes[0] === 'audio');
   });
   session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) =>
     contents === overlay?.webContents && !!contents && trustedURL(contents.getURL())
-    && permission === 'media' && details.mediaType === 'audio');
+    && !speakOnly && permission === 'media' && details.mediaType === 'audio');
   createWindow();
   startControlServer({
+    ...(speaker ? { speak: speaker } : {}),
     getState: () => {
       if (!overlay) return null;
       const bounds = overlay.getBounds();

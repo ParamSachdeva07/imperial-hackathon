@@ -85,7 +85,18 @@ On startup the overlay runs a small local control server on `127.0.0.1` (default
 - `GET /state` returns `{ ok, state: { expanded, dragging, bounds, workArea, displayId } }` (503 `no_window` if there is no window).
 - `POST /move` with `{ "x": number, "y": number }` (top-left, DIP, clamped to the display work area) returns `{ ok, bounds }`. It returns 409 `collapsed` while the launcher dot is shown, 409 `dragging` during a user drag, and 400 `invalid_input` for bad bodies.
 
-Env vars: `ANAM_CONTROL_PORT` (port) and `ANAM_CONTROL_FILE` (path of the control file).
+Env vars: `ANAM_CONTROL_PORT` (port) and `ANAM_CONTROL_FILE` (path of the control file). The automated tests always set both (temp file, ephemeral port) and never touch `~/.pointy/anam-control.json`.
+
+### Speak-only mode (`ANAM_SPEAK_ONLY=1`)
+
+Pointy uses the avatar as a mouth: the Anam Lab persona LLM is disabled, so the avatar only says text sent to it. Without `ANAM_SPEAK_ONLY=1` none of the following exists (the routes return 404 and behaviour is unchanged). With it:
+
+- `POST /session` `{ "action": "start" | "end" }`. `start` expands the avatar (without stealing focus) and starts a **mic-less** call (`disableInputAudio: true`; the microphone is never requested and the permission handlers deny it). `end` stops the call and collapses to the hidden dot. A call with no `/talk` or `/session start` activity for 3 minutes is stopped automatically (billing safety).
+- `POST /talk` `{ "turnId": string (1-64), "text": string (<= 2000), "final": boolean }`. One `TalkMessageStream` per `turnId` (`streamMessageChunk` / `endMessage`), chunks ordered. While a call is starting, chunks are queued (max 20, max 30 s old) and flushed on connect (429 `queue_full` beyond that). 503 `no_call` when there is no call and none is starting. If the SDK reports `MESSAGE_DELIVERY_FAILED` (or a chunk cannot be sent), the full text of that turn is sent once via `talk()` as a fallback; delivery is unconfirmed, so some words may repeat.
+- `POST /interrupt` clears the queue and calls `interruptPersona()`.
+- `GET /state` additionally returns `connected`, `speaking` and `starting`. If the user clicks End call (or the connection drops) `connected` becomes false and the avatar collapses, so Pointy can close its own session.
+
+`sendUserMessage` / `addContext` are never used in speak-only mode. A user click on the dot still opens a mic-less call.
 
 ## Troubleshooting
 

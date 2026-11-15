@@ -1,7 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { OverlayBridge } from '../shared/bridge.js';
+import type { OverlayBridge, SpeakCommand } from '../shared/bridge.js';
 
 const bridge: OverlayBridge = {
+  getMode: () => ipcRenderer.invoke('anam:mode'),
+  onSpeakCommand: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, command: SpeakCommand) => callback(command);
+    ipcRenderer.on('anam:speak-command', listener);
+    return () => ipcRenderer.removeListener('anam:speak-command', listener);
+  },
+  reportSpeak: (report) => ipcRenderer.send('anam:speak-report', report),
   getSessionToken: () => ipcRenderer.invoke('anam:session-token'),
   requestMicrophone: () => ipcRenderer.invoke('overlay:microphone'),
   setExpanded: (expanded) => ipcRenderer.invoke('overlay:expanded', expanded),

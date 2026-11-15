@@ -104,3 +104,26 @@ describe("DevSessionController", () => {
     expect(ctl.isActive()).toBe(false);
   });
 });
+
+describe("DevSessionController manual mode (production)", () => {
+  it("ignores wake_requested and never idles out; only open()/close() drive the session", () => {
+    const box: { handler?: (e: GestureEvent) => void } = {};
+    const service = {
+      onAny: (cb: (e: GestureEvent) => void) => {
+        box.handler = cb;
+        return () => {};
+      },
+      setSessionActive: vi.fn(),
+    };
+    const set = vi.fn();
+    const ctl = new DevSessionController({ service, idleMs: 10, manual: true, timers: { setTimeout: set, clearTimeout: () => {} } });
+    box.handler?.({ type: "wake_requested" } as GestureEvent);
+    expect(ctl.isActive()).toBe(false);
+    ctl.open();
+    expect(ctl.isActive()).toBe(true);
+    expect(service.setSessionActive).toHaveBeenCalledWith(true);
+    expect(set).not.toHaveBeenCalled();
+    ctl.close();
+    expect(ctl.isActive()).toBe(false);
+  });
+});

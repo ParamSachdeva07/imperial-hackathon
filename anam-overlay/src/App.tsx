@@ -10,7 +10,15 @@ export function App() {
   const [closing, setClosing] = useState(false);
   const [windowError, setWindowError] = useState('');
   const expandedRef = useRef(false);
+  /** True while the call was started by the speak-only control API (Pointy), which owns the window. */
+  const externalRef = useRef(false);
   const closingRef = useRef(false);
+  /** A start that arrived mid-teardown, replayed afterwards: its session id, or null. */
+  const pendingStart = useRef<number | null>(null);
+  /** Session of the call currently running (echoed in reports so main can ignore an older call's teardown). */
+  const callSession = useRef<number | undefined>(undefined);
+  /** callSession as of the phase machine's last 'connecting': an old call's teardown keeps reporting as itself. */
+  const phaseSession = useRef<number | undefined>(undefined);
   const dot = useRef<HTMLButtonElement>(null);
   const end = useRef<HTMLButtonElement>(null);
   const opening = useRef(0);
@@ -20,15 +28,23 @@ export function App() {
   const connected = anam.phase === 'connected';
   const failed = !!windowError || anam.phase === 'error' || (anam.phase === 'idle' && !!anam.error);
 
-  async function open() {
-    if (expandedRef.current || closingRef.current) return;
+  async function open(external = false, reexpand = false, session?: number) {
+    if (closingRef.current) {
+      // Speak-only: a start that arrives mid-teardown is replayed once the teardown finishes.
+      if (external) pendingStart.current = session ?? 0;
+      return;
+    }
+    if (expandedRef.current) return;
     const attempt = ++opening.current;
     expandedRef.current = true;
+    externalRef.current = external;
+    callSession.current = session;
     setWindowError('');
     setExpanded(true);
     try {
-      await window.overlay.setExpanded(true);
-      if (opening.current === attempt) void anam.start(true);
+      // External (speak-only) starts are already expanded natively and must not steal focus.
+      if (!external || reexpand) await window.overlay.setExpanded(true);
+      if (opening.current === attempt) void anam.start(true); // speak-only forces mic-less inside the hook
     } catch {
       setWindowError('The desktop overlay could not open. Please relaunch Anam.');
     }
@@ -51,6 +67,12 @@ export function App() {
     } finally {
       closingRef.current = false;
       setClosing(false);
+      if (pendingStart.current !== null) {
+        const next = pendingStart.current;
+        pendingStart.current = null;
+        // The native window was just collapsed by this teardown, so the replayed start must expand it again.
+        queueMicrotask(() => { void handlers.current.open(true, true, next || undefined); });
+      }
     }
   }, [anam.stop]);
 
@@ -77,6 +99,40 @@ export function App() {
     if (previousPhase.current === 'connected' && anam.phase === 'idle' && !anam.error) void endCall();
     previousPhase.current = anam.phase;
   }, [anam.phase, anam.error, endCall]);
+
+  // Speak-only: the control API (Pointy) starts, speaks, interrupts and ends the call.
+  const handlers = useRef({ open, endCall, talk: anam.talk, interrupt: anam.interrupt });
+  handlers.current = { open, endCall, talk: anam.talk, interrupt: anam.interrupt };
+  useEffect(() => {
+    if (!window.overlay?.onSpeakCommand) return;
+    return window.overlay.onSpeakCommand((command) => {
+      if (command.type === 'start') void handlers.current.open(true, false, command.session);
+      else if (command.type === 'end') { pendingStart.current = null; void handlers.current.endCall(); } // an end supersedes a start queued behind a teardown
+      else if (command.type === 'interrupt') handlers.current.interrupt();
+      else handlers.current.talk({ turnId: command.turnId, text: command.text, final: command.final });
+    });
+  }, []);
+
+  // Report call state so the main process can flush queued talk and Pointy can see an End call.
+  const reportedPhase = useRef(anam.phase);
+  useEffect(() => {
+    const before = reportedPhase.current;
+    reportedPhase.current = anam.phase;
+    if (anam.phase === 'connecting' || (anam.phase === 'connected' && before !== 'connected')) phaseSession.current = callSession.current;
+    if (anam.phase === 'connected') window.overlay?.reportSpeak?.({ connected: true, session: phaseSession.current });
+    else if ((before === 'connecting' || before === 'connected') && before !== anam.phase) {
+      window.overlay?.reportSpeak?.({ connected: false, session: phaseSession.current });
+      // Speak-only: main already collapsed the native window on this failure/drop. Reset the renderer too,
+      // otherwise expandedRef stays true and later start/end commands are ignored.
+      if (externalRef.current && !closingRef.current && (anam.phase === 'error' || anam.error)) {
+        ++opening.current;
+        externalRef.current = false;
+        expandedRef.current = false;
+        setExpanded(false);
+      }
+    }
+  }, [anam.phase, anam.error]);
+  useEffect(() => { window.overlay?.reportSpeak?.({ speaking: anam.speaking, session: phaseSession.current }); }, [anam.speaking]);
 
   function keyDown(event: KeyboardEvent) {
     if (event.key === 'Escape' && expanded) { event.preventDefault(); void endCall(true); return; }

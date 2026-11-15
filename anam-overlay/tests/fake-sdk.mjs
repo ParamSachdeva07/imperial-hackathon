@@ -5,6 +5,7 @@ import { AnamEvent } from '../node_modules/@anam-ai/js-sdk/dist/module/types/eve
 import { ConnectionClosedCode } from '../node_modules/@anam-ai/js-sdk/dist/module/types/events/public/ConnectionClosedCodes.js';
 
 window.__anamFixture = { clients: [], delay: 30, fail: false, trackStops: 0 };
+// Records talk-stream use. failStreams makes streams reject chunks and emit MESSAGE_DELIVERY_FAILED.
 export function createClient(token, options) {
   const fixture = window.__anamFixture;
   const listeners = new Map();
@@ -27,6 +28,21 @@ export function createClient(token, options) {
       client.emit(AnamEvent.VIDEO_PLAY_STARTED);
     },
     async stopStreaming() { client.stopCount++; client.emit(AnamEvent.CONNECTION_CLOSED, ConnectionClosedCode.NORMAL); },
+    talks: [], streams: [], interrupts: 0,
+    async talk(content) { client.talks.push(content); },
+    interruptPersona() { client.interrupts++; },
+    createTalkMessageStream(correlationId) {
+      let active = true;
+      const stream = { correlationId, chunks: [], ended: false,
+        isActive: () => active && !fixture.failStreams,
+        async streamMessageChunk(content, end) {
+          if (!stream.isActive()) throw new Error('inactive');
+          stream.chunks.push([content, end]); if (end) { active = false; stream.ended = true; }
+        },
+        async endMessage() { active = false; stream.ended = true; } };
+      client.streams.push(stream);
+      return stream;
+    },
     muteInputAudio() { client.muted = true; return { isMuted: true }; },
     unmuteInputAudio() { client.muted = false; return { isMuted: false }; },
     sendUserMessage(content) {

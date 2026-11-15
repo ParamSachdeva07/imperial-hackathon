@@ -51,6 +51,10 @@ Secrets:
 - `anam-overlay/backend/.env` holds `ANAM_API_KEY` and `ANAM_PERSONA_ID`.
 - Never put the Anam key in the root `.env`. See `anam-overlay/README.md`.
 
+### Production: one command
+`npm run pointy` starts everything (backend, Anam in speak-only mode, Pointy in production mode). See section 10. The
+manual steps below are the older dev way and still work.
+
 ### Run both together
 1. Start the Anam backend: the uvicorn command above.
 2. Run `cd anam-overlay && npm install && npm run build && npm start`. The avatar dot appears top-right. Hover the corner and click to start a call; the avatar expands.
@@ -344,3 +348,103 @@ Import `SelectionSnapshot`, `snapshotMeta`, `dataUrlBytes` from `@pointy/shared/
 `SelectionStore` from `main/index.ts` and use `store.latest()` (peek), `store.consume()` (take once) or
 `store.onSnapshot(cb)`; `store.onClear(cb)` fires when the session closes. Log with `snapshotMeta()`, never the raw
 snapshot.
+
+## 10. Production mode (`npm run pointy`)
+
+The real macOS desktop instead of the fake mail app: raise an open hand (or press Cmd+Option+P) and the Anam avatar
+opens and listens; GPT sees a screenshot plus the real on-screen controls, explains, and labels or points at real UI;
+Anam speaks GPT's answer. macOS only. Runs from the repo (no packaged app).
+
+### 10.1 Architecture
+
+```
+ mic ──> hidden assistant window (WebRTC) ── data channel ──> GPT Realtime (text output only)
+              ^  apps/desktop/src/renderer/assistant                |  response.output_text.delta
+              |                                                     v
+   AssistantController (main/assistant) ── sentence batches ──> AnamSpeaker ── POST /talk ──> Anam app (ANAM_SPEAK_ONLY=1)
+      |   |   |                                                                               speaks, mic-less call
+      |   |   +-- tool calls ──> OverlayControl.handleTool ──> overlay windows (labels, arrows, steps, explainers)
+      |   +------ per turn: captureScreenContext = 1 screenshot (<=1280 px, <=150 KB) + AX element list (<=150)
+      |                          ^ DesktopCapturerProvider        ^ AxBoundsProvider -> pointy-ax (Swift helper, stdio JSON)
+      +---------- gesture session open only while the assistant is open (wake_requested / Cmd+Option+P / tray opens)
+ menu bar tray (status, open/close, mouse kill switch, gestures, permissions, quit) + Cmd+Option+P
+```
+
+- Composition: `apps/desktop/src/main/production.ts`, selected by `resolveMode` (`main/mode.ts`). The dev composition in
+  `main/index.ts` is unchanged.
+- The overlay uses `AxBoundsProvider` as its `BoundsProvider`, so element ids in tool calls are real AX ids
+  (`ax-` + hash, stable between snapshots). Production instructions are `assistant/instructions.ts` (the dev-only
+  `buildInstructions` is not used); the tools are the unchanged `exportToolDefinitions`.
+- Interaction rules: the mic is **half-duplex** (muted while Anam speaks, re-enabled from an estimate refined by Anam
+  `/state.speaking`). **Interrupt** (Cmd+Option+P while thinking or speaking, or the tray) cancels the response and the
+  speech. A barge-in cannot happen while the avatar talks, because the mic is muted. Closing: 45 s of silence,
+  Cmd+Option+P, the tray, Anam's end-call button, or Anam becoming unreachable.
+
+### 10.2 Run it
+
+`npm run pointy` (flags: `--no-anam`, `--rebuild`, `--debug`, `--check`, `--help`). Preflight checks Node >= 22, the keys
+(presence only), the backend venv, gesture assets, port 8765 and stale builds, then starts uvicorn, waits for `/health`,
+starts Anam (`ANAM_SPEAK_ONLY=1`), then Pointy (`POINTY_MODE=production`, gestures and mouse on). Ctrl+C stops all.
+
+| Flag (env) | Meaning |
+|---|---|
+| `POINTY_MODE=production` | Production composition (set by the launcher) |
+| `POINTY_DEV_SERVER=1` | Also start the localhost dev server, so `pointy-draw` works against real AX ids (`--debug` sets it) |
+| `POINTY_GESTURES=0` / `POINTY_GESTURES_MOUSE=0` | Production defaults both to on; set 0 for hotkey-only / no real mouse |
+| `ANAM_SPEAK_ONLY=1` | Anam: no persona LLM, no mic, control routes `/session`, `/talk`, `/interrupt` (anam-overlay README) |
+| `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL` | Root `.env` (model optional) |
+
+Dev mode, the fake mail fixture, `pointy-draw` and `npm run e2e` are unchanged.
+
+### 10.3 Permissions (and where they apply)
+
+Camera (gestures), Microphone (assistant window), Accessibility (element list and real mouse), Screen Recording
+(screenshots). At start the app prints one line, for example `Permissions: Camera ok, Microphone ok, Accessibility ok,
+Screen Recording ok`, and opens System Settings for anything missing. In dev the grants apply to the **launching terminal**
+(cmux, Terminal, iTerm), not to Electron, and need a terminal restart after granting. Degraded modes: no Accessibility
+means screenshot only; no Screen Recording means the element list only; no camera means hotkey and tray only. The
+`pointy-ax` helper is spawned by the app and inherits the terminal's Accessibility grant.
+
+### 10.4 Anam Lab setup
+
+In Anam Lab, **disable the persona LLM** for the persona in `ANAM_PERSONA_ID`; the avatar must only speak text sent through
+`talk()`. Anam bills per session-minute: calls are ended on close, with a 3-minute idle safety stop in the Anam app.
+
+### 10.5 Costs
+
+- Anam: per session-minute while the avatar is open.
+- OpenAI Realtime: audio input plus a text answer, plus one screenshot (about 150 KB JPEG) and an element list per spoken
+  turn. The previous turn's screen items are deleted, so context does not grow. Selection images ride along only when
+  fresh.
+
+### 10.6 Privacy
+
+- Every spoken turn sends a screenshot of the display and the element labels to OpenAI. Nothing is sent while the
+  assistant is closed.
+- Secure text fields are never read by the AX helper, and field values are not read (only static text and headings).
+  Screen text is fenced as untrusted in the prompt and the model is told never to read out secrets.
+- The OpenAI key stays in main; the assistant window only gets a short-lived client secret. The Anam key stays in its
+  own backend `.env`.
+- The mouse is session-gated and has a menu-bar kill switch. The gestures toggle stops wake and session control; the camera
+  keeps running until Pointy quits.
+
+### 10.7 Open items
+
+- **Alexandre (gestures):** `wake_requested` fires only while the gesture session is closed, so an open hand cannot
+  interrupt or close the assistant while it is open. A small event from the package is needed (palm while session open).
+  Until then use Cmd+Option+P, the tray or Anam's end-call button. No pause API either, so the gestures toggle cannot stop the camera.
+- **Anam teammate:** please review the speak-only mode in `anam-overlay` (behind `ANAM_SPEAK_ONLY=1`; default behaviour
+  and its tests unchanged). `speaking` is inferred from persona stream events and not yet confirmed against a live session.
+- Tune the half-duplex timing (`speechMarginMs`, `speechStartLatencyMs`) after a live test; the overlay blinks about 80 ms
+  per turn while the screenshot is taken.
+- Not exercised live in this repo state: the real WebRTC path and a full spoken turn end to end.
+- **Verified live (2026-11-15):**
+  - Anam speak-only opened over a full-screen app and spoke `/talk` text. `speaking` was reported, and it collapsed to the hidden dot on `/session end`.
+  - With production + `POINTY_DEV_SERVER=1`, AX listed 35 real elements, and a highlight landed on TextEdit's real Bold button.
+  - An offline eval with a TextEdit screenshot + AX list produced `point_at` on the right AX id.
+- **Known limitations (from review):**
+  - Trackpad or mouse-wheel scrolling is not observed, so coordinate drawings stay until the next turn. Only gesture scrolling invalidates them.
+  - An answer still being generated when you switch apps can draw coordinates from the old screenshot.
+  - In speak-only mode, a call started manually by clicking the dot that then fails can leave the avatar expanded.
+  - The last two are scheduled for the next change (selection-offer).
+

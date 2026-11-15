@@ -25,6 +25,11 @@ export interface DevSessionControllerOptions {
   idleMs: number;
   log?: (msg: string) => void;
   timers?: Timers;
+  /**
+   * Production: the session is driven only by open()/close() (the AssistantController), never by
+   * gesture events and with no idle timer. Default false (dev behaviour unchanged).
+   */
+  manual?: boolean;
 }
 
 export class DevSessionController {
@@ -53,7 +58,7 @@ export class DevSessionController {
 
   open(): void {
     if (this.disposed) return;
-    this.armIdle();
+    if (!this.opts.manual) this.armIdle();
     if (this.active) return;
     this.active = true;
     this.opts.service.setSessionActive(true);
@@ -80,7 +85,7 @@ export class DevSessionController {
   }
 
   private onEvent(e: GestureEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || this.opts.manual) return;
     if (e.type === "wake_requested") this.open();
     else if (this.active) this.armIdle();
   }
