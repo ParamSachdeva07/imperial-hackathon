@@ -142,6 +142,8 @@ export interface AssistantDeps {
    * false (only while the assistant is open). wake_requested while open + answering interrupts.
    */
   onAnswerSpeaking?(speaking: boolean): void;
+  /** True while work started by this conversation is still running elsewhere (a background task): the assistant stays open for its result. */
+  backgroundWork?(): boolean;
   status?: StatusEmitter;
   config?: Partial<AssistantConfig>;
   log?(msg: string): void;
@@ -443,6 +445,29 @@ export class AssistantController {
         item: { id: `int_${++this.noteSeq}`, type: "message", role: "user", content: [{ type: "input_text", text: `[interrupted] The user stopped you${what} Do not continue that answer unless they ask.` }] },
       });
     }
+  }
+
+  /**
+   * A note from outside the conversation (a background task ended): put it in front of the model and have it spoken.
+   * It waits for a quiet moment, so it never cuts across the user or an answer. While closed it only goes to memory.
+   */
+  notify(text: string): void {
+    this.remember("user", text);
+    if (this.phase !== "open") return;
+    const my = this.epoch;
+    const attempt = (): void => {
+      if (my !== this.epoch || this.phase !== "open") return;
+      if (this.busy()) {
+        this.deps.clock.setTimeout(attempt, 400);
+        return;
+      }
+      this.deps.transport.send({
+        type: "conversation.item.create",
+        item: { id: `note_${++this.noteSeq}`, type: "message", role: "user", content: [{ type: "input_text", text }] },
+      });
+      this.requestResponse();
+    };
+    attempt();
   }
 
   /** Anam reported the call ended (e.g. end-call button). */
@@ -1417,7 +1442,7 @@ export class AssistantController {
     this.idleTimer = this.deps.clock.setTimeout(() => {
       this.idleTimer = null;
       if (my !== this.epoch || this.phase !== "open") return;
-      if (this.busy()) return this.armIdle();
+      if (this.busy() || this.deps.backgroundWork?.()) return this.armIdle();
       void this.close("idle (no speech)");
     }, this.cfg.idleCloseMs);
   }

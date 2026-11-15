@@ -36,6 +36,8 @@ import { createTray } from "./tray";
 import { createQuitGuard, createScrollInvalidator, pickPointer } from "./productionLogic";
 import { loadRendererPage, PRELOAD_DIR } from "./rendererPages";
 import { startDevHarness } from "../dev/devHarness";
+import { ExecutionClient } from "./execution/ExecutionClient";
+import { EXECUTION_TOOLS, ExecutionToolHost } from "./execution/ExecutionTools";
 
 /** Safety cap for the kept selection outline; the AssistantController removes it much earlier. */
 const SELECTION_OUTLINE_TTL_MS = 120_000;
@@ -168,13 +170,34 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
 
   // --- assistant: hidden Realtime window + controller
   const images = imagesEnabled(env);
-  const tools = exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] });
+  // --- execution agent (POINTY_EXECUTION=0 turns it off): the assistant can hand a request to it and keep talking
+  const executionOn = env.POINTY_EXECUTION !== "0";
+  let mouseBeforeTask = false;
+  const execution = new ExecutionToolHost({
+    client: new ExecutionClient(),
+    announce: (text) => controller.notify(text),
+    onTaskStart: () => {
+      // The task acts on the real screen: remove our drawings from it and stop the hand from driving the mouse.
+      void overlay.control.handleTool("clear", {}).catch(() => undefined);
+      mouseBeforeTask = gestures?.mouseEnabled ?? false;
+      if (mouseBeforeTask) gestures?.setMouseEnabled(false);
+    },
+    onTaskEnd: () => {
+      if (mouseBeforeTask) gestures?.setMouseEnabled(true);
+      invalidateContext(); // the screen is not what the last screenshot showed
+    },
+    log: plog,
+  });
+  const tools = [
+    ...exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] }),
+    ...(executionOn ? EXECUTION_TOOLS : []),
+  ];
   plog(`realtime ${describeRealtimeConfig()}`);
   const assistantWin = createAssistantWindow({
     preloadDir: PRELOAD_DIR,
     loadPage: (w) => loadRendererPage(w, "assistant"),
     mintSecret: async () => {
-      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images }), tools });
+      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images, execution: executionOn }), tools });
       plog(`realtime session: model=${secret.model}, effort=${secret.effort ?? "default"}`);
       return secret;
     },
@@ -208,7 +231,11 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
         log: plog,
       }),
     anam: new AnamSpeaker(),
-    overlay: overlay.control,
+    overlay: {
+      onTurnStart: (turnId) => overlay.control.onTurnStart(turnId),
+      handleTool: (name, input, o) => (execution.handles(name) ? (execution.handle(name, input) as ReturnType<typeof overlay.control.handleTool>) : overlay.control.handleTool(name, input, o)),
+    },
+    backgroundWork: () => execution.isRunning(),
     gestures: {
       // The gesture session (and with it the mouse) is active only while the assistant is open.
       setSessionActive: (active) => {
@@ -243,6 +270,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   });
   controller.status.onChange((s) => {
     if (s === "idle" || s === "error") {
+      execution.dispose(); // the assistant closed: nobody is left to hear the result, so the task stops with it
       ax.clearAnchors();
       gestures?.clearSelection();
     }
@@ -324,6 +352,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     offWake?.();
     hotkey.unregister();
     tray.destroy();
+    execution.dispose();
     controller.dispose();
     assistantWin.dispose();
     for (const d of stopSelection.splice(0)) d();

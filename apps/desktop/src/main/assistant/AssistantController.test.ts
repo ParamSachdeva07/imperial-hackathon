@@ -1866,3 +1866,20 @@ describe("codex round 2", () => {
     expect(s.c.status.get()).toBe("error");
   });
 });
+
+describe("notes from a background task", () => {
+  it("puts the note in front of the model and asks for a spoken reply, once nothing else is going on", async () => {
+    const s = setup({ backgroundWork: () => true });
+    await openIt(s);
+    s.c.notify('[execution] The task "open twitch" finished.');
+    const item = s.transport.sent.find((e) => e.type === "conversation.item.create" && JSON.stringify(e).includes("[execution]"));
+    expect(item).toBeTruthy();
+    expect(creates(s).length).toBeGreaterThan(0);
+  });
+
+  it("only remembers the note while the assistant is closed", () => {
+    const s = setup();
+    s.c.notify("[execution] finished");
+    expect(s.transport.sent).toEqual([]);
+  });
+});
