@@ -40,6 +40,32 @@ describe("OverlayScene", () => {
     }
   });
 
+  it("label_parts: a ring and a labelled glyph per part, in one item", () => {
+    const { container } = render(<OverlayScene scene={scene("parts-scam")} reduceMotion={false} />);
+    expect(container.querySelectorAll(".item-parts")).toHaveLength(1);
+    expect(container.querySelectorAll(".item-parts [data-shape='ring']")).toHaveLength(3);
+    const labels = [...container.querySelectorAll(".item-parts .label")];
+    expect(labels.map((l) => l.getAttribute("data-text"))).toEqual(["Odd sender address", "Pressure to act fast", "Link goes elsewhere", "Warning signs"]);
+    expect(labels.slice(0, 3).every((l) => l.querySelector("[data-glyph='warning'], .tone-glyph") !== null)).toBe(true); // never colour alone
+    expect(container.querySelectorAll(".item-parts .label.parts-title .tone-glyph")).toHaveLength(0);
+  });
+
+  it("verdict card: headline with inline tone glyph, bullet rows and a tone accent", () => {
+    const { container } = render(<OverlayScene scene={scene("explainer-verdict")} reduceMotion={false} />);
+    expect(container.querySelector(".card-title")!.textContent).toBe("Likely a scam");
+    expect(container.querySelector(".item-explainer")!.getAttribute("data-kind")).toBe("verdict");
+    expect(container.querySelector(".item-explainer")!.getAttribute("data-tone")).toBe("warning");
+    expect(container.querySelector(".card")!.classList.contains("tone-warning")).toBe(true);
+    expect(container.querySelector("[data-verdict-glyph='warning'] .tone-glyph")).not.toBeNull();
+    // The tone glyph is inline with the headline (one row), not a large standalone block above the reasons.
+    expect(container.querySelector(".verdict-head .tone-glyph")).not.toBeNull();
+    expect(container.querySelector(".verdict-head .card-title")).not.toBeNull();
+    expect(container.querySelector(".verdict .verdict-glyph, .verdict [data-verdict-glyph]")).toBeNull();
+    expect(container.querySelectorAll(".verdict .bullet-row")).toHaveLength(3);
+    const safe = render(<OverlayScene scene={scene("explainer-verdict-safe")} reduceMotion={false} />);
+    expect(safe.container.querySelector("[data-verdict-glyph='success']")).not.toBeNull();
+  });
+
   it("marks exiting items and reduceMotion", () => {
     const { container } = render(<OverlayScene scene={scene("exiting")} reduceMotion />);
     expect(container.querySelectorAll(".item.exiting")).toHaveLength(1);

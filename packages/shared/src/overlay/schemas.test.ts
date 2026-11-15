@@ -4,6 +4,7 @@ import {
   ClearInput,
   Expiry,
   HighlightInput,
+  LabelPartsInput,
   MagnifyInput,
   MoveAvatarInput,
   OverlayEvent,
@@ -183,5 +184,35 @@ describe("Results and events", () => {
     expect(OverlayEvent.safeParse({ type: "overlay.dismissed", overlayId: "a", by: "robot" }).success).toBe(false);
     expect(OverlayEvent.safeParse({ type: "steps.advanced", stepsId: "s", index: 1 }).success).toBe(true);
     expect(OverlayEvent.safeParse({ type: "overlay.exploded", overlayId: "a" }).success).toBe(false);
+  });
+});
+
+describe("LabelPartsInput (additive tool)", () => {
+  const item = (label = "Odd sender") => ({ target: el("a"), label });
+  it("accepts 1-5 items; tone defaults to info; expires is optional", () => {
+    const r = LabelPartsInput.parse({ items: [item()] });
+    expect(r.items[0]!.tone).toBe("info");
+    expect(LabelPartsInput.safeParse({ items: [item(), item(), item(), item(), item()], title: "Signs", expires: "manual" }).success).toBe(true);
+  });
+  it("rejects 0 or 6 items, long labels/titles and bad tones", () => {
+    expect(LabelPartsInput.safeParse({ items: [] }).success).toBe(false);
+    expect(LabelPartsInput.safeParse({ items: Array.from({ length: 6 }, () => item()) }).success).toBe(false);
+    expect(LabelPartsInput.safeParse({ items: [item("x".repeat(41))] }).success).toBe(false);
+    expect(LabelPartsInput.safeParse({ items: [item()], title: "x".repeat(41) }).success).toBe(false);
+    expect(LabelPartsInput.safeParse({ items: [{ ...item(), tone: "red" }] }).success).toBe(false);
+  });
+});
+
+describe("verdict explainer spec (additive template)", () => {
+  const input = (spec: unknown) => ShowExplainerInput.safeParse({ title: "Likely a scam", spec });
+  it("accepts a tone with 1-3 short reasons", () => {
+    expect(input({ kind: "verdict", tone: "warning", reasons: ["Fake sender"] }).success).toBe(true);
+    expect(input({ kind: "verdict", tone: "success", reasons: ["a", "b", "c"] }).success).toBe(true);
+  });
+  it("rejects no reasons, more than 3, long reasons and a missing tone", () => {
+    expect(input({ kind: "verdict", tone: "warning", reasons: [] }).success).toBe(false);
+    expect(input({ kind: "verdict", tone: "warning", reasons: ["a", "b", "c", "d"] }).success).toBe(false);
+    expect(input({ kind: "verdict", tone: "warning", reasons: ["x".repeat(61)] }).success).toBe(false);
+    expect(input({ kind: "verdict", reasons: ["a"] }).success).toBe(false);
   });
 });

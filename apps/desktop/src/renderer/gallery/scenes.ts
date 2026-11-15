@@ -4,6 +4,8 @@ import type {
   ExplainerBody,
   ExplainerItem,
   HighlightItem,
+  LabelledPart,
+  PartsItem,
   ImageSlot,
   PointerItem,
   RenderLabel,
@@ -149,6 +151,11 @@ function highlightRow(style: HighlightItem["style"], withLabel: boolean, only?: 
       );
     }),
   );
+}
+
+function parts(id: string, list: { target: Rect; text: string; tone: Tone; at: { x: number; y: number } }[], title?: { text: string; at: { x: number; y: number } }): PartsItem {
+  const rendered: LabelledPart[] = list.map((p, index) => ({ index, tone: p.tone, target: rt(p.target), label: label(p.text, p.at.x, p.at.y, p.tone) }));
+  return { id, kind: "parts", state: "visible", parts: rendered, title: title ? label(title.text, title.at.x, title.at.y) : null };
 }
 
 const ptrTarget = rect(570, 380, 220, 72);
@@ -317,6 +324,59 @@ export const SCENES: GalleryScene[] = [
     scene: scene([explainer("e", "Connect to Wi-Fi", { kind: "sequence", steps: SEQ5 }, specSequence(SEQ5), { x: 380, y: 100 })]),
   },
   {
+    name: "parts-scam",
+    title: "label_parts: 3 parts of a scam email",
+    targets: [
+      { rect: rect(120, 130, 420, 40), text: "From: support@paypa1-secure.com" },
+      { rect: rect(120, 300, 560, 60), text: "Your account will be closed in 24 hours! Act now." },
+      { rect: rect(120, 440, 300, 52), text: "Verify my account" },
+    ],
+    scene: scene([
+      parts(
+        "lp",
+        [
+          { target: rect(120, 130, 420, 40), text: "Odd sender address", tone: "warning", at: { x: 600, y: 128 } },
+          { target: rect(120, 300, 560, 60), text: "Pressure to act fast", tone: "warning", at: { x: 720, y: 306 } },
+          { target: rect(120, 440, 300, 52), text: "Link goes elsewhere", tone: "warning", at: { x: 480, y: 440 } },
+        ],
+        { text: "Warning signs", at: { x: 120, y: 70 } },
+      ),
+    ]),
+  },
+  {
+    name: "parts-mixed-tones",
+    title: "label_parts: info + success",
+    targets: rowTargets(["Search", "Inbox", "Send"]),
+    scene: scene([
+      parts("lp", [
+        { target: row3[0]!, text: "Type here to search", tone: "info", at: { x: 120, y: 402 } },
+        { target: row3[2]!, text: "Safe to press", tone: "success", at: { x: 940, y: 402 } },
+      ]),
+    ]),
+  },
+  {
+    name: "explainer-verdict",
+    title: "Explainer: verdict (likely a scam)",
+    targets: [{ rect: rect(120, 300, 560, 60), text: "Your account will be closed in 24 hours!" }],
+    scene: (() => {
+      const reasons = ["Sender address looks fake", "Threatens to close your account", "Link goes to a different site"];
+      return scene([
+        explainer("e", "Likely a scam", { kind: "verdict", tone: "warning", reasons }, { kind: "verdict", tone: "warning", reasons }, { x: 760, y: 140 }),
+      ]);
+    })(),
+  },
+  {
+    name: "explainer-verdict-safe",
+    title: "Explainer: verdict (looks safe)",
+    targets: [],
+    scene: (() => {
+      const reasons = ["Comes from an address you know"];
+      return scene([
+        explainer("e", "Looks safe", { kind: "verdict", tone: "success", reasons }, { kind: "verdict", tone: "success", reasons }, { x: 380, y: 160 }),
+      ]);
+    })(),
+  },
+  {
     name: "explainer-compare",
     title: "Explainer: compare",
     targets: [],
@@ -463,6 +523,12 @@ function checkLabels(withGlyph: boolean): RenderScene {
 const LONG = "Click the button at the very top of the window right now";
 const CHECK_SPECS: { name: string; title: string; body: ExplainerBody; spec: ExplainerSpec }[] = [
   { name: "seq-long", title: "A rather long title that definitely wraps over two lines", body: { kind: "sequence", steps: SEQ5.map((s) => ({ ...s, caption: LONG })) }, spec: specSequence(SEQ5.map((s) => ({ ...s, caption: LONG }))) },
+  {
+    name: "verdict-long",
+    title: "Likely a scam, so please do not click anything",
+    body: { kind: "verdict", tone: "warning", reasons: [LONG, "Short", "Another reasonably long reason goes here"] },
+    spec: { kind: "verdict", tone: "warning", reasons: [LONG, "Short", "Another reasonably long reason goes here"] },
+  },
   { name: "seq-short", title: "Short", body: { kind: "sequence", steps: SEQ3 }, spec: specSequence(SEQ3) },
   {
     name: "compare-long",

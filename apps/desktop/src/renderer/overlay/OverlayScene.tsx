@@ -2,6 +2,7 @@
 import type { RenderScene } from "@pointy/shared/overlay/render";
 import { CardView } from "./explainer/Card";
 import { HighlightView } from "./HighlightView";
+import { PartsView } from "./PartsView";
 import { PointerView } from "./primitives/Pointer";
 import { StepsView } from "./primitives/StepGuide";
 import { allKeyframesCss } from "./pointerTimeline";
@@ -23,6 +24,8 @@ export function OverlayScene({ scene, reduceMotion }: { scene: RenderScene; redu
         switch (item.kind) {
           case "highlight":
             return <HighlightView key={item.id} item={item} display={scene.display.bounds} />;
+          case "parts":
+            return <PartsView key={item.id} item={item} />;
           case "pointer":
             return <PointerView key={item.id} item={item} />;
           case "steps":

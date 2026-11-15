@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, screen } from "electron";
 import { exportToolDefinitions, type ScreenCaptureProvider } from "@pointy/shared/overlay";
-import { createOverlayControl, AnamAvatarClient, anamControlFile, readManifestPrompts } from "./overlay";
+import { createOverlayControl, AnamAvatarClient, anamControlFile, imagesEnabled, readManifestPrompts } from "./overlay";
 import { CompositeAvoidRects } from "./overlay/avatar/CompositeAvoidRects";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
 import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
@@ -33,6 +33,9 @@ import { createTray } from "./tray";
 import { createQuitGuard, createScrollInvalidator } from "./productionLogic";
 import { loadRendererPage, PRELOAD_DIR } from "./rendererPages";
 import { startDevHarness } from "../dev/devHarness";
+
+/** Safety cap for the kept selection outline; the AssistantController removes it much earlier. */
+const SELECTION_OUTLINE_TTL_MS = 120_000;
 
 const plog = (msg: string) => console.log(`[pointy] ${msg}`);
 
@@ -86,6 +89,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     avoidRects: new CompositeAvoidRects(anam, new MockAvoidRects(primary, "none")),
     avatar: anam,
     assetsDir,
+    images: imagesEnabled(env),
     screen: displays,
     dev: {
       contentProtection: opts.contentProtection,
@@ -94,12 +98,20 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     },
   });
 
-  const offAxContext = ax.onContextEvent(() => overlay.control.onContextChange());
+  // Bumped on every desktop context change: the assistant skips coordinate tool calls built on an older screenshot.
+  let contextRevision = 0;
+  const invalidateContext = () => {
+    contextRevision++;
+    overlay.control.onContextChange();
+  };
+  const offAxContext = ax.onContextEvent(invalidateContext);
 
   // --- gestures: camera on, mouse on (kill switch in the tray), session driven only by the assistant
   const gestures: GesturesHandle | null = await startGestures({
     repoRoot,
     manualSession: true,
+    // The selection outline stays until the assistant clears it (offer answered / declined / 15 s); this is only the safety cap.
+    selectionTtlMs: SELECTION_OUTLINE_TTL_MS,
     env: {
       ...env,
       POINTY_GESTURES: env.POINTY_GESTURES === "0" ? "0" : "1",
@@ -140,17 +152,19 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   }
 
   // --- assistant: hidden Realtime window + controller
-  const tools = exportToolDefinitions({ pregeneratedImagePrompts: await readManifestPrompts(assetsDir) });
+  const images = imagesEnabled(env);
+  const tools = exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] });
   const assistantWin = createAssistantWindow({
     preloadDir: PRELOAD_DIR,
     loadPage: (w) => loadRendererPage(w, "assistant"),
-    mintSecret: () => mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions(), tools }),
+    mintSecret: () => mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images }), tools }),
     log: plog,
   });
   const controller = new AssistantController({
     transport: assistantWin.transport,
-    buildContext: () =>
+    buildContext: (o) =>
       captureScreenContext({
+        skipScreenshot: o?.skipScreenshot,
         getDisplays: () => displays.getDisplays(),
         primaryDisplayId: () => displays.getPrimaryDisplayId(),
         cursorDisplayId: () => String(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id),
@@ -166,12 +180,15 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
       // The gesture session (and with it the mouse) is active only while the assistant is open.
       setSessionActive: (active) => {
         ax.setActive(active || opts.devServer);
+        if (active) void ax.snapshotNow("session-open").catch(() => undefined); // attach AX observers even if the user selects before speaking
         if (!gestures) return;
         if (active && gesturesEnabled) gestures.session.open();
         else gestures.session.close();
       },
+      clearSelection: () => gestures?.clearSelection(),
     },
     selection: selectionStore,
+    contextRevision: () => contextRevision,
     clock: realClock,
     log: plog,
   });
@@ -186,7 +203,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     now: () => Date.now(),
   });
   const offWake = gestures?.sim.onAny((e) => {
-    if (scrollInvalidates(e)) overlay.control.onContextChange();
+    if (scrollInvalidates(e)) invalidateContext();
     if (e.type === "wake_requested" && gesturesEnabled) void controller.wake();
   });
 
@@ -237,6 +254,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
       boundsProvider: sim,
       screen: displays,
       assetsDir,
+      images,
       openFixture: false,
       openVoice: false,
       selection: { store: selectionStore, attach: attachSelection },

@@ -94,6 +94,11 @@ export function selectionText(s: SelectionSnapshot, images: "both" | "focus" | "
       : s.pointGlobal
         ? `point (${r(s.pointGlobal.x)}, ${r(s.pointGlobal.y)}), focus box ${bbox}`
         : `bbox ${bbox}`;
+  const f = s.focusGlobal;
+  // The close-up is cropped from a padded/grown/clamped box (not the bbox): say so, so pixels in it can be mapped to global DIP.
+  const focusMap = f
+    ? ` The close-up image covers exactly the global-DIP box x=${r(f.x)}, y=${r(f.y)}, ${r(f.width)}x${r(f.height)} (it is NOT the same as the selection bbox): a pixel (px, py) in it is at global x = ${r(f.x)} + px / imageWidth * ${r(f.width)}, y = ${r(f.y)} + py / imageHeight * ${r(f.height)}. Prefer element ids from the [screen] list over pixel-derived coordinates.`
+    : "";
   const what = s.kind === "region" ? "a region" : "a point";
   const imgs =
     images === "both"
@@ -103,7 +108,7 @@ export function selectionText(s: SelectionSnapshot, images: "both" | "focus" | "
         : images === "focus"
           ? "The attached image is a close-up of the selection (the whole-screen view could not be sent)."
         : "The images could not be sent; do not claim to see the selection.";
-  return `[selection] The user just selected ${what} on screen. ${imgs} Focus your answer on the selected part. Selection in global DIP: ${geometry} (use it as a highlight / show_explainer target if useful).`;
+  return `[selection] The user just selected ${what} on screen (display ${s.displayId}; use that displayId for coordinate targets). ${imgs} Focus your answer on the selected part. Selection in global DIP: ${geometry} (use it as a highlight / show_explainer target if useful).${focusMap}`;
 }
 
 const bytesOf = (e: object) => new TextEncoder().encode(JSON.stringify(e)).byteLength;
@@ -123,7 +128,7 @@ export function selectionItems(s: SelectionSnapshot, opts: { maxMessageBytes?: n
   if (bytesOf(both) <= max) return { events: [both], note: `full+focus in one message (${kb(both)}, limit ${Math.round(max / 1024)}KB)` };
 
   const focusOnly = userItem([text(selectionText(s, "focus")), image(s.focus.dataUrl)]);
-  const fullAlone = userItem([text("[selection] Context: the whole screen with the selection outlined (everything else dimmed)."), image(s.full.dataUrl)]);
+  const fullAlone = userItem([text(`[selection] Context: the whole screen (display ${s.displayId}) with the selection outlined (everything else dimmed).`), image(s.full.dataUrl)]);
   if (bytesOf(focusOnly) <= max) {
     if (bytesOf(fullAlone) <= max) {
       const focusFirst = userItem([text(selectionText(s, "focus_then_full")), image(s.focus.dataUrl)]);

@@ -84,6 +84,7 @@ describe("SelectionCapture", () => {
     expect(s.pointGlobal).toEqual({ x: 200, y: 100 });
     expect(s.polygonGlobal).toBeUndefined();
     expect(s.regionGlobal.width).toBe(400); // 480 clamped to the 400 wide display
+    expect(s.focusGlobal).toEqual(s.regionGlobal); // point: the focus box is the region; the snapshot carries it for pixel mapping
   });
 
   it("does nothing while the session is inactive, and ignores other events", async () => {

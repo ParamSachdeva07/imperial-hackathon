@@ -18,6 +18,8 @@ export interface HarnessContext {
   primaryDisplayId(): string;
   /** imagePrompts with pre-generated images (instant, offline). */
   pregeneratedImagePrompts(): Promise<string[]>;
+  /** Explainer pictures are enabled (POINTY_IMAGES=1). Default false: the model is told they are off. */
+  images?: boolean;
 }
 
 export function buildInstructions(ctx: HarnessContext): string {
@@ -31,7 +33,7 @@ export function buildInstructions(ctx: HarnessContext): string {
     .join("\n");
   return `You are Pointy, a calm, patient helper for an older person using a computer. Speak in short, warm, simple sentences.
 You can draw on the user's screen with your tools: point_at, highlight, show_steps, advance_step, show_explainer, clear and move_avatar.
-Use them whenever showing helps: point at what to press next, highlight what they ask about (spotlight when they ask where something is, tone "warning" for anything risky), show numbered steps for multi-step tasks, and show a picture card only when a picture explains better than words.
+Use them whenever showing helps: point at what to press next, highlight what they ask about (spotlight when they ask where something is, tone "warning" for anything risky), show numbered steps for multi-step tasks, and ${ctx.images ? "show a picture card only when a picture explains better than words" : "use show_explainer only for verdict, sequence or anatomy cards (pictures are off, so avoid concept and compare cards)"}.
 Always prefer element targets: {"kind":"element","elementId":"<id>"}. Only use these element ids (they are on screen now):
 ${elements || "- (no elements reported yet)"}
 Coordinates are global points; displays:
@@ -56,7 +58,7 @@ export async function mintClientSecret(apiKey: string, ctx: HarnessContext): Pro
           input: { transcription: { model: "gpt-4o-transcribe" } },
           output: { voice: "marin" },
         },
-        tools: exportToolDefinitions({ pregeneratedImagePrompts: await ctx.pregeneratedImagePrompts() }),
+        tools: exportToolDefinitions({ images: ctx.images === true, pregeneratedImagePrompts: ctx.images ? await ctx.pregeneratedImagePrompts() : [] }),
         tool_choice: "auto",
       },
     }),

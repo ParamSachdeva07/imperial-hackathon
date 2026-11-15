@@ -358,3 +358,26 @@ describe("OverlayManager turns and history", () => {
     expect(m.lastSet()).toHaveLength(1);
   });
 });
+
+describe("OverlayManager label_parts rules", () => {
+  it("label_parts does not replace a highlight (nor another label_parts)", () => {
+    const m = newMgr();
+    m.add(mk("h", "highlight"));
+    const { dismissed } = m.add(mk("lp1", "label_parts"));
+    expect(dismissed).toEqual([]);
+    expect(m.add(mk("lp2", "label_parts")).dismissed).toEqual([]);
+    expect(visibleIds(m)).toEqual(["h", "lp1", "lp2"]);
+  });
+
+  it("counts as ONE visible drawing and a new highlight does not replace it", () => {
+    const m = newMgr();
+    m.add(mk("lp", "label_parts"));
+    m.add(mk("h1", "highlight"));
+    expect(m.add(mk("h2", "highlight")).dismissed).toEqual([{ id: "h1", reason: "replaced" }]);
+    // third visible: fine; a 4th evicts the oldest non-step (the label_parts)
+    m.add(mk("p", "point_at"));
+    expect(visibleIds(m)).toEqual(["lp", "h2", "p"]);
+    expect(m.add(mk("p2", "point_at")).dismissed).toEqual([{ id: "lp", reason: "evicted" }]);
+  });
+});
+

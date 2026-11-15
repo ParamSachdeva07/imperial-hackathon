@@ -19,6 +19,7 @@ import { screenItemEventWithin, type ScreenContext } from "./screenContext";
 import { SentenceBatcher } from "./sentenceBatcher";
 import { estimateSpeakMs } from "./speechEstimate";
 import { StatusEmitter, type AssistantStatus } from "./status";
+import { usesCoordinateTargets } from "./toolTargets";
 import type { AnamSpeakerClient, RealtimeServerEvent, RealtimeTransport } from "./types";
 
 export interface AssistantConfig {
@@ -41,6 +42,8 @@ export interface AssistantConfig {
   anamConnectGraceMs: number;
   /** Speech queued in Anam while its call is not connected stays valid this long (matches Anam's queue age; default 30 s). */
   anamQueueMaxAgeMs: number;
+  /** After the offer question finishes (mic released) with no answer for this long, the outline is dropped (default 15 s). */
+  offerNoAnswerMs: number;
 }
 
 export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
@@ -54,16 +57,19 @@ export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
   selectionMaxAgeMs: 60_000,
   anamConnectGraceMs: 25_000,
   anamQueueMaxAgeMs: 30_000,
+  offerNoAnswerMs: 15_000,
 };
 
 export interface AssistantDeps {
   transport: RealtimeTransport;
   /** One screen capture + AX snapshot (screenContext.captureScreenContext, bound). Should not reject. */
-  buildContext(): Promise<ScreenContext>;
+  buildContext(opts?: { skipScreenshot?: boolean }): Promise<ScreenContext>;
   anam: AnamSpeakerClient;
   overlay: Pick<OverlayControl, "handleTool" | "onTurnStart">;
-  gestures: { setSessionActive(active: boolean): void };
-  selection: { latest(): SelectionSnapshot | null; clear(): void };
+  gestures: { setSessionActive(active: boolean): void; /** Remove the kept selection outline from the feedback window. */ clearSelection?(): void };
+  selection: { latest(): SelectionSnapshot | null; clear(): void; /** A new gesture selection was captured (starts the offer flow). */ onSnapshot?(cb: (s: SelectionSnapshot) => void): () => void };
+  /** Monotonic counter bumped whenever the desktop context changes (focus, scroll, window move): coordinate tool calls from an older revision are skipped. */
+  contextRevision?(): number;
   clock: Clock;
   status?: StatusEmitter;
   config?: Partial<AssistantConfig>;
@@ -80,7 +86,21 @@ interface Turn {
   createRequested: boolean;
   /** A [screen] item was sent for this turn (so a late selection can ride along). */
   screenSent?: boolean;
+  /** Desktop context revision when this turn's screen was captured. */
+  revision: number;
   timer: TimerHandle | null;
+}
+
+/** A selection the assistant asked about and is waiting on an answer for. */
+interface Offer {
+  sel: SelectionSnapshot;
+  /** conversation item ids (selection images + [offer] note) kept for the follow-up turn. */
+  itemIds: string[];
+  /** The offer response finished (a question was asked): the no-answer timer may run. */
+  asked: boolean;
+  timer: TimerHandle | null;
+  /** Desktop context revision when the selection images were captured (the follow-up turn inherits it). */
+  revision: number;
 }
 
 type Phase = "closed" | "opening" | "open" | "closing";
@@ -136,6 +156,20 @@ export class AssistantController {
   private sawAnamConnected = false;
   private anamMisses = 0;
   private readonly offs: Array<() => void> = [];
+  private offer: Offer | null = null;
+  /** The next response.created belongs to the offer (it must not clear the outline). */
+  private offerCreatePending = false;
+  private offerResponseId: string | null = null;
+  /** The deferred response.create (pendingCreate) is an offer: tool_choice none. */
+  private pendingOfferCreate = false;
+  /** A gesture outline is on screen and not yet cleared. */
+  private outlineActive = false;
+  private offerTok = 0;
+  /** A turn took over the offer (its images ride that turn) but the answer has not started: the outline is still waiting on the user. */
+  private offerTaken = false;
+  private outlineTimer: TimerHandle | null = null;
+  /** Desktop context revision at the moment each recent selection was captured (its pixels belong to it). */
+  private readonly selRevisions = new Map<string, number>();
 
   constructor(private readonly deps: AssistantDeps) {
     this.cfg = { ...DEFAULT_ASSISTANT_CONFIG, ...deps.config };
@@ -143,6 +177,8 @@ export class AssistantController {
     this.log = deps.log ?? (() => {});
     this.offs.push(deps.transport.onEvent((e) => this.onServerEvent(e)));
     this.offs.push(deps.transport.onClosed((reason) => this.onTransportClosed(reason)));
+    const offSel = deps.selection.onSnapshot?.((s) => void this.onSelection(s));
+    if (offSel) this.offs.push(offSel);
   }
 
   isOpen(): boolean {
@@ -210,6 +246,7 @@ export class AssistantController {
     const gen = this.talkGen; // bumped by cancelResponse; any newer turn/barge-in bumps it again
     const turnAtStart = this.turn;
     this.pendingCreate = false;
+    this.pendingOfferCreate = false;
     if (this.turn) this.turn.createRequested = true; // do not answer this turn after an explicit interrupt
     this.clearRelease();
     await this.deps.anam.interrupt().catch((e: unknown) => this.log(`anam interrupt failed: ${String(e)}`));
@@ -245,6 +282,12 @@ export class AssistantController {
     this.speakingSeenAt = null;
     this.prevItemIds = [];
     this.lastSelectionId = null;
+    this.selRevisions.clear();
+    this.dropOffer(false);
+    this.offerCreatePending = false;
+    this.offerResponseId = null;
+    this.pendingOfferCreate = false;
+    this.clearOutline();
     // End the Anam call first (fire now, await below): on quit the process may exit during the awaited overlay clear.
     const anamEnded = this.deps.anam.endSession().catch((e: unknown) => this.log(`anam end failed: ${String(e)}`));
     try {
@@ -283,6 +326,11 @@ export class AssistantController {
         return this.onSpeechStarted();
       case "input_audio_buffer.speech_stopped":
         if (this.turn) this.turn.speaking = false;
+        // A barge-in that never commits (cough / VAD false positive) must not leave the offer without its no-answer timer.
+        if (!this.busy()) {
+          this.maybeStartOfferTimer();
+          this.maybeStartOutlineTimer();
+        }
         return;
       case "input_audio_buffer.committed":
         return this.onCommitted();
@@ -314,10 +362,15 @@ export class AssistantController {
 
   /** response.create was rejected: no response.created/done will ever arrive, so unstick the turn. */
   private onCreateRejected(): void {
+    const deferred = this.pendingCreate; // a create (e.g. the offer's) that was waiting behind the rejected one
     this.responseRequested = false;
     this.cancelOnCreate = false;
-    this.pendingCreate = false;
-    if (this.toolsRunning > 0) return;
+    this.offerCreatePending = false;
+    if (this.toolsRunning > 0) {
+      this.pendingCreate = false;
+      return;
+    }
+    if (deferred) return this.requestResponse(); // sends it (keeping its offer flag) and clears pendingCreate
     this.afterAnswer();
   }
 
@@ -335,6 +388,9 @@ export class AssistantController {
       void this.deps.anam.interrupt().catch(() => undefined);
     }
     this.pendingCreate = false;
+    this.pendingOfferCreate = false;
+    this.cancelOfferTimer();
+    this.cancelOutlineTimer();
     this.clearRelease();
     this.ignoreCommit = false;
     this.startTurn(true);
@@ -344,7 +400,7 @@ export class AssistantController {
   private startTurn(speaking: boolean): Turn {
     if (this.turn?.timer != null) this.deps.clock.clearTimeout(this.turn.timer);
     const n = ++this.turnCounter;
-    const turn: Turn = { id: `turn-${n}`, n, speaking, committed: false, contextSettled: false, gaveUp: false, createRequested: false, timer: null };
+    const turn: Turn = { id: `turn-${n}`, n, speaking, committed: false, contextSettled: false, gaveUp: false, createRequested: false, revision: this.offer?.revision ?? this.deps.contextRevision?.() ?? 0, timer: null }; // provisional: onContext re-stamps it when the screenshot is actually captured; a retained offer keeps its own revision (its images are what the model sees)
     this.turn = turn;
     try {
       this.deps.overlay.onTurnStart(turn.id);
@@ -352,7 +408,7 @@ export class AssistantController {
       this.log(`onTurnStart failed: ${String(e)}`);
     }
     const my = this.epoch;
-    void this.deps.buildContext().then(
+    void this.deps.buildContext(this.offer ? { skipScreenshot: true } : undefined).then(
       (ctx) => {
         if (my === this.epoch) this.onContext(turn, ctx);
       },
@@ -367,6 +423,8 @@ export class AssistantController {
   private onContext(turn: Turn, ctx: ScreenContext | null): void {
     if (this.turn !== turn || turn.gaveUp) return; // superseded or too late: never sent
     turn.contextSettled = true;
+    // The revision belongs to the captured context (after the AX / overlay-hide wait), not to speech start. A retained offer's images keep the offer's revision.
+    turn.revision = this.offer?.revision ?? this.deps.contextRevision?.() ?? turn.revision;
     const ids: string[] = [];
     const events: object[] = [];
     if (ctx) {
@@ -380,6 +438,7 @@ export class AssistantController {
       if (sel) {
         const { events: selEvents, note } = selectionItems(sel, { maxMessageBytes: this.deps.transport.maxMessageBytes() });
         this.log(`selection attached: ${note}`);
+        this.adoptSelectionRevision(turn, sel);
         const seq = ++this.selSeq;
         selEvents.forEach((e, i) => {
           const id = `sel_${turn.n}_${seq}_${i}`;
@@ -392,9 +451,16 @@ export class AssistantController {
     }
     // The previous turn's screen/selection items are stale (old ids, old pixels): drop them.
     for (const old of this.prevItemIds) this.deps.transport.send({ type: "conversation.item.delete", item_id: old });
+    // The offer's items are NOT taken over here: speech start may never commit (VAD false positive). They are handed over in maybeRespond.
     this.prevItemIds = ids;
     for (const e of events) this.deps.transport.send(e);
     this.maybeRespond(turn);
+  }
+
+  /** Coordinates derived from a selection's (newer) full-screen image are valid at the selection's revision, not the earlier speech-start one. */
+  private adoptSelectionRevision(turn: Turn, sel: SelectionSnapshot): void {
+    const r = this.selRevisions.get(sel.id);
+    if (r !== undefined && r > turn.revision) turn.revision = r;
   }
 
   private freshSelection(): SelectionSnapshot | null {
@@ -412,6 +478,8 @@ export class AssistantController {
     if (!turn || turn.committed) turn = this.startTurn(false); // speech_started was missed
     turn.speaking = false;
     turn.committed = true;
+    this.cancelOutlineTimer();
+    this.cancelOfferTimer(); // a speech_stopped may have re-armed it; the utterance is real, the answer path owns the offer now
     this.status.set("thinking");
     this.clearIdle();
     if (!turn.contextSettled) {
@@ -421,15 +489,18 @@ export class AssistantController {
         if (this.turn !== t || t.contextSettled) return;
         this.log("screen context too slow; answering without it");
         t.gaveUp = true;
+        const kept = this.consumeOffer();
         if (this.prevItemIds.length > 0) {
           // The old screen/selection items describe a previous screen: drop them and say so.
           for (const old of this.prevItemIds) this.deps.transport.send({ type: "conversation.item.delete", item_id: old });
           const nid = `scr_${t.n}`;
-          this.prevItemIds = [nid];
+          this.prevItemIds = [nid, ...kept];
           this.deps.transport.send({
             type: "conversation.item.create",
             item: { id: nid, type: "message", role: "user", content: [{ type: "input_text", text: "[screen] The current screen could not be captured in time. You cannot see the screen right now; do not rely on earlier screenshots or control ids." }] },
           });
+        } else {
+          this.prevItemIds = kept;
         }
         this.maybeRespond(t);
       }, this.cfg.contextTimeoutMs);
@@ -443,6 +514,7 @@ export class AssistantController {
     turn.createRequested = true;
     if (turn.timer != null) this.deps.clock.clearTimeout(turn.timer);
     turn.timer = null;
+    this.prevItemIds.push(...this.consumeOffer()); // a committed utterance answers the offer: its items ride this turn and are deleted by the next
     this.attachLateSelection(turn);
     this.requestResponse();
   }
@@ -454,6 +526,7 @@ export class AssistantController {
     if (!sel) return;
     const { events, note } = selectionItems(sel, { maxMessageBytes: this.deps.transport.maxMessageBytes() });
     this.log(`late selection attached: ${note}`);
+    this.adoptSelectionRevision(turn, sel);
     // Replace any selection already attached for this turn (unique ids; the old items must go).
     const stale = this.prevItemIds.filter((i) => i.startsWith(`sel_${turn.n}_`));
     for (const old of stale) this.deps.transport.send({ type: "conversation.item.delete", item_id: old });
@@ -471,21 +544,33 @@ export class AssistantController {
   // ------------------------------------------------------------------ responses
 
   /** The single place response.create is sent; never while a response is active or pending. */
-  private requestResponse(): void {
+  private requestResponse(opts?: { offer?: boolean }): void {
+    if (opts?.offer) this.pendingOfferCreate = true;
     if (this.responseRequested || this.activeResponseId) {
       this.pendingCreate = true;
       return;
     }
     this.pendingCreate = false;
+    const offer = this.pendingOfferCreate;
+    this.pendingOfferCreate = false;
+    this.offerCreatePending = offer;
     this.responseRequested = true;
     this.cancelOnCreate = false;
     this.status.set("thinking");
     this.createEventId = `rc-${++this.createSeq}`;
-    this.deps.transport.send({ type: "response.create", event_id: this.createEventId });
+    // An offer reply is a spoken question only: tool_choice none (GA response.create accepts it under `response`).
+    this.deps.transport.send({ type: "response.create", event_id: this.createEventId, ...(offer ? { response: { tool_choice: "none" } } : {}) });
   }
 
   private onResponseCreated(id: string): void {
     this.responseRequested = false;
+    const cancelling = this.cancelOnCreate; // this response is about to be cancelled: it must neither own the offer nor clear the outline
+    if (this.offerCreatePending) {
+      this.offerCreatePending = false;
+      if (!cancelling) this.offerResponseId = id;
+    } else if (this.outlineActive && !cancelling) {
+      this.clearOutline(); // the AI starts answering a user turn: the selection outline has done its job
+    }
     this.activeResponseId = id;
     this.responseSeq++;
     this.responseTurnKey = `${this.turn?.id ?? "turn-0"}-r${this.responseSeq}`;
@@ -519,6 +604,10 @@ export class AssistantController {
     if (typeof id === "string") this.cancelled.delete(id);
     if (id !== undefined && id !== this.activeResponseId && !wasCancelled) return; // not ours
     this.activeResponseId = null;
+    if (!wasCancelled && id !== undefined && id === this.offerResponseId) {
+      this.offerResponseId = null;
+      if (this.offer) this.offer.asked = true;
+    }
 
     if (!wasCancelled) {
       const rest = this.batcher.flush();
@@ -544,7 +633,13 @@ export class AssistantController {
           continue;
         }
         try {
-          output = await this.deps.overlay.handleTool(call.name, JSON.parse(call.arguments || "{}"));
+          const args: unknown = JSON.parse(call.arguments || "{}");
+          if (originTurn && (this.deps.contextRevision?.() ?? 0) !== originTurn.revision && usesCoordinateTargets(args)) {
+            // The desktop changed after the screenshot this answer is based on: coordinates would land in the wrong place.
+            output = { ok: false, visible: false, reason: "stale_context", error: "The screen changed since you last looked, so these screen positions are out of date. Nothing was drawn. Use element ids from the latest [screen] list, or tell the user you need to look again." };
+          } else {
+            output = await this.deps.overlay.handleTool(call.name, args);
+          }
         } catch (e) {
           output = { ok: false, visible: false, reason: "invalid_input", error: String(e) };
         }
@@ -571,7 +666,151 @@ export class AssistantController {
     } else if (!this.turn?.speaking && !(this.turn?.committed && !this.turn.createRequested)) {
       this.status.set("listening");
       this.armIdle();
+      this.maybeStartOfferTimer();
     }
+  }
+
+  // ------------------------------------------------------------------ selection offer
+
+  private onSelection(sel: SelectionSnapshot): Promise<void> {
+    if (this.phase !== "open") return Promise.resolve();
+    if (sel.id === this.lastSelectionId) return Promise.resolve();
+    this.selRevisions.set(sel.id, this.deps.contextRevision?.() ?? 0);
+    if (this.selRevisions.size > 8) this.selRevisions.delete(this.selRevisions.keys().next().value as string);
+    return this.runOffer(sel);
+  }
+
+  private midUtterance(): boolean {
+    const t = this.turn;
+    return !!t && (t.speaking || (t.committed && !t.createRequested));
+  }
+
+  private async runOffer(sel: SelectionSnapshot): Promise<void> {
+    const my = this.epoch;
+    const tok = ++this.offerTok;
+    const revision = this.selRevisions.get(sel.id) ?? this.deps.contextRevision?.() ?? 0; // the selection's pixels belong to this revision, not to whatever it is after interrupt() waits
+    this.outlineActive = true;
+    this.offerTaken = false;
+    this.dropOffer(false); // a newer selection replaces a pending offer (the feedback window already redrew)
+    if (this.midUtterance()) return; // the user is talking: the existing late-attach path hands the selection over, no offer
+    const busy = this.micGated || this.responseRequested || this.activeResponseId !== null || this.toolsRunning > 0 || this.status.get() === "speaking" || this.status.get() === "thinking";
+    if (busy) {
+      // A selection is an explicit user action: stop whatever is being said first.
+      await this.interrupt();
+      if (my !== this.epoch || tok !== this.offerTok || this.phase !== "open" || this.midUtterance()) return;
+    }
+    this.sendOffer(sel, revision);
+  }
+
+  private sendOffer(sel: SelectionSnapshot, revision: number): void {
+    if (this.turn?.timer != null) this.deps.clock.clearTimeout(this.turn.timer);
+    const n = ++this.turnCounter;
+    const turn: Turn = { id: `turn-${n}`, n, speaking: false, committed: true, contextSettled: true, gaveUp: false, createRequested: true, revision, timer: null };
+    this.turn = turn;
+    try {
+      this.deps.overlay.onTurnStart(turn.id);
+    } catch (e) {
+      this.log(`onTurnStart failed: ${String(e)}`);
+    }
+    // The previous turn's screen/selection items are stale: drop them; the offer carries its own images.
+    for (const old of this.prevItemIds) this.deps.transport.send({ type: "conversation.item.delete", item_id: old });
+    this.prevItemIds = [];
+    const { events, note } = selectionItems(sel, { maxMessageBytes: this.deps.transport.maxMessageBytes() });
+    this.log(`offer: selection attached: ${note}`);
+    const seq = ++this.selSeq;
+    const itemIds: string[] = [];
+    events.forEach((e, i) => {
+      const id = `sel_${n}_${seq}_${i}`;
+      this.deps.transport.send({ ...e, item: { ...(e as { item: object }).item, id } });
+      itemIds.push(id);
+    });
+    const oid = `offer_${n}`;
+    this.deps.transport.send({
+      type: "conversation.item.create",
+      item: {
+        id: oid,
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "[offer] The user just selected this on purpose and has not said anything yet. In ONE short sentence, say what it looks like and offer to check whether it is safe or to explain it. Do not draw anything and do not call any tool yet." }],
+      },
+    });
+    itemIds.push(oid);
+    this.lastSelectionId = sel.id;
+    this.offer = { sel, itemIds, asked: false, timer: null, revision: turn.revision };
+    this.clearIdle();
+    this.requestResponse({ offer: true });
+  }
+
+  /** Ownership of the offer's item ids moves to the follow-up turn (it deletes them on the turn after). */
+  private consumeOffer(): string[] {
+    const o = this.offer;
+    if (!o) return [];
+    this.cancelOfferTimer();
+    this.offer = null;
+    this.offerTaken = true;
+    return o.itemIds;
+  }
+
+  /** Forget the offer; optionally also remove the outline. Its conversation items are deleted. */
+  private dropOffer(clearOutline: boolean): void {
+    const o = this.offer;
+    if (o) {
+      this.cancelOfferTimer();
+      this.offer = null;
+      if (this.phase === "open") for (const id of o.itemIds) this.deps.transport.send({ type: "conversation.item.delete", item_id: id });
+      this.offerResponseId = null;
+    }
+    if (clearOutline) this.clearOutline();
+  }
+
+  private clearOutline(): void {
+    this.outlineActive = false;
+    this.offerTaken = false;
+    this.cancelOutlineTimer();
+    try {
+      this.deps.gestures.clearSelection?.();
+    } catch (e) {
+      this.log(`clear selection outline failed: ${String(e)}`);
+    }
+  }
+
+  private cancelOutlineTimer(): void {
+    if (this.outlineTimer != null) this.deps.clock.clearTimeout(this.outlineTimer);
+    this.outlineTimer = null;
+  }
+
+  /**
+   * The offer was taken over by a barge-in turn (speech start) that then ended without a committed utterance (cough / VAD false
+   * positive): nothing will answer, so give the user the same quiet no-answer window before the outline goes.
+   */
+  private maybeStartOutlineTimer(): void {
+    if (!this.offerTaken || !this.outlineActive || this.outlineTimer != null || this.micGated || this.midUtterance()) return;
+    const my = this.epoch;
+    this.outlineTimer = this.deps.clock.setTimeout(() => {
+      this.outlineTimer = null;
+      if (my !== this.epoch || this.phase !== "open" || !this.offerTaken || this.busy()) return;
+      this.log("offer: no answer after a false barge-in, clearing the selection");
+      this.clearOutline();
+    }, this.cfg.offerNoAnswerMs);
+  }
+
+  private cancelOfferTimer(): void {
+    if (this.offer?.timer != null) this.deps.clock.clearTimeout(this.offer.timer);
+    if (this.offer) this.offer.timer = null;
+  }
+
+  /** 15 s after the question finished (mic released) with no answer: drop the outline quietly. */
+  private maybeStartOfferTimer(): void {
+    const o = this.offer;
+    if (!o || !o.asked || o.timer != null || this.micGated || this.midUtterance()) return;
+    const my = this.epoch;
+    o.timer = this.deps.clock.setTimeout(() => {
+      o.timer = null;
+      if (my !== this.epoch || this.offer !== o || this.phase !== "open") return;
+      if (this.turn?.speaking) return; // the user is talking right now
+      this.log("offer: no answer, clearing the selection");
+      this.dropOffer(true);
+    }, this.cfg.offerNoAnswerMs);
   }
 
   // ------------------------------------------------------------------ speaking + half-duplex mic
@@ -640,6 +879,7 @@ export class AssistantController {
     if (this.phase === "open") {
       this.status.set("listening");
       this.armIdle();
+      this.maybeStartOfferTimer();
     }
   }
 
@@ -695,6 +935,7 @@ export class AssistantController {
   private clearAllTimers(): void {
     this.clearIdle();
     this.clearRelease();
+    this.cancelOutlineTimer();
     if (this.pollTimer != null) this.deps.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
     if (this.turn?.timer != null) this.deps.clock.clearTimeout(this.turn.timer);

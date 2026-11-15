@@ -42,6 +42,8 @@ export interface ScreenContextDeps {
   ax: Pick<AxProvider, "snapshotNow" | "trusted"> | null;
   /** Display under the pointer; the fallback target when no AX snapshot says where the active app is. */
   cursorDisplayId?(): string | null;
+  /** Do not capture a screenshot (a fresh selection already carries one; capturing would flicker the kept outline): AX list only. */
+  skipScreenshot?: boolean;
   log?(msg: string): void;
 }
 
@@ -123,6 +125,8 @@ export interface ComposeInput {
   display: DisplayInfo | null;
   axUnavailable: "untrusted" | "failed" | null;
   screenError: string | null;
+  /** The screenshot was deliberately not taken (the [selection] images show the screen). */
+  skippedScreenshot?: boolean;
 }
 
 /** Build the [screen] message text. Pure. */
@@ -135,6 +139,11 @@ export function composeScreenText(input: ComposeInput): { text: string; elementI
     lines.push(
       `[screen] The attached screenshot is the user's screen right now (display ${d.id}, ${r(d.bounds.width)}x${r(d.bounds.height)} points, top-left at ${r(d.bounds.x)},${r(d.bounds.y)}). ` +
         `Screenshot pixel (px,py) = global point (${r(d.bounds.x)} + px*${f.toFixed(3)}, ${r(d.bounds.y)} + py*${f.toFixed(3)}).`,
+    );
+  } else if (input.skippedScreenshot) {
+    notes.push("screenshot_skipped");
+    lines.push(
+      `[screen] No new screenshot this turn: the [selection] images above show the user's screen${d ? ` (display ${d.id})` : ""} as it was when they selected. The control list below is current; prefer its element ids.`,
     );
   } else {
     notes.push("no_screen");
@@ -186,7 +195,9 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
 
   // The AX snapshot says which display the active app is on; capture that one (not blindly the primary).
   const displayId = pickActiveDisplayId(snapshot, displays, deps.primaryDisplayId(), deps.cursorDisplayId?.() ?? null);
-  const shotP = deps
+  const shotP = deps.skipScreenshot
+    ? Promise.resolve({ ok: false as const, error: "skipped" })
+    : deps
     .hiding.withHidden(() => deps.capture(displayId))
     .then((shot) => ({ ok: true as const, shot }))
     .catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
@@ -201,15 +212,16 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
     if (!image) screenError = "screenshot too large to send";
   } else {
     screenError = shot.error;
-    log(`screen capture failed: ${shot.error}`);
+    if (!deps.skipScreenshot) log(`screen capture failed: ${shot.error}`);
   }
 
   const composed = composeScreenText({
     snapshot,
     image: image ? { width: image.width, height: image.height } : null,
-    display: image ? display : null,
+    display: image || deps.skipScreenshot ? display : null,
     axUnavailable: deps.ax ? (axTrusted ? "failed" : "untrusted") : "failed",
     screenError,
+    skippedScreenshot: deps.skipScreenshot === true,
   });
   return {
     text: composed.text,

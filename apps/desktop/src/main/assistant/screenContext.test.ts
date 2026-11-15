@@ -133,6 +133,21 @@ describe("composeScreenText / screenItemEvent", () => {
   });
 });
 
+describe("skipped screenshot", () => {
+  it("says the selection images show the screen and keeps the control list", () => {
+    const { text, notes } = composeScreenText({ snapshot: null, image: null, display: null, axUnavailable: "failed", screenError: "skipped", skippedScreenshot: true });
+    expect(notes).toContain("screenshot_skipped");
+    expect(text).toContain("[selection] images above");
+    expect(text).not.toContain("No screenshot is available");
+  });
+
+  it("names the display so coordinate targets have a valid displayId", () => {
+    const display = { id: "7", bounds: { x: 0, y: 0, width: 100, height: 50 } } as never;
+    const { text } = composeScreenText({ snapshot: null, image: null, display, axUnavailable: "failed", screenError: "skipped", skippedScreenshot: true });
+    expect(text).toContain("display 7");
+  });
+});
+
 describe("screenItemEventWithin", () => {
   const big = { text: "t", imageDataUrl: `data:image/jpeg;base64,${"A".repeat(5000)}`, imageBytes: 3750, displayId: "1", elementIds: [], notes: [] };
   it("keeps the image when it fits or no limit is known", () => {

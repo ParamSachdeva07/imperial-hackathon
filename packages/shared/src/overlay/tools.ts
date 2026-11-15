@@ -10,6 +10,7 @@ import {
   AdvanceStepInput,
   ClearInput,
   HighlightInput,
+  LabelPartsInput,
   MagnifyInput,
   MoveAvatarInput,
   PointAtInput,
@@ -19,7 +20,7 @@ import {
   ShowStepsInput,
 } from "./schemas";
 
-export const MVP_TOOL_NAMES = ["point_at", "highlight", "show_steps", "advance_step", "show_explainer", "clear", "move_avatar"] as const;
+export const MVP_TOOL_NAMES = ["point_at", "highlight", "label_parts", "show_steps", "advance_step", "show_explainer", "clear", "move_avatar"] as const;
 export const STRETCH_TOOL_NAMES = ["magnify", "preview_action", "replay_last"] as const;
 export const TOOL_NAMES = [...MVP_TOOL_NAMES, ...STRETCH_TOOL_NAMES] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -53,6 +54,14 @@ export const TOOLS = {
     tier: "mvp",
     audience: "model",
   },
+  label_parts: {
+    name: "label_parts",
+    description:
+      "Point out SEVERAL parts of what is on screen at once (2-5): draws a ring and a short label on each, as one drawing. Use it when the user asks about the parts of something, what to look at, or why something looks suspicious (e.g. the sender, the link and the urgent wording of an email), and use `tone: warning` on the risky parts (default `info`). Prefer `kind: element` targets; use rects inside the user's selection when there are no element ids. Unlike `highlight` it does not replace the current highlight. For ONE thing use `highlight`.",
+    input: LabelPartsInput,
+    tier: "mvp",
+    audience: "model",
+  },
   show_steps: {
     name: "show_steps",
     description:
@@ -71,7 +80,7 @@ export const TOOLS = {
   show_explainer: {
     name: "show_explainer",
     description:
-      "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
+      "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea; `verdict` answers 'is this safe / real / a scam?' with a tone (`warning` for risky, `success` for fine, `info` if unsure), the card `title` as the headline (e.g. 'Likely a scam') and 1-3 short `reasons` (pair it with `label_parts` on the suspicious parts). Never put words inside `imagePrompt`; captions carry all text.",
     input: ShowExplainerInput,
     tier: "mvp",
     audience: "model",
@@ -132,6 +141,11 @@ export interface ExportOptions {
    * listed in show_explainer's description so the model reuses them verbatim: instant, offline images.
    */
   pregeneratedImagePrompts?: string[];
+  /**
+   * Explainer pictures are enabled (default true: the base description). `false` appends a note that pictures are off, so concept/compare
+   * show icons and the model prefers verdict, sequence, anatomy and label_parts. The schema is unchanged (imagePrompt fields stay, unused).
+   */
+  images?: boolean;
   /** Include controller-only tools such as `preview_action` (default false). */
   includeControllerTools?: boolean;
 }
@@ -178,6 +192,18 @@ export function toolJsonSchema(name: ToolName, opts: ExportOptions = {}): Record
   return normalizeForFunctionCalling(json) as Record<string, unknown>;
 }
 
+export const PICTURES_OFF_NOTE =
+  "Pictures are off: `concept` and `compare` show only icons, so prefer `verdict`, `sequence`, `anatomy` and `label_parts` and do not rely on `imagePrompt`.";
+
+function toolDescription(t: { name: ToolName; description: string }, opts: ExportOptions): string {
+  if (t.name !== "show_explainer") return t.description;
+  if (opts.images === false) return `${t.description} ${PICTURES_OFF_NOTE}`;
+  if (opts.pregeneratedImagePrompts?.length) {
+    return `${t.description} These pictures are ready instantly; reuse one of these imagePrompts word for word when it fits: ${opts.pregeneratedImagePrompts.map((p) => JSON.stringify(p)).join("; ")}.`;
+  }
+  return t.description;
+}
+
 /** The tool list to register with the voice model. */
 export function exportToolDefinitions(opts: ExportOptions = {}): FunctionToolDefinition[] {
   return Object.values(TOOLS)
@@ -186,10 +212,7 @@ export function exportToolDefinitions(opts: ExportOptions = {}): FunctionToolDef
     .map((t) => ({
       type: "function" as const,
       name: t.name,
-      description:
-        t.name === "show_explainer" && opts.pregeneratedImagePrompts?.length
-          ? `${t.description} These pictures are ready instantly; reuse one of these imagePrompts word for word when it fits: ${opts.pregeneratedImagePrompts.map((p) => JSON.stringify(p)).join("; ")}.`
-          : t.description,
+      description: toolDescription(t, opts),
       parameters: toolJsonSchema(t.name, opts),
     }));
 }

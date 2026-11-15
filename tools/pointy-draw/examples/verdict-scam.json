@@ -1,0 +1,9 @@
+{
+  "anchor": { "kind": "element", "elementId": "fixture.emailBody" },
+  "title": "Likely a scam",
+  "spec": {
+    "kind": "verdict",
+    "tone": "warning",
+    "reasons": ["Sender address looks fake", "Threatens to close your account", "Link goes to a different site"]
+  }
+}

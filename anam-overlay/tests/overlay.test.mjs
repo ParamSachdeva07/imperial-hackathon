@@ -341,6 +341,37 @@ test('speak-only: control API drives a mic-less call, queues talk, streams per t
   } finally { if (application) await application.close(); await server.close(); }
 });
 
+test('speak-only: a failed manual call restores the dot so a later control-API start works', { timeout: 60_000 }, async () => {
+  const server = await createServer({ configFile: false, root, plugins: [react()],
+    resolve: { alias: [{ find: '@anam-ai/js-sdk', replacement: path.join(root, 'tests/fake-sdk.mjs') }] },
+    server: { host: '127.0.0.1', port: 5173, strictPort: true } });
+  let application;
+  try {
+    await server.listen();
+    const launched = await launch(true, { ANAM_SPEAK_ONLY: '1' });
+    application = launched.application;
+    const page = launched.page;
+    await application.evaluate(() => {
+      globalThis.fetch = async () => new Response(JSON.stringify({ sessionToken: 'test-ephemeral-token' }), { status: 200 });
+    });
+    let info;
+    for (let i = 0; i < 50 && !info; i++) {
+      try { info = JSON.parse(await readFile(launched.controlFile, 'utf8')); } catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    assert.ok(info, 'control file written to the temp path');
+    await page.evaluate(() => { window.__anamFixture.delay = 1; window.__anamFixture.fail = true; });
+    await page.locator('.launcher').click();
+    // the failed manual call collapses back to the dot instead of staying expanded
+    await page.waitForFunction(() => window.innerWidth === 56);
+    assert.equal(await page.locator('.launcher').isVisible(), true);
+    await page.evaluate(() => { window.__anamFixture.fail = false; });
+    const res = await fetch(`http://127.0.0.1:${info.port}/session`, { method: 'POST',
+      headers: { 'x-anam-control-token': info.token }, body: JSON.stringify({ action: 'start' }) });
+    assert.equal(res.status, 200);
+    await page.waitForFunction(() => document.querySelector('.avatar.live'));
+  } finally { if (application) await application.close(); await server.close(); }
+});
+
 test('renderer build contains no backend configuration', async () => {
   const html = await readFile(path.join(root, 'dist/index.html'), 'utf8');
   const scriptPath = html.match(/src="(.+?\.js)"/)[1];

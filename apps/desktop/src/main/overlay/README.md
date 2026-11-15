@@ -15,7 +15,7 @@ const overlay = createOverlayControl({
   boundsProvider,                 // you: where elements are         (BoundsProvider)
   captureProvider,                // you: screen crops for anatomy    (ScreenCaptureProvider, rect in GLOBAL DIP)
   avoidRects: { getAvoidRects: () => [avatarWindow.getBounds()] },   // optional
-  assetsDir: join(appRoot, "assets/explainers"),                     // optional: enables pictures
+  assetsDir: join(appRoot, "assets/explainers"),                     // pictures: also pass images: imagesEnabled() (POINTY_IMAGES=1; off by default)
 });
 
 realtime.registerTools(exportToolDefinitions());   // or packages/shared/generated/overlay-tools.json
@@ -57,6 +57,15 @@ real one; it is also the `AvoidRectsProvider`). `move_avatar` picks a corner via
 drawing is shown, if the avatar is within 16 DIP of its target the service runs the same "auto" move in
 the background (serialized, at most one per 1.5 s, never affecting the tool result).
 
+## `label_parts` and the `verdict` template
+
+`label_parts` (kind `labelParts` in `annotations.ts`, id prefix `lp`) draws a ring plus a placed label
+per item as one `parts` render item: `placeLabel` avoids every ring of the group, the labels already
+placed and other drawings. Slots are `part:N`; unresolved items are skipped (`drawable` gate: the call
+fails only when none resolve) and losing a part is fine while another remains. It has no replace rule
+in `OverlayManager` (unlike `highlight`). The `verdict` explainer template is a text-only card (no
+async loading): see `measureCard` for its size and `renderer/overlay/explainer/VerdictTemplate.tsx`.
+
 ## Behaviour
 
 - At most 3 annotations are visible (a step guide counts as one). A new highlight replaces the
@@ -89,6 +98,6 @@ wake ring, selection) is drawn by the gestures package's own feedback window, st
   fake mail app.
 - `npm run e2e` — every CLI command against the fake mail app. `npm run eval:voice` — the real model
   choosing tools for typed requests, drawn live.
-- `npm run broker` / `npm run pregen` — fal.ai image broker / pre-generate pictures (`FAL_KEY`).
+- `npm run broker` / `npm run pregen` — fal.ai image broker / pre-generate pictures (`FAL_KEY`; only with `POINTY_IMAGES=1`).
 - `npm run capture:gallery -w @pointy/desktop` — screenshots of every visual state.
 - Env flags are listed at the top of `apps/desktop/src/main/index.ts`.

@@ -513,6 +513,209 @@
   },
   {
     "type": "function",
+    "name": "label_parts",
+    "description": "Point out SEVERAL parts of what is on screen at once (2-5): draws a ring and a short label on each, as one drawing. Use it when the user asks about the parts of something, what to look at, or why something looks suspicious (e.g. the sender, the link and the urgent wording of an email), and use `tone: warning` on the risky parts (default `info`). Prefer `kind: element` targets; use rects inside the user's selection when there are no element ids. Unlike `highlight` it does not replace the current highlight. For ONE thing use `highlight`.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "minItems": 1,
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "element"
+                      },
+                      "elementId": {
+                        "type": "string"
+                      },
+                      "snapshotRevision": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "elementId"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "rect"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "rect": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          },
+                          "width": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "height": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y",
+                          "width",
+                          "height"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "rect"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "point"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "point": {
+                        "type": "object",
+                        "properties": {
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "x",
+                          "y"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "point"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "polygon"
+                      },
+                      "displayId": {
+                        "type": "string"
+                      },
+                      "points": {
+                        "minItems": 3,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "x": {
+                              "type": "number"
+                            },
+                            "y": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "displayId",
+                      "points"
+                    ]
+                  }
+                ]
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "tone": {
+                "default": "info",
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warning",
+                  "success"
+                ]
+              }
+            },
+            "required": [
+              "target",
+              "label"
+            ]
+          }
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "expires": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "next_turn",
+                "on_target_selected",
+                "context_change",
+                "manual"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ms": {
+                  "type": "integer",
+                  "minimum": 500,
+                  "maximum": 120000
+                }
+              },
+              "required": [
+                "ms"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "type": "function",
     "name": "show_steps",
     "description": "Show a short numbered path (max 5) across real on-screen controls, for multi-step tasks. Only the current step is emphasised. When the user will do the steps over several turns, pass `expires: 'on_target_selected'`: the guide then stays across turns until its last step is done (or you call `clear`); move it on with `advance_step`.",
     "parameters": {
@@ -725,7 +928,7 @@
   {
     "type": "function",
     "name": "show_explainer",
-    "description": "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea. Never put words inside `imagePrompt`; captions carry all text.",
+    "description": "Show a picture card beside something on screen, only when a picture explains better than words. `anatomy` labels parts of the user's own screen; `sequence` shows a short how-to; `compare` shows two things side by side (put the safe/correct one on the LEFT — it gets ✓ bullets — and the risky one on the RIGHT — it gets ⚠ bullets); `concept` illustrates an idea; `verdict` answers 'is this safe / real / a scam?' with a tone (`warning` for risky, `success` for fine, `info` if unsure), the card `title` as the headline (e.g. 'Likely a scam') and 1-3 short `reasons` (pair it with `label_parts` on the suspicious parts). Never put words inside `imagePrompt`; captions carry all text.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1344,6 +1547,37 @@
                 "kind",
                 "region",
                 "callouts"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "verdict"
+                },
+                "tone": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "success"
+                  ]
+                },
+                "reasons": {
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 60
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "tone",
+                "reasons"
               ]
             }
           ]

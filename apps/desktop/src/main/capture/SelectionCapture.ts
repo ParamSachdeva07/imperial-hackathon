@@ -144,6 +144,7 @@ export function buildSnapshot(
     capturedAt: meta.capturedAt,
     displayId: plan.display.id,
     regionGlobal: plan.regionGlobal,
+    focusGlobal: plan.focusBoxGlobal,
     ...(plan.polygonGlobal ? { polygonGlobal: plan.polygonGlobal } : {}),
     ...(plan.pointGlobal ? { pointGlobal: plan.pointGlobal } : {}),
     full: { mime: "image/jpeg", dataUrl: dataUrl(last.full), width: last.fw, height: last.fh, markedRegion: plan.markedRegion },

@@ -41,4 +41,9 @@ describe("scene image keys", () => {
     expect(reg.prune(new Set())).toEqual([...a.keys]);
     expect(reg.src([...a.keys][0]!)).toBeUndefined();
   });
+
+  it("passes verdict cards through untouched", () => {
+    const v: RenderItem = { ...card("v", "x"), body: { kind: "verdict", tone: "warning", reasons: ["a"] } };
+    expect(new ImageKeyRegistry().externalize([v]).items).toEqual([v]);
+  });
 });

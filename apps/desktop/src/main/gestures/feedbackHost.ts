@@ -20,17 +20,23 @@ export function primaryDisplayInfo(): FeedbackGestureService["display"] {
   return { id: d.id, width: d.bounds.width, height: d.bounds.height, bounds: d.bounds };
 }
 
+/** Query string for the feedback page: how long the selection outline stays (default: the package's 4 s). */
+export function feedbackQuery(selectionTtlMs?: number): string {
+  return selectionTtlMs && Number.isFinite(selectionTtlMs) && selectionTtlMs > 0 ? `?selectionTtlMs=${Math.round(selectionTtlMs)}` : "";
+}
+
 /** Never throws: a feedback failure is logged and returns null (gestures keep working without it). */
 export async function launchGestureFeedback(
   service: FeedbackGestureService,
   env: NodeJS.ProcessEnv,
   log: (msg: string) => void,
+  opts: { selectionTtlMs?: number } = {},
 ): Promise<GestureFeedback | null> {
   try {
     // startGestureFeedback only uses the members of FeedbackGestureService (onAny, onSession, sessionActive, display).
     const feedback = await startGestureFeedback(service as unknown as GestureService, {
       preloadPath: join(PRELOAD_DIR, "gestureFeedback.js"),
-      loadPage: (w) => loadRendererPage(w, "gestureFeedback"),
+      loadPage: (w) => loadRendererPage(w, "gestureFeedback", feedbackQuery(opts.selectionTtlMs)),
       contentProtection: env.POINTY_CAPTURABLE !== "1",
     });
     const unregister = feedbackCaptureHiding.register(() => feedback.window);
