@@ -57,6 +57,14 @@ export interface AssistantConfig {
   /** Echo guard: Anam's own words from this window are compared with a candidate barge-in (default 15 s); overlap at/above echoOverlap = echo. */
   echoWindowMs: number;
   echoOverlap: number;
+  /**
+   * While Anam speaks, what the microphone heard is cut off and transcribed this often (default 700 ms), so someone talking
+   * over the answer is noticed within about a second. Without the cut the model waits for silence, which never comes while
+   * the speakers are still playing the answer. 0 turns it off.
+   */
+  bargeCutMs: number;
+  /** This many words Anam did not say are enough to count as the user talking over it (default 2). */
+  bargeNovelWords: number;
   /** At most this many drawing tool calls (highlight, point_at, label_parts, show_steps, show_explainer) per answer; extra calls are skipped (default 2). */
   maxDrawingsPerAnswer: number;
 }
@@ -80,6 +88,12 @@ export function wordOverlap(candidate: string, spoken: string): number {
   if (w.length === 0) return 0;
   const set = new Set(normWords(spoken));
   return w.filter((x) => set.has(x)).length / w.length;
+}
+
+/** How many of the candidate's real words (three letters or more) Anam did not just say. Pure. */
+export function novelWords(candidate: string, spoken: string): number {
+  const said = new Set(normWords(spoken));
+  return new Set(normWords(candidate).filter((w) => w.length >= 3 && !said.has(w))).size;
 }
 
 /** The text contains a stop word/phrase that Anam did not just say itself. Pure. */
@@ -108,6 +122,8 @@ export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
   doublePressMs: 600,
   echoWindowMs: 15_000,
   echoOverlap: 0.5,
+  bargeCutMs: 700,
+  bargeNovelWords: 2,
   maxDrawingsPerAnswer: 2,
 };
 
@@ -118,6 +134,8 @@ const BUDGET_SKIP_ERROR = "skipped: drawing budget reached — explain in words 
 const MAX_STUBS = 6;
 /** Wait at most this long for a barge-in candidate's transcript before dropping it as noise. */
 const CANDIDATE_TRANSCRIPT_WAIT_MS = 15_000;
+/** After talking over the answer, how long to wait for the rest of the sentence before answering what was heard. */
+const BARGE_REST_WAIT_MS = 6000;
 
 export interface AssistantDeps {
   transport: RealtimeTransport;
@@ -193,6 +211,8 @@ interface Candidate {
   startedAt: number;
   /** The transcription failed (no text will come). */
   failed?: boolean;
+  /** Cut off by us while Anam was speaking, not by a pause: it is the start of an utterance, not all of it. */
+  cut?: boolean;
 }
 
 /** The [offer] note. No default safety question: that wording used to be copied into every offer. */
@@ -236,6 +256,9 @@ export class AssistantController {
   private selSeq = 0;
   private talkChain: Promise<void> = Promise.resolve();
   private micGated = false;
+  private bargeCutTimer: TimerHandle | null = null;
+  /** Cuts we asked for whose `committed` has not come back yet. */
+  private cutPending = 0;
   private gatedAt = 0;
   /** Speech_started was ignored while the mic was gated: its committed event must not start a turn. */
   private ignoreCommit = false;
@@ -478,6 +501,9 @@ export class AssistantController {
   /** Drop all per-session / per-answer state (timers, turn, offer, queued speech, mic). */
   private resetState(): void {
     this.clearAllTimers();
+    if (this.bargeCutTimer !== null) this.deps.clock.clearTimeout(this.bargeCutTimer);
+    this.bargeCutTimer = null;
+    this.cutPending = 0;
     this.talkGen++;
     this.batcher.reset();
     this.turn = null;
@@ -593,6 +619,11 @@ export class AssistantController {
         return this.onTranscriptFailed(ev.item_id);
       case "error": {
         const msg = (ev.error as { message?: string } | undefined)?.message ?? JSON.stringify(ev);
+        // A cut with nothing in the buffer is refused: nobody was speaking, which is fine.
+        if (/buffer (is )?(too small|empty)|commit/i.test(msg) && this.cutPending > 0) {
+          this.cutPending--;
+          return;
+        }
         if (!/no active response/i.test(msg)) this.log(`realtime error: ${msg}`);
         const failedId = (ev.error as { event_id?: unknown } | undefined)?.event_id;
         if (this.responseRequested && typeof failedId === "string" && failedId === this.createEventId) this.onCreateRejected();
@@ -627,6 +658,7 @@ export class AssistantController {
         const id = typeof ev.item_id === "string" ? ev.item_id : `cand_${++this.candSeq}`;
         this.candidates.set(id, { text: "", committed: false, state: "pending", startedAt: this.deps.clock.now() });
         if (this.candidates.size > 8) this.candidates.delete(this.candidates.keys().next().value as string);
+        this.armBargeCut();
         return;
       }
       this.interruptCore(); // open: any speech interrupts at once
@@ -679,7 +711,8 @@ export class AssistantController {
     if (cand.state === "pending") {
       const recent = this.recentSpoken();
       const words = normWords(cand.text).length;
-      if (hasStopWord(cand.text, recent)) this.adoptCandidate(id, cand);
+      // A couple of words Anam never said are enough: the user is talking over it.
+      if (hasStopWord(cand.text, recent) || novelWords(cand.text, recent) >= this.cfg.bargeNovelWords) this.adoptCandidate(id, cand);
       else if (final) {
         const overlapping = wordOverlap(cand.text, recent) >= this.cfg.echoOverlap;
         // A short phrase that only repeats Anam's words ("explain it" after "want me to explain it?") is the user answering when it
@@ -708,11 +741,36 @@ export class AssistantController {
     cand.state = "genuine";
     this.log("barge-in: user spoke over the assistant");
     this.interruptCore();
+    if (cand.cut) {
+      // We cut this off mid-sentence. Keep listening: the rest arrives as the next item when the user pauses.
+      this.candidates.delete(id);
+      this.startUserTurn(true);
+      const turn = this.turn;
+      const my = this.epoch;
+      // If they had already finished speaking there is no rest to wait for: answer what was heard.
+      this.deps.clock.setTimeout(() => {
+        if (my === this.epoch && this.turn === turn && turn && !turn.committed) this.commitTurn();
+      }, BARGE_REST_WAIT_MS);
+      return;
+    }
     this.startUserTurn(!cand.committed);
     if (cand.committed) {
       this.candidates.delete(id);
       this.commitTurn();
     }
+  }
+
+  /** While Anam speaks, keep cutting what the microphone heard so it gets transcribed without waiting for silence. */
+  private armBargeCut(): void {
+    if (this.bargeCutTimer !== null || this.cfg.bargeCutMs <= 0 || this.bargeIn !== "guarded") return;
+    const my = this.epoch;
+    this.bargeCutTimer = this.deps.clock.setTimeout(() => {
+      this.bargeCutTimer = null;
+      if (my !== this.epoch || this.phase !== "open" || !this.micGated) return;
+      this.cutPending++;
+      this.deps.transport.send({ type: "input_audio_buffer.commit" });
+      this.armBargeCut();
+    }, this.cfg.bargeCutMs);
   }
 
   /** Anam's own voice picked up by the mic: delete the item and keep speaking. */
@@ -818,7 +876,16 @@ export class AssistantController {
 
   private onCommitted(ev: RealtimeServerEvent): void {
     const cid = typeof ev.item_id === "string" ? ev.item_id : this.candidates.size > 0 ? [...this.candidates.keys()].pop() : undefined;
-    const cand = cid !== undefined ? this.candidates.get(cid) : undefined;
+    let cand = cid !== undefined ? this.candidates.get(cid) : undefined;
+    if (this.cutPending > 0) {
+      this.cutPending--;
+      // Our own cut. The server may give the piece a new item id: treat it as a candidate either way.
+      if (!cand && cid) {
+        cand = { text: "", committed: false, state: "pending", startedAt: this.deps.clock.now() };
+        this.candidates.set(cid, cand);
+      }
+      if (cand) cand.cut = true;
+    }
     if (cand && cid) {
       cand.committed = true;
       if (cand.state === "genuine") {

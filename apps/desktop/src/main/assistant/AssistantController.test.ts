@@ -1383,6 +1383,41 @@ describe("echo-guarded barge-in", () => {
     await flushPromises(30);
   };
 
+  it("notices someone talking over the answer without waiting for silence: it cuts, transcribes, and interrupts on two new words", async () => {
+    const s = await speaking();
+    s.transport.sent.length = 0;
+    cand(s, "over1");
+    s.clock.advance(700);
+    expect(s.transport.sent.some((e) => e.type === "input_audio_buffer.commit")).toBe(true);
+    commit(s, "over1");
+    await tdone(s, "over1", "the blue button no wait open my email");
+    expect(s.log.some((l) => l.includes("barge-in: user spoke over"))).toBe(true);
+    expect(s.c.status.get()).toBe("listening");
+    // The cut was only the start of the sentence: no answer is requested until the rest arrives.
+    expect(creates(s)).toHaveLength(0);
+    s.transport.emit({ type: "response.done", response: { id: "r1", status: "cancelled", output: [] } }); // the cancelled answer winds up
+    await flushPromises(30);
+    expect(creates(s)).toHaveLength(0);
+    commit(s, "rest1");
+    await flushPromises(30);
+    s.clock.advance(1300);
+    await flushPromises(30);
+    expect(creates(s).length).toBeGreaterThan(0);
+  });
+
+  it("keeps cutting while Anam speaks, and a cut that is only Anam's own words is thrown away", async () => {
+    const s = await speaking();
+    s.transport.sent.length = 0;
+    cand(s, "echo9");
+    s.clock.advance(700);
+    commit(s, "echo9");
+    await tdone(s, "echo9", "the blue button is at the top");
+    expect(s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === "echo9")).toBe(true);
+    expect(s.c.status.get()).toBe("speaking");
+    s.clock.advance(700);
+    expect(s.transport.sent.filter((e) => e.type === "input_audio_buffer.commit")).toHaveLength(2);
+  });
+
   it("keeps the mic open while Anam speaks", async () => {
     const s = await speaking();
     expect(s.c.status.get()).toBe("speaking");
