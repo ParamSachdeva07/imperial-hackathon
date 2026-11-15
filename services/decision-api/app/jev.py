@@ -46,18 +46,18 @@ def build_payload(request: DecisionRequest | DesktopDecisionRequest, model: str)
 async def choose(request: DecisionRequest | DesktopDecisionRequest, key: str, model: str,
                  transport: httpx.AsyncBaseTransport | None = None) -> Decision:
     if len({c.id for c in request.candidates}) != len(request.candidates):
-        raise DecisionError("Duplicate candidate IDs.")
+        raise DecisionError("Duplicate candidate IDs.", retryable=False)
     if any(c.id in {"BLOCKED", "STOP", "DONE", "NEXT_PAGE", "PREVIOUS_PAGE", "GO_PARENT", "GO_ROOT"} for c in request.candidates):
-        raise DecisionError("Reserved candidate ID.")
+        raise DecisionError("Reserved candidate ID.", retryable=False)
     if isinstance(request, DesktopDecisionRequest):
         snapshots = {s.id for s in request.observations}
         for candidate in request.candidates:
             if candidate.targetRef and (candidate.snapshotId not in snapshots or not candidate.targetRef.startswith("@" + str(candidate.snapshotId) + ":")):
-                raise DecisionError("Candidate references do not belong to this snapshot.")
+                raise DecisionError("Candidate references do not belong to this snapshot.", retryable=False)
         if request.page.index >= request.page.count:
-            raise DecisionError("Invalid tree page.")
+            raise DecisionError("Invalid tree page.", retryable=False)
     elif any(not c.targetRef.startswith("@" + request.snapshotId + ":") for c in request.candidates):
-        raise DecisionError("Candidate references do not belong to this snapshot.")
+        raise DecisionError("Candidate references do not belong to this snapshot.", retryable=False)
     body = build_payload(request, model)
     try:
         async with httpx.AsyncClient(timeout=25.0, transport=transport) as client:

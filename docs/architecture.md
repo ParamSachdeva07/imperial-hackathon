@@ -1,6 +1,39 @@
 # Desktop navigation architecture
 
-## Runtime
+## Current runtime: orchestrated v2
+
+React overlay → restricted preload IPC → NavigationController → NavigationOrchestrator → persistent PlannerLoop → PageAwareBridge → native or page executor. FastAPI authenticates local model calls; credentials never reach the renderer or extension.
+
+The orchestrator alone owns milestone and task completion, as well as an explicit ordered milestone plan: each milestone has an objective, an observable completion condition, dependencies, and an optional branch condition. It assigns one milestone per bounded navigation session, normally up to eight decisions. It does not execute input. The navigator retrieves observations, chooses an operation and arguments, optionally asks Jev to ground the target, validates, dispatches once, settles and reconciles. The current configuration uses OpenAI gpt-6-luna with reasoning disabled and Priority service for the orchestrator, and Cerebras gpt-oss-120b with low reasoning for the navigator. ORCHESTRATOR_PROVIDER/MODEL/REASONING_EFFORT/SERVICE_TIER override the parent independently; vendor keys remain isolated. There are no action-confidence thresholds. The original Choice + Noul loop is retained behind the v1 selection.
+
+One task keeps one navigator, requirement ledger, action ledger and approval state. Orchestrated tasks have no total decision, session-count or elapsed-time cap. The parent declares all requirements; the navigator receives only its active milestone and cannot add obligations, evidence future milestones, or act on them. Each navigation session gets 1–12 decisions, including reads and rejected proposals, then yields its progress for the parent to assign the next concrete objective. Feedback-driven tasks can use many short cycles within one milestone. Standalone navigation retains its own requirement declaration, step budget and deadline. Invalid parent proposals return the validation error for correction without a retry-count cutoff. Stop or a replacement prompt aborts this correction loop as well as normal execution; verified completion, a model-reported concrete blocker, or an unrecoverable service error can still end a run. Reconfirming an already-evidenced milestone is a no-op and retains its original evidence. New user prompts still use the serialized cancel-and-replace path, so two sessions cannot control the desktop concurrently. Individual calls retain timeouts, and Stop remains available.
+
+### Session return contract
+
+`session-handoff.ts` builds a typed return from executor state, not a model-written summary:
+
+- App, window ID/title, surface, scope and observation ID identify where navigation stopped.
+- Completed and remaining requirement IDs separate finished work from outstanding obligations.
+- Effect receipts preserve operation, argument, delivery, outcome, readback, expected result and observed changes. Unresolved effects take priority over recent history in the bounded context; their total count remains explicit if the list is truncated. The full ledger stays local.
+- Controller issues explain rejected actions/evidence. Attempted scopes and the previous session's reason help choose a different inspection route.
+- A navigator `completionProposal` contains its milestone, source observation, evidence rows and summary. It never changes the milestone ledger. Only the orchestrator can accept completion from a fresh screen review.
+- Completion is explicitly `verified`, `unverified` or `incomplete`, derived from the parent-owned ledger. The next phase distinguishes further execution from uncertainty inspection.
+
+Navigator clarification questions yield to the orchestrator first. They travel in the handoff reason/issues; the parent supplies decisions and parameters in the next mission. Model-generated clarification prompts to the user are disabled; if indispensable information cannot be obtained, the parent reports a concrete blocker without inventing facts. These internal answers are never recorded as user statements. Explicit irreversible-action confirmations remain separate. The coordinator reads a fresh screen at every boundary. Historical element IDs are not reusable action handles; the navigator resolves semantic targets against the next observation. `finish` requires every planned milestone to have accepted evidence or an explicit conditional skip supported by completed dependency evidence. Failed or unverified navigation cannot establish a negative search finding. The parent can review the last yielded milestone using fresh screen element IDs, either confirming it or reopening premature completion from current counter-evidence while preserving all effect receipts; this applies the result-evidence checks at the authority boundary. The navigator cannot promote or reopen milestone status itself. Readback of a typed input alone cannot prove a navigation outcome. `finish_unverified` is accepted only after the navigator has reported all remaining work as delivered but unverifiable; it keeps that status and the tool's explanation. A failed child call becomes a tool result with its ledger intact. Cancellation and permanent authentication errors propagate.
+
+### Common execution, separate adapters
+
+Native applications and Safari use agent-desktop plus the generic focus-and-paste helper. Chrome's ordinary profile can expose page semantics through `extension/page-bridge`; its loopback bridge does not use CDP, remote debugging or an automation profile. Browser toolbar/menu operations and unavailable page surfaces fall back to native accessibility. DOM snapshots are not equivalent to native AX and can still omit inaccessible frame/custom content.
+
+Both adapters return the same delivery/readback contract. The page helper computes expected input text before inserting at the caret and compares the resulting value, including selected-text replacement; a page script changing the input leaves the result unverified. Native focused editors that report disabled AX state may offer only the existing focus-and-paste capability, whose helper checks live focus and clipboard handling. Ordinary actions remain unavailable on disabled controls.
+
+After browser navigation, settlement distinguishes a changed URL from changed body content. It waits within a bounded interval when a SPA still exposes the old controls. Window inventory changes remain usable across native scope transitions, while incomparable child controls are excluded from those deltas.
+
+### Known limits
+
+The models still choose the initial milestones, interpret evidence and may misclassify it. Provider responses are parsed by phase: explicit final_answer messages supply structured plans; commentary is never executable guidance. Unphased legacy responses still require one unambiguous assistant message. The plan is immutable within a task; recovery changes routes, not milestone meaning. Live Sainsbury’s trials still failed: one child omitted evidence in its handoff, and a later parent repeatedly proposed unobserved URLs despite corrective context. The new ownership contracts pass deterministic tests but have not established end-to-end reliability. The ledger prevents specific duplicate-delivery classes; it does not provide universal exactly-once semantics across alternate UI routes. Focus, selection and attributed-text capabilities differ across applications. Word formatting is not yet consistently verified by production observations. Native reads can dominate latency. The measured outcomes and failures are recorded in [navigation-evaluation.md](navigation-evaluation.md); the orchestrator is not a claim of universal reliability.
+
+## Original v1 runtime (retained for comparison)
 
 React instruction input and live log → restricted Electron preload IPC → NavigationController → persistent DesktopLoop. The loop calls the authenticated local FastAPI broker for an OpenAI/Cerebras supervisor review or a batched TypeSafe Jev Choice + Noul. Only the native workspace bridge dispatches desktop input through agent-desktop and the Swift paste helper.
 
@@ -117,3 +150,7 @@ A failed completion check marks its evidence state as needing inspection. Positi
 ## Generalizations deliberately deferred
 
 Broadening click eligibility for unlabeled containers and paste eligibility for arbitrary custom editors needs native capability and target evidence. Those eligibility rules remain conservative; focus, unchanged-value, full-selection and clipboard checks are retained. Universal completion proof also remains open: a stronger identity contract and better entry context cannot expose missing formatting, submission or playback evidence. No app-specific recipe or action-confidence threshold was introduced by these changes.
+
+## Planner controller (v2)
+
+A second controller lives in `controller/v2/` and is selected per task with `controller: 'v2'`. It addresses the state-model gaps listed above with one requirements list, one effect ledger with a reconcile transition, relevance-based retrieval over the full window read, and a bounded exit. Its design, what was built and what was not are in controller-redesign.md. It shares `WorkspaceBridge`, the native patch, the paste helper and the broker's provider adapters with the controller described in this document. It is unit-tested only; no live run has been made.

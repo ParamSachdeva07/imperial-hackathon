@@ -10,6 +10,7 @@ const api: DesktopApi = {
   replace: (input, singleStep) => ipcRenderer.invoke('assistant:replace', input, singleStep),
   resume: (singleStep) => ipcRenderer.invoke('assistant:resume', singleStep),
   cancel: () => ipcRenderer.invoke('assistant:cancel'),
+  answer: (text) => ipcRenderer.invoke('assistant:answer', text),
   openAccessibilitySettings: () => ipcRenderer.invoke('assistant:accessibility'),
   setOverlayExpanded: (expanded) => ipcRenderer.invoke('assistant:overlay-expanded', expanded),
   onState: (listener) => {

@@ -5,6 +5,10 @@ import { NativeDesktopBridge } from './desktop/native';
 import { resolveNativeBinary } from './desktop/native-binary';
 import { WorkspaceDesktopBridge } from './desktop/workspace';
 import { JevDecisionClient, LocalTestPolicy } from './services/decision-client';
+import { defaultBrowserBundle } from './desktop/app-discovery';
+import { PageBridgeServer } from './page/page-bridge-server';
+import { PageWorkspace } from './page/page-workspace';
+import { PageAwareBridge } from './page/page-aware-bridge';
 import type { ApiResult } from '../../../packages/contracts/src/index';
 
 app.setName('Desktop Assistant Lab');
@@ -44,7 +48,14 @@ app.whenReady().then(() => {
     process.env.ASSISTANT_NATIVE_STATE || path.join(app.getPath('userData'), 'native-state'),
   );
   bridge = new NativeDesktopBridge(workspace.binary, workspace.stateRoot);
-  controller = new NavigationController(bridge, { jev: api, local: new LocalTestPolicy() }, workspace);
+  // The browser extension, when installed, lets the planner controller read Chrome pages directly.
+  // If its port is taken or the extension is absent, everything runs through accessibility as before.
+  const pageServer = new PageBridgeServer();
+  if (process.env.ASSISTANT_PAGE_BRIDGE !== 'off') void pageServer.start();
+  app.on('will-quit', () => pageServer.stop());
+  controller = new NavigationController(bridge, { jev: api, local: new LocalTestPolicy() }, workspace,
+    process.env.ASSISTANT_TRACE_DIR || path.join(app.getPath('userData'), 'traces'),
+    new PageAwareBridge(workspace, new PageWorkspace(pageServer), defaultBrowserBundle));
   globalShortcut.register('CommandOrControl+Shift+.', () => controller.cancel());
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   window = new BrowserWindow({
@@ -103,7 +114,8 @@ app.whenReady().then(() => {
         },
       });
     });
-  handle('assistant:health', async () => ({ native: await bridge.health(), backend: await api.health() }));
+  handle('assistant:health', async () => ({ native: await bridge.health(), backend: await api.health(),
+    pageBridge: { connected: pageServer.connected, needsReload: pageServer.needsReload } }));
   handle('assistant:state', () => controller.state());
   handle('assistant:applications', () => controller.applications());
   handle('assistant:prepare', () => controller.prepare());
@@ -121,6 +133,7 @@ app.whenReady().then(() => {
     return controller.resume(singleStep);
   });
   handle('assistant:cancel', () => controller.cancel());
+  handle('assistant:answer', (text) => controller.answer(text));
   handle('assistant:accessibility', async () => {
     await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
   });

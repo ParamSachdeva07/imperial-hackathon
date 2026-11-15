@@ -1,4 +1,89 @@
-# Current verification — modal classification, 14 November 2026
+# Current verification — orchestration memory and recovery, 15 November 2026
+
+407 TypeScript tests across 29 files, 125 Python tests and typechecking pass. The orchestration regressions verify that assignments/results remain available between controller sessions, that a new task on the same orchestrator object receives empty history, and that separate memory instances are isolated. The system prompt is static. Task memory is in RAM only; there is no disk loading or cross-task persistence. Semantic history appends a stable prefix and checkpoints older facts/inputs at the context boundary. Fresh screen state stays outside that history. Duplicate goal and result input/objective fields were removed.
+
+Other regressions cover parent-owned repetition allocation, delivered-but-unverifiable completion, appendable milestones, bound navigator requirement IDs, bare review evidence identifiers, transient parent API recovery without desktop dispatch, and distinct incomplete-output/HTTP/schema failures. No task/session decision cap or action-confidence threshold was restored. Questions remain internal to orchestration because no voice-agent question handoff exists yet.
+
+Live tests through the Electron overlay and regular Chrome extension remain mixed. A resumed game won with VALUE on guess 5; that continuation took 192.66 seconds, 82 navigator decisions and 20 Luna calls, including 37 rejected steps. A subsequent fresh game accepted CRANE, PLATE and PEACE but stopped on provider HTTP 400 `invalid_prompt` after 172.18 seconds, 102 navigator decisions and 14 Luna requests. Neither is a fresh uninterrupted pass. The fresh run had no milestone-ID rejections, but unnecessary scope changes, repeated-control rejections and incorrect letter choices remained. It ran before the final user-requested change to per-orchestration memory; that scope change is covered by regression tests. No fresh successful Wordle result is claimed for the final code.
+
+Provider usage recorded cache hits (83,018 of 246,561 input tokens across the fresh run's 13 successful Luna responses), but this does not establish a predictable cache rate or latency improvement. Artifacts: `.runtime/eval/local-wordle-2026-11-15/{semantic-memory-incomplete-api,semantic-memory-user-resumed-win,semantic-memory-invalid-prompt}.json`. The earlier cross-task memory prototype has been removed from runtime; trace artifacts are diagnostic records and are not loaded as task memory.
+
+# Earlier verification — orchestrator authority and local Wordle, 15 November 2026
+
+Luna alone changes milestone completion in orchestrated v2. The navigator returns a completion proposal with observations; an early proposal leaves the milestone open for another session. Parent review updates the shared ledger. Model clarification questions stay internal to orchestration rather than pausing the overlay. Action delivery, focus, uncertain-result handling and interruption checks remain in the execution layer. The authority hierarchy is documented in [system-authority.md](system-authority.md).
+
+397 TypeScript tests and typechecking pass. The updated backend schemas and prompts passed 118 Python tests. Regressions cover premature completion, continuation of the same milestone, parent evidence review, disabled clarification prompts, preserved action receipts and cancellation.
+
+The authorized local Wordle fixture ran through the actual Electron overlay and normal Chrome extension. Initial setup accidentally left the local tab in the background while another Chrome window still selected the blocked NYT site. Moving the local tab into its own focused window fixed the test setup; the NYT restriction was not bypassed. The app chose its own guesses without receiving the answer or guess suggestions. The visible game eventually reported **ACORN → ROAST, won in two guesses**. Earlier runs were interrupted for controller repairs. The final resumed run took **35.29 seconds, 23 navigator decisions, 5 Luna calls, 10 dispatched effects and zero clarification questions**. This is not an uninterrupted from-empty-board benchmark. The live win preceded the final change making navigator completion proposals non-authoritative; that change is covered by the regressions above.
+
+Artifacts: `.runtime/eval/local-wordle-2026-11-15/{first-run,second-run,winning-run}.json`. Test prompt: “Play the local Wordle game at http://127.0.0.1:55983/ in Chrome. Choose your own guesses using the feedback and try to win. Continue until you win or exhaust six guesses. Stay on this local game.”
+
+# Earlier verification — interruptible orchestration, 15 November 2026
+
+Removed total orchestration step, elapsed-time, call-count and invalid-response retry-count cutoffs. Navigation sessions remain bounded and hand progress back to the parent without ending the task. Repeated invalid responses remain rejected and are returned for correction; cancellation prevents subsequent input. Completed milestone reviews are idempotent. Focused planner/controller regressions: 52 passed, including recovery after fourteen rejected parent responses and cancellation after fourteen corrections. Typechecking passed. The full TypeScript suite passes 394 tests after the retry-counter removal; the unchanged backend last passed 118 tests.
+
+The first autonomous Wordle run reached the game but stopped at 32 navigator decisions because of the old twelve-call parent limit. Seven parent responses were rejected for redundantly reviewing a completed milestone. No guess or win was verified. The live retry was blocked specifically by the browser site-safety gate for nytimes.com, before observing or interacting with the game. The restriction was not bypassed through the application bridge. Prompt: “Play Wordle in Chrome. Choose your own guesses using the board feedback and try to win. Keep playing until you win or run out of guesses.” No live success is claimed.
+
+# Earlier verification — explicit milestone ownership, 15 November 2026
+
+390 TypeScript tests, 115 backend tests and typechecking pass. Development startup builds the Electron runtime. New regressions cover conditional run/skip paths, rejecting absence inferred from failed or unverified work, immutable dependencies, restricting the navigator to its current milestone, and parent review of a yielded result without replay. Address provenance applies to proposed instructions/completion criteria and typed addresses as well as OPEN_URL; ordinary filenames are not treated as addresses.
+
+The same human Sainsbury’s prompt was run through the actual overlay in normal Chrome with the installed 0.2.2 extension. **It still did not complete.** First the new contract rejected a missing objective; that normalization was fixed. Next the parent advanced without child evidence; parent review was added. The latest run evidenced opening Chrome but repeatedly proposed unobserved URLs and exhausted its coordinator budget. Unobserved URL typing was rejected; one Return key was dispatched, but navigation was not established. A visible existing Offers tab was not selected. No offer/no-offer conclusion is supported. Artifacts: `.runtime/eval/sainsburys-milestones-2026-11-15/results.json`. The app is idle, not continuing that failed task.
+
+These tests establish controller contracts, not model intelligence or reliable shopping-site navigation. No action-confidence thresholds, app-specific routes, or Chrome debugging were introduced.
+
+# Earlier verification — structured orchestration, 15 November 2026
+
+380 TypeScript tests, 114 backend tests, typechecking and production build pass. The live extension regression includes insertion receipts, selected-text replacement and page-transformed input. Session handoffs preserve the shared ledger, location, unresolved delivery, remaining requirements and rejected-evidence reasons; verified and unverified outcomes are separate. Tests cover no-replay across sessions, cancellation, uncertain launch recovery, SPA settlement and unsupported action refutation.
+
+Live-model comparison, costs and remaining failures are documented in [navigation-evaluation.md](navigation-evaluation.md). The final isolated paired smoke run reached the correct effect exactly once in 8/8 trials, but one still terminated blocked. The remaining real Word/YouTube checks and reload of the updated Chrome extension are blocked by the locked Mac. This is not a claim that every native workflow is reliable.
+
+# Earlier verification — planner controller, 15 November 2026
+
+- **Second outside review of the Chrome bridge (six findings), all addressed.** 362 TypeScript tests / 24 files and 111 Python tests pass; the real extension was re-run in a separate Chromium (`npm run test:extension`).
+  1. *Delivery.* The page now reports whether anything was sent separately from what was seen afterwards. A click whose effect shows later is delivered and unconfirmed, not "nothing sent"; a lost reply, including for opening an address, is "outcome unknown". End to end: a checkbox that confirms 250 ms after the click was clicked exactly once.
+  2. *Keys.* A key press on a page names its field, and the page refuses it when focus has moved. End to end: focus moved to another form, Return was refused, and that form was not submitted.
+  3. *Identity.* Page element identities include the tab and the document, and an action read from an earlier document or tab is refused by the page. A region read as its own scope is anchored to its place in the window, so its elements keep their identities; only a surface whose position is unknown still matches by suffix, and every such match fails toward refusing or asking.
+  4. *Hidden and oversized.* A `display: contents` wrapper no longer hides its children. Past the size limit a page lists whatever matches the current search: on a 9,000-node page a button at the very end was absent from the plain read and present after searching for it, in 73 ms.
+  5. *Rich text.* Typing goes where the caret is: "hello world" with the caret after "hello " became "hello big world".
+  6. *Text-only tasks.* A requirement is declared `text_entry` or `outcome` when first stated and cannot change. A typed field counts as evidence only for a `text_entry` requirement, after an exact read-back, with nothing further done for it. This is still the planner's judgement, made before any work rather than at completion; it has not been run against a live model.
+  Also: an extension copy older than the app expects is not used, and the overlay says to reload it; a web search no longer refreshes the native menu index; the unused `writesSubject` field is gone. **Not done:** replacing exceptions and `takeActionReport()` with one returned result across the native bridge as well, and separate model schemas per step kind.
+
+- A second controller (`controller: 'v2'`) follows docs/controller-redesign.md and is now the overlay's default; the previous one is selectable in settings. The previous controller is unchanged apart from two fixes: apostrophes are no longer read as quotation marks when extracting literal inputs, and transient model failures are retried up to three times instead of ending the task.
+- **353 TypeScript tests / 24 files**, **111 Python tests**, typechecking and the production build pass. These use a faked desktop, a stand-in extension and scripted models.
+- **Live runs, one trial each, planner on Cerebras `gpt-oss-120b` low reasoning. These are observations, not a reliability estimate.**
+
+| Task | Controller | Reported | Independent read | Time | Notes |
+|---|---|---|---|---|---|
+| open chrome | previous | completed | not checked | 7.0 s | Run by the user from the overlay. |
+| open new tab | previous | completed | not checked | 9.0 s | Run by the user from the overlay. |
+| open twitch.tv | previous | failed | page not opened | 28.4 s | The address bar was never offered (its layer was excluded); the model chose the "Chrome" menu button, which Chrome reports as a combobox; the paste helper refused four times and the fourth refusal was raised as fatal. |
+| open twitch.tv | v2 | completed | Twitch loaded | 13.4 s | Set the address bar, clicked the suggestion row. Accepted weak evidence (the field it had typed into); the rule was tightened afterwards. |
+| open twitch.tv | v2 | completed | Twitch loaded, in Safari | 30.3 s | Chose Safari although Chrome is the default browser; a default-browser tag was added afterwards. |
+| open wikipedia.org in a new tab | v2 | completed_unverified | not loaded | 23.5 s | Return had no effect; the planner re-read the same scopes until the bound ended the task. |
+| same | v2 | blocked at step 1 | nothing done | 0.9 s | Planner gave up on the application list; a premature "blocked" is now questioned once. |
+| same | v2 | **completed (false)** | not loaded | 13.2 s | Typed the address, never submitted it, cited the address bar. A typed field can no longer be evidence. |
+| same | v2 | completed_unverified | not loaded | 37.1 s | Honest outcome after the fix. 21 planner calls, 8 rejected. |
+
+- **Return does not reach Chrome's address bar.** Confirmed directly with the native helper, with Chrome frontmost and the field focused: headless `press return`, `--headed press return`, and Return after keystroke typing all report `delivered_unverified` through `CGEventPostToPid` and none navigates. `cmd+t` sent the same way works. Clicking the suggestion row works. This is a native-layer limit and affects both controllers.
+- Direct deep read, measured: Chrome 0.94 s against 2.07 s for the layered climb; Finder's Downloads window 16.7 s against 8.7–10.9 s, because the deep read times out first. It is now tried once per application.
+- Persistent-helper spike: `agent-desktop mcp` over stdio answered `list-apps` in 51–57 ms, a fresh process in 40–80 ms. Not built.
+- Menu index, live on Finder: 131 enabled commands in 468 ms. Shortcuts cannot be discovered; the helper exposes no key equivalent.
+- Two outside reviews (an independent agent, 12 findings; Codex, 5 findings) were addressed with tests: a sent action recorded as not sent when the read after it failed; scroll-into-view re-binding through a shared native id; identity merging the same button in two rows and losing a control read through a narrower scope; a confirmed action being free to repeat; rewording a requirement keeping its evidence; a retrieved region with no read scope; an evaluation gate that could pass an untested arm; surrogate pairs cut by truncation; idle allowance shared across phases; pauses counting against the deadline.
+- The evaluation harness (`npm run eval`) has still only been exercised through `--list` and `--dry-run`. No baseline and no arm comparison exist.
+- **Open address directly.** `OPEN_URL` hands a validated http(s) address to macOS (or to the extension). Live, one trial: "open wikipedia.org in a new tab" had Wikipedia loaded 2.7 s after the task started. The planner then did not recognise it was finished, opened two more tabs and loaded the page again, and reported completion at 21.0 s with 12 planner calls. The result was correct; the path was wasteful. A note stating that the address is already open in a new tab was added to the action's result afterwards and has not been re-run.
+- **Chrome page bridge.** The extension in `extension/page-bridge` was loaded into a separate Chromium (Chrome for Testing, not the user's Chrome) and driven through the app's bridge code against a local fixture page with a 600-row list: 1,817 elements read in a median of 30.4 ms (maximum 32 ms) per round trip; set value 4.0 ms, check 2.9 ms, select 3.2 ms, click 7.1 ms, Return submitting a form 4.2 ms; open a local address 85 ms including load. The typed value reached the page's own script, the pinned-origin check accepted the real extension, an internal browser page was reported as unreadable, and a stale element was refused. `npm run test:extension` repeats this. **It has not been loaded into the user's Chrome**, so no real site and no task through the overlay has used it yet.
+- 353 TypeScript tests / 24 files and 111 Python tests pass after these additions.
+- **Extension in the user's Chrome, real sites, one trial each** (same bridge and controller code as the app, run headlessly; planner on Cerebras `gpt-oss-120b` low):
+
+| Task | Reported | Independent accessibility read of the selected tab | Time | Planner calls |
+|---|---|---|---|---|
+| Go to wikipedia.org and search for accessibility tree | completed | "accessibility tree - Search results - Wikipedia" | 7.4 s | 5 (3.0 s), none rejected |
+| On Hacker News, open the page that lists the newest submissions | completed | "New Links \| Hacker News" | 3.0 s | 2 (1.2 s) |
+
+  In the first run, typing into the search field took 0.1 s including the re-read and the click that loaded the results 1.1 s; the evidence accepted was the results page title and a result link, not the field that was typed into. Two trials on two sites are not a reliability figure.
+
+# Earlier verification — modal classification, 14 November 2026
 
 - Failed user run: 18 decisions ended with `No open alert in window w-29041`. The controller had scoped both models to a web live-region `alert` and repeatedly attempted dismissal. A native read showed a route-announcement node with no `modal` state; the native alert-surface query correctly found no open alert surface. The failure was in our controller's interpretation, not unavailable Chrome tab controls.
 - `activeModal` now requires explicit modal state, or the native attached-sheet role. Plain alert/dialog/alertdialog roles and focus alone do not force scoping. This is not keyed to Chrome, a site, a control name or an identifier. Real modal nesting and native sheet handling remain tested.

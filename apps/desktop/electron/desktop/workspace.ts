@@ -12,16 +12,24 @@ import type {
 } from '../../../../packages/contracts/src/index';
 import { NativeClient, NativeError } from './native-client';
 import { flattenTree, treeText, accessibilityTree } from './accessibility-tree';
-import { searchIndexedApplications } from './app-discovery';
+import { defaultBrowserBundle, searchIndexedApplications } from './app-discovery';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ActionVerifier, type ActionReport } from './action-verification';
 import { focusAndPaste, nativePasteRunner } from './focus-and-paste';
 import { activeModal } from './modal-scope';
 import { readBudgetedTree } from './tree-budget';
 
+/** startDepth above 3 asks for one direct deep read before falling back to the layered climb. */
+export type ObserveOptions = { startDepth?: number; /** What is being looked for; a web page uses it to list matches beyond its size limit. */ query?: string };
 export interface WorkspaceBridge {
   applications(signal?: AbortSignal): Promise<Application[]>;
   windowInventory?(app: string, signal?: AbortSignal): Promise<{ id: string; title: string }[]>;
-  observe(context: DesktopContext, signal?: AbortSignal): Promise<DesktopObservation>;
+  observe(context: DesktopContext, signal?: AbortSignal, options?: ObserveOptions): Promise<DesktopObservation>;
+  /** Hand a web address to the system, which opens it in the user's own browser. */
+  openUrl?(url: string, signal: AbortSignal): Promise<DesktopContext>;
+  /** Read one live property of an observed element without acting on it. */
+  probe?(ref: string, property: 'states' | 'bounds', signal?: AbortSignal): Promise<unknown>;
   act(
     candidate: DesktopCandidate,
     observation: DesktopObservation,
@@ -51,6 +59,15 @@ export const KEYS = [
   'cmd+z',
   'cmd+shift+g',
 ];
+/** Only ordinary web addresses, with no embedded credentials, may be handed to the system. */
+export function validatedUrl(text: string): string {
+  let url: URL;
+  try { url = new URL(text.trim()); } catch { throw new Error('That is not a complete web address. Give the full address, starting with https://.'); }
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Only http and https addresses can be opened.');
+  if (url.username || url.password) throw new Error('Addresses that carry a user name or password are not opened.');
+  if (url.href.length > 2000) throw new Error('That address is too long.');
+  return url.href;
+}
 const surfaces = ['window', 'menubar', 'menu', 'sheet', 'alert', 'popover', 'focused'];
 const optionalSurfaces = new Set(['menu', 'sheet', 'alert', 'popover']);
 
@@ -132,7 +149,25 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
       .filter((a) => !['Electron', 'Desktop Assistant Lab'].includes(a.name))
       .sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name));
   }
-  async observe(requested: DesktopContext, signal?: AbortSignal): Promise<DesktopObservation> {
+  /** The address is passed as one argument to `open`; nothing is interpreted by a shell. */
+  async openUrl(url: string, signal: AbortSignal): Promise<DesktopContext> {
+    signal.throwIfAborted();
+    try { await promisify(execFile)('/usr/bin/open', [validatedUrl(url)], { timeout: 10_000 }); }
+    catch (error: any) {
+      // `open` exiting with an error means the system refused the address. Being cut off by the
+      // timeout says nothing about whether the browser had already taken it.
+      const cutOff = error?.killed === true || !!error?.signal;
+      throw new NativeError('OPEN_URL', cutOff ? 'Opening the address did not finish in time. It may still have opened.'
+        : 'The system could not open that address.', { delivery: cutOff ? 'unknown' : 'not_delivered', retry: 'inspect' });
+    }
+    const bundle = (await defaultBrowserBundle(signal))?.toLowerCase();
+    const browser = bundle ? (await this.applications(signal)).find(a => a.running && a.id.toLowerCase() === bundle) : undefined;
+    return browser ? { app: browser.name } : {};
+  }
+  probe(ref: string, property: 'states' | 'bounds', signal?: AbortSignal): Promise<unknown> {
+    return this.run(['get', ref, '--property', property], undefined, signal);
+  }
+  async observe(requested: DesktopContext, signal?: AbortSignal, options: ObserveOptions = {}): Promise<DesktopObservation> {
     signal?.throwIfAborted();
     const context = { ...requested },
       notices: string[] = [];
@@ -214,7 +249,7 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
           const bounded = depth > 3 ? args.filter(arg => arg !== '--skeleton') : [...args];
           bounded[bounded.indexOf('--max-depth') + 1] = String(depth);
           return this.run(bounded, undefined, signal);
-        }, readLimit, notices);
+        }, readLimit, notices, options.startDepth);
       } catch (error) {
         if (absentSurface(error, surfaceName, !!context.rootRef)) {
           notices.push('The requested ' + surfaceName + ' surface is not open.');
@@ -358,6 +393,11 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
     this.lastAction = undefined;
     signal.throwIfAborted();
     const context = { ...observation.context };
+    // The helper marks every failed read "not delivered". After input has been sent, a failed
+    // window inventory (the app quit, or was busy) must not turn into "nothing was sent".
+    const windowsAfter = async (): Promise<any[] | undefined> => {
+      try { return await this.run(['list-windows', '--app', context.app!]); } catch { return undefined; }
+    };
     if (candidate.operation === 'SEARCH_APPS') {
       if (!text?.trim() || text.length > 200)
         throw new Error('App search needs a specific application name from the user instruction.');
@@ -414,13 +454,14 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
         '--window-id',
         context.windowId,
       ]);
-      let after = await this.run(['list-windows', '--app', context.app!]);
+      let after = await windowsAfter();
+      if (!after) return { app: context.app, surface: 'window' };
       let fresh = after.filter((w: any) => !observation.windows.some((old) => old.id === w.id));
       // New-window shortcuts can return before macOS publishes the new AX window.
       const deadline = Date.now() + 3000;
       while (candidate.key === 'cmd+n' && !fresh.some((w: any) => w.is_focused) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100));
-        after = await this.run(['list-windows', '--app', context.app!]);
+        after = (await windowsAfter()) ?? after;
         fresh = after.filter((w: any) => !observation.windows.some((old) => old.id === w.id));
       }
       const focusedNew = fresh.filter((w: any) => w.is_focused);
@@ -516,7 +557,8 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
     this.lastAction = verified.report;
     const result = verified.result;
     // A newly created window takes priority. Never silently choose between multiple new windows.
-    let after = await this.run(['list-windows', '--app', context.app!]);
+    let after = await windowsAfter();
+    if (!after) return { app: context.app, surface: 'window' };
     let fresh = after.filter((w: any) => !observation.windows.some((old) => old.id === w.id));
     // Suggestions may be published shortly after the field value changes.
     const settleUntil = Date.now() + 400;
@@ -528,7 +570,7 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
     ) {
       signal.throwIfAborted();
       await new Promise((resolve) => setTimeout(resolve, 75));
-      after = await this.run(['list-windows', '--app', context.app!], undefined, signal);
+      after = (await windowsAfter()) ?? after;
       fresh = after.filter((w: any) => !observation.windows.some((old) => old.id === w.id));
     }
     const focusedNew = fresh.filter((w: any) => w.is_focused);

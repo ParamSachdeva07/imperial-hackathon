@@ -36,15 +36,29 @@ export async function readBudgetedTree(
   read: (depth: number) => Promise<any>,
   limited: (error: unknown) => boolean,
   notices: string[],
+  startDepth = 3,
 ) {
   let depth = 3, depthLimit = MAX_SCOPE_DEPTH, data;
-  try { data = await read(depth); }
-  catch (error) {
-    if (!limited(error)) throw error;
-    depthLimit = depth - 1;
-    depth = 1;
-    data = await read(depth);
-    notices.push('The initial scope exceeded a native read limit. Retried one level without desktop input.');
+  if (startDepth > 3) {
+    // One direct deep read replaces the depth-by-depth climb when the scope allows it.
+    const direct = Math.min(startDepth, MAX_SCOPE_DEPTH);
+    try { data = await read(direct); }
+    catch (error) { if (!limited(error)) throw error; }
+    if (data?.tree && data.complete === true) depth = direct;
+    else {
+      data = undefined;
+      notices.push('A direct deep read did not complete. Reading layer by layer instead, without desktop input.');
+    }
+  }
+  if (!data) {
+    try { data = await read(depth); }
+    catch (error) {
+      if (!limited(error)) throw error;
+      depthLimit = depth - 1;
+      depth = 1;
+      data = await read(depth);
+      notices.push('The initial scope exceeded a native read limit. Retried one level without desktop input.');
+    }
   }
   if (data.complete !== true && depth !== 1) {
     depthLimit = depth - 1;

@@ -1,6 +1,7 @@
 """Provider-specific wire formats; desktop planning and validation stay shared."""
 from dataclasses import dataclass
 import os
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -12,16 +13,21 @@ class SupervisorConfig:
     service_tier: str | None
 
 
-def configuration() -> SupervisorConfig:
-    provider = os.environ.get('SUPERVISOR_PROVIDER', 'openai').strip().lower()
+def configuration(role: Literal['supervisor', 'orchestrator'] = 'supervisor') -> SupervisorConfig:
+    base_provider = os.environ.get('SUPERVISOR_PROVIDER', 'openai')
+    provider = os.environ.get('ORCHESTRATOR_PROVIDER', base_provider) if role == 'orchestrator' else base_provider
+    provider = provider.strip().lower()
     if provider not in {'openai', 'cerebras'}:
-        raise ValueError('SUPERVISOR_PROVIDER must be openai or cerebras.')
+        raise ValueError(role.upper() + '_PROVIDER must be openai or cerebras.')
     prefix = provider.upper()
+    def option(name: str, default: str = '') -> str:
+        value = os.environ.get(prefix + '_' + name, default)
+        return os.environ.get('ORCHESTRATOR_' + name, value) if role == 'orchestrator' else value
     return SupervisorConfig(
         provider, os.environ.get(prefix + '_API_KEY', '').strip(),
-        os.environ.get(prefix + '_MODEL', 'qwen-3.8-27b' if provider == 'cerebras' else 'gpt-6.1-sol'),
-        os.environ.get(prefix + '_REASONING_EFFORT', 'none' if provider == 'cerebras' else '') or None,
-        (os.environ.get('OPENAI_SERVICE_TIER', '') or None) if provider == 'openai' else None,
+        option('MODEL', 'qwen-3.8-27b' if provider == 'cerebras' else 'gpt-6.1-sol'),
+        option('REASONING_EFFORT', 'none' if provider == 'cerebras' else '') or None,
+        (option('SERVICE_TIER') or None) if provider == 'openai' else None,
     )
 
 
@@ -43,7 +49,7 @@ def prepare_request(body: dict, provider: str) -> tuple[str, dict]:
     schema = cerebras_schema(body['text']['format']['schema'])
     # Keep evidence constrained to observed IDs. Reserve enum capacity for
     # other fields when a large catalog exceeds Cerebras's 500-value limit.
-    items = schema['properties']['evidence']['items']
+    items = schema['properties'].get('evidence', {}).get('items', {})
     identifiers = items.pop('enum', [])
     def enum_count(value):
         if isinstance(value, list): return sum(enum_count(item) for item in value)
@@ -57,7 +63,7 @@ def prepare_request(body: dict, provider: str) -> tuple[str, dict]:
         'max_completion_tokens': body['max_output_tokens'],
         'reasoning_effort': body.get('reasoning', {}).get('effort', 'none'),
         'response_format': {'type': 'json_schema', 'json_schema': {
-            'name': 'desktop_supervisor_plan', 'strict': True, 'schema': schema,
+            'name': body['text']['format'].get('name', 'desktop_supervisor_plan'), 'strict': True, 'schema': schema,
         }},
     }
 
@@ -74,3 +80,26 @@ def normalize_response(payload: dict, provider: str) -> dict:
     return {'status': 'completed', 'output': [{'type': 'message', 'content': [
         {'type': 'output_text', 'text': message['content']},
     ]}]}
+
+
+def structured_text(payload: dict) -> str:
+    """Select the final assistant message, never commentary or an arbitrary JSON substring."""
+    if payload.get('status') != 'completed':
+        raise ValueError('Incomplete response')
+    messages = [item for item in payload.get('output', []) if item.get('type') == 'message'
+                and item.get('role', 'assistant') == 'assistant']
+    finals = [item for item in messages if item.get('phase') == 'final_answer']
+    # Legacy Responses and normalized Chat Completions have no phase metadata.
+    candidates = finals or [item for item in messages if item.get('phase') is None]
+    if len(candidates) != 1:
+        raise ValueError('No unambiguous final answer')
+    message = candidates[0]
+    if message.get('status', 'completed') != 'completed':
+        raise ValueError('Incomplete final answer')
+    content = message.get('content', [])
+    if any(part.get('type') == 'refusal' for part in content):
+        raise ValueError('Model declined to answer')
+    text = ''.join(part['text'] for part in content if part.get('type') == 'output_text')
+    if not text.strip():
+        raise ValueError('Missing final answer')
+    return text

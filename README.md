@@ -1,6 +1,8 @@
 # Desktop Assistant
 
-A macOS Electron application: instruction → configurable LLM supervisor → Jev choice + completion Noul → native desktop action → fresh observation. Chrome, Safari and native applications all use the patched agent-desktop accessibility bridge. Chrome debugging is not part of the application runtime.
+A macOS Electron application: instruction → task orchestrator → bounded navigation sessions → validated desktop/page actions → fresh observations. The planner selects operations and arguments; optional Jev grounding selects the final target. Chrome pages use the local content-script extension, with agent-desktop for browser chrome, Safari and native applications. No Chrome debugger is required. The original Jev Choice + Noul controller remains available as v1.
+
+The v2 orchestrator preserves one requirement/effect ledger across sessions. Its structured handoff records location, completed and remaining requirements, delivery versus outcome, unresolved effects, failed checks and scopes already inspected. It cannot turn a delivered-but-unverified action into verified completion. See [the current architecture](docs/architecture.md) and [evaluation results](docs/navigation-evaluation.md).
 
 ## Run
 
@@ -27,6 +29,8 @@ CEREBRAS_REASONING_EFFORT=low
 ```
 
 Restart after editing this file. `SUPERVISOR_PROVIDER` selects `openai` or `cerebras`; each uses only its own key. Keys remain in the backend and are stripped from Electron and native child environments. The local broker requires a random launcher token.
+
+The orchestrator uses the same provider/model by default. `ORCHESTRATOR_MODEL` and `ORCHESTRATOR_REASONING_EFFORT` optionally override the model and reasoning for that role; the navigator retains the selected provider configuration.
 
 OpenAI uses Responses with strict structured output. Cerebras uses `https://api.cerebras.ai/v1/chat/completions`, a compatible model and strict JSON schema. A key swap alone is insufficient: endpoint, model, request and response formats differ. Cerebras `gpt-oss-120b` supports low/medium/high reasoning, not off; the selected setting is low. `qwen-3.8-27b` supports `CEREBRAS_REASONING_EFFORT=none`, but our Word tests found planning mistakes with that model. OpenAI's model, reasoning and service tier settings do not leak into Cerebras requests. Unsupported wire-schema constraints are still enforced locally.
 
@@ -75,19 +79,38 @@ apps/desktop/electron/
     outcome-checks.ts              App-independent result predicates
     resolve-action-text.ts        Named input / literal-span resolution
     write-history.ts              Current-state duplicate prevention
+    v2/                           Planner-owned controller behind a flag (docs/controller-redesign.md)
+      planner-loop.ts             Observe, plan, validate, dispatch once, settle, reconcile
+      task-state.ts               Requirements and the single effect ledger
+      observation-index.ts        Full-window index and relevance retrieval
+      identity.ts, checks.ts, settle.ts, menu-index.ts
   desktop/                        Native transport, discovery and verification
-  services/decision-client.ts     Authenticated broker client
+  services/decision-client.ts     Authenticated broker client, with retries
 packages/contracts/src/           Validated TypeScript contracts
 services/decision-api/app/
   supervisor.py                   Shared structured planning and evidence validation
   supervisor_providers.py         Provider configuration and wire formats
   jev.py                          Batched TypeSafe Choice + Noul
   text_resolution.py              Literal argument fallback
+  planner.py, grounding.py        v2 planning step and optional Jev target choice
+  page/                           Browser-extension bridge: local server, page workspace, routing
+extension/page-bridge/            Chrome extension that reads and operates the active tab
+scripts/eval/                     Evaluation harness, task suite and replay tool
 native/                           Pinned Rust patch and Swift paste helper
 scripts/, tests/, docs/            Build, verification and integration documentation
 ```
 
 The old browser adapter source/tests remain isolated for comparison; Electron does not instantiate or route to them and packaging excludes its executable. Old `ASSISTANT_BROWSER_*` settings do not change the application driver. A future non-debugger extension would need a separate implementation. The TextEdit fixture is also isolated from general desktop navigation.
+
+## Experimental planner controller
+
+A second controller is available under **Settings and connection → Controller → New planner (experimental)**. One planning model owns the task's requirements and arguments; code keeps a single ledger of what was sent and what is known about its effect, retrieves controls by relevance at any depth, and ends in a bounded number of steps. It can ask you a question, and it asks before an action that cannot be undone. It uses the supervisor provider configured above. It has unit tests but has not yet been run against real applications; the current controller is still the default. `npm run eval -- --list` shows the workflows for comparing the two, and `scripts/eval/README.md` explains what a live run does to the desktop.
+
+**Chrome page bridge (optional).** Loading the extension in `extension/page-bridge` lets the new controller read and operate the page in the active Chrome tab from inside the browser. In a test browser a 1,800-element page was read in about 30 ms and single operations took 3–7 ms, against 0.9–2.1 s per read through accessibility. Without the extension everything works as before, through accessibility. See `extension/page-bridge/README.md` for installation and for what the extension is able to see.
+
+The new controller can also open a web address directly (`OPEN_URL`), handing it to macOS or to the extension, instead of typing into the address bar. Chrome ignores a Return key sent by the native helper, so this is the route that works.
+
+Every task writes a full trace to `traces/<taskId>.jsonl` under the app's user-data directory (or `ASSISTANT_TRACE_DIR`). Traces contain screen text and model exchanges and stay on this machine.
 
 ## Test and package
 

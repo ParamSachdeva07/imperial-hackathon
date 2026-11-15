@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import {
   TaskInputSchema,
   DecisionSchema,
@@ -14,6 +16,9 @@ import type { DecisionProvider } from '../services/decision-client';
 import { DesktopLoop } from './desktop-loop';
 import type { WorkspaceBridge } from '../desktop/workspace';
 import { nativeErrorDetails } from '../desktop/action-verification';
+import { PlannerLoop } from './v2/planner-loop';
+import { NavigationOrchestrator } from './v2/orchestrator';
+import { defaultBrowserBundle } from '../desktop/app-discovery';
 
 export function candidatesFor(snapshot: Snapshot): Candidate[] {
   const editor = documentEditor(snapshot);
@@ -81,12 +86,44 @@ export class NavigationController {
   private cancellationRevision = 0;
   private nextEvent = 1;
   private desktopLoop?: DesktopLoop;
+  private plannerLoop?: PlannerLoop;
+  private orchestrator?: NavigationOrchestrator;
+  private singleStep = false;
   constructor(
     private bridge: DesktopBridge,
     private providers: Record<'jev' | 'local', DecisionProvider>,
     private workspace?: WorkspaceBridge,
+    /** Every event and model exchange of a task is appended to <traceDir>/<taskId>.jsonl. */
+    private traceDir?: string,
+    /** The bridge the planner controller uses; it may read web pages through the browser extension. */
+    plannerWorkspace: WorkspaceBridge | undefined = workspace,
   ) {
-    if (workspace) this.desktopLoop = new DesktopLoop(workspace, providers.jev);
+    if (workspace) {
+      this.desktopLoop = new DesktopLoop(workspace, providers.jev);
+      this.plannerLoop = new PlannerLoop(plannerWorkspace ?? workspace, providers.jev, traceDir ? defaultBrowserBundle : undefined);
+      this.orchestrator = new NavigationOrchestrator(plannerWorkspace ?? workspace, providers.jev,
+        traceDir ? defaultBrowserBundle : undefined);
+    }
+    if (traceDir) try { mkdirSync(traceDir, { recursive: true, mode: 0o700 }); } catch { this.traceDir = undefined; }
+  }
+  /** The full record of a run. The in-memory event list keeps only the last 150 entries. */
+  private trace(kind: string, data: unknown) {
+    if (!this.traceDir || !this.current.taskId) return;
+    try {
+      appendFileSync(path.join(this.traceDir, this.current.taskId + '.jsonl'),
+        JSON.stringify({ at: Date.now(), taskId: this.current.taskId, kind, data }) + '\n', { mode: 0o600 });
+    } catch { /* Tracing must never fail a task. */ }
+  }
+  private validateInput(input: unknown) {
+    const parsed = TaskInputSchema.parse(input);
+    if (parsed.mode === 'desktop' && (!this.desktopLoop || parsed.provider !== 'jev'))
+      throw new Error('Full desktop navigation requires the native workspace adapter and Jev.');
+    if (parsed.mode === 'desktop' && parsed.controller === 'v2' && !this.providers.jev.plan)
+      throw new Error('The v2 controller needs a provider with the planner route.');
+    if (parsed.orchestration && !this.providers.jev.orchestrate) throw new Error('This provider cannot orchestrate navigation.');
+    if (parsed.mode === 'textedit' && !parsed.text)
+      throw new Error('Supply exact text for the TextEdit regression test.');
+    return parsed;
   }
   async applications() {
     return this.workspace ? this.workspace.applications() : [];
@@ -114,6 +151,7 @@ export class NavigationController {
       message,
       details,
     });
+    this.trace('event', this.current.events.at(-1));
     this.current.events = this.current.events.slice(-150);
     this.publish();
   }
@@ -172,16 +210,14 @@ export class NavigationController {
     if (this.replacing) throw new Error('A replacement task is already waiting for the previous action to settle.');
     this.assertIdle();
     if (this.current.status === 'paused') throw new Error('Resume or stop the current task first.');
-    const parsed = TaskInputSchema.parse(input);
-    if (parsed.mode === 'desktop' && (!this.desktopLoop || parsed.provider !== 'jev'))
-      throw new Error('Full desktop navigation requires the native workspace adapter and Jev.');
-    if (parsed.mode === 'textedit' && !parsed.text)
-      throw new Error('Supply exact text for the TextEdit regression test.');
+    if (this.current.status === 'needs_user') throw new Error('Answer or stop the current task first.');
+    const parsed = this.validateInput(input);
     // A prepared blank document can be reused once. Each later task gets a fresh document.
     const prepared =
       parsed.mode === 'textedit' && this.current.taskId === null ? this.current.document : null;
     this.current = { ...initial(), taskId: randomUUID(), input: parsed, document: prepared, busy: true };
     this.abort = new AbortController();
+    this.trace('task', { input: parsed });
     this.status(
       'preparing',
       parsed.provider === 'jev'
@@ -194,10 +230,7 @@ export class NavigationController {
   async replace(input: unknown, singleStep = false): Promise<ControllerState> {
     // Validate before disturbing the current task. Only one handoff may own
     // the desktop; late old-run results finish before new state is installed.
-    const parsed = TaskInputSchema.parse(input);
-    if (parsed.mode === 'desktop' && (!this.desktopLoop || parsed.provider !== 'jev'))
-      throw new Error('Full desktop navigation requires the native workspace adapter and Jev.');
-    if (parsed.mode === 'textedit' && !parsed.text) throw new Error('Supply exact text for the TextEdit regression test.');
+    const parsed = this.validateInput(input);
     if (this.replacing) throw new Error('A replacement task is already pending.');
     if (this.current.busy && !this.activeRun) throw new Error('Wait for the current setup operation to settle.');
     this.replacing = true;
@@ -220,9 +253,19 @@ export class NavigationController {
     this.activeRun = this.advance(singleStep);
     return this.state();
   }
+  /** Answer a question or an irreversible-action confirmation raised by the v2 controller. */
+  answer(text: unknown): ControllerState {
+    this.assertIdle();
+    if (this.current.status !== 'needs_user') throw new Error('There is no question waiting for an answer.');
+    if (typeof text !== 'string' || !text.trim() || text.length > 1000) throw new Error('Give an answer of at most 1,000 characters.');
+    this.current.busy = true;
+    this.trace('answer', { text });
+    this.activeRun = this.advance(this.singleStep, text.trim());
+    return this.state();
+  }
   cancel(): ControllerState {
     this.cancellationRevision++;
-    if (!this.current.busy && this.current.status !== 'paused') return this.state();
+    if (!this.current.busy && !['paused', 'needs_user'].includes(this.current.status)) return this.state();
     this.abort?.abort();
     this.status(
       this.current.busy ? 'stopping' : 'cancelled',
@@ -240,7 +283,8 @@ export class NavigationController {
       this.event('error', error instanceof Error ? error.message : String(error), nativeErrorDetails(error));
     }
   }
-  private async advance(singleStep: boolean) {
+  private async advance(singleStep: boolean, answer?: string) {
+    this.singleStep = singleStep;
     const signal = this.abort!.signal;
     const taskId = this.current.taskId!;
     const input = this.current.input!;
@@ -248,15 +292,16 @@ export class NavigationController {
     const deadline = Date.now() + 90_000;
     try {
       if (input.mode === 'desktop') {
-        await this.desktopLoop!.advance(
-          {
-            state: this.current,
-            status: (status, message) => this.status(status, message),
-            event: (type, message, details) => this.event(type, message, details),
-          },
-          singleStep,
-          signal,
-        );
+        const host = {
+          state: this.current,
+          status: (status: TaskStatus, message: string) => this.status(status, message),
+          event: (type: 'observation' | 'decision' | 'target' | 'step' | 'result', message: string,
+            details?: Record<string, unknown>) => this.event(type, message, details),
+          trace: (kind: string, data: unknown) => this.trace(kind, data),
+        };
+        if (input.controller === 'v2' && input.orchestration) await this.orchestrator!.advance(host, singleStep, signal, answer);
+        else if (input.controller === 'v2') await this.plannerLoop!.advance(host, singleStep, signal, answer);
+        else await this.desktopLoop!.advance(host, singleStep, signal);
         return;
       }
       if (!this.current.document) this.current.document = await this.bridge.prepare(signal);

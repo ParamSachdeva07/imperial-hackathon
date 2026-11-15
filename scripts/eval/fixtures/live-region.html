@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Live region fixture</title>
+<body style="font: 16px system-ui; margin: 40px">
+  <h1>Workspace</h1>
+  <!-- An announcement, not a dialog. It must never hide the button below from the assistant. -->
+  <div role="alert" aria-live="assertive" id="announcement">Workspace updated</div>
+  <button type="button" id="create">Create item</button>
+  <p id="count">0 items</p>
+  <script>
+    let items = 0;
+    document.getElementById('create').addEventListener('click', () => {
+      items++;
+      document.getElementById('count').textContent = items + ' items';
+      document.getElementById('announcement').textContent = 'Item ' + items + ' created';
+      document.title = 'Items created: ' + items;
+    });
+    setInterval(() => { document.getElementById('announcement').textContent = 'Workspace updated ' + new Date().toLocaleTimeString(); }, 4000);
+  </script>
+</body>
+</html>

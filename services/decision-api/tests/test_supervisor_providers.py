@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.schemas import SupervisorRequest
 from app.supervisor import supervise, SupervisorError
-from app.supervisor_providers import configuration
+from app.supervisor_providers import configuration, structured_text
 from test_supervisor import request_data, response_data
 
 
@@ -70,3 +70,33 @@ def test_provider_key_isolation_and_health(monkeypatch):
     assert response.json()['supervisorProvider'] == 'cerebras'
     assert response.json()['supervisorReasoningEffort'] == 'none'
     assert 'secret' not in response.text
+
+
+def test_orchestrator_provider_is_independent_of_navigator(monkeypatch):
+    monkeypatch.setenv('SUPERVISOR_PROVIDER', 'cerebras')
+    monkeypatch.setenv('CEREBRAS_API_KEY', 'navigator-key')
+    monkeypatch.setenv('CEREBRAS_MODEL', 'gpt-oss-120b')
+    monkeypatch.setenv('ORCHESTRATOR_PROVIDER', 'openai')
+    monkeypatch.setenv('ORCHESTRATOR_MODEL', 'gpt-6-luna')
+    monkeypatch.setenv('ORCHESTRATOR_REASONING_EFFORT', 'none')
+    monkeypatch.setenv('OPENAI_SERVICE_TIER', 'ultrafast')
+    monkeypatch.setenv('ORCHESTRATOR_SERVICE_TIER', '')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    assert configuration('orchestrator').key == ''
+    monkeypatch.setenv('OPENAI_API_KEY', 'orchestrator-key')
+    coordinator = configuration('orchestrator')
+    assert (coordinator.provider, coordinator.key, coordinator.model) == ('openai', 'orchestrator-key', 'gpt-6-luna')
+    assert coordinator.reasoning_effort == 'none'
+    assert coordinator.service_tier is None
+    assert (configuration().provider, configuration().key, configuration().model) == ('cerebras', 'navigator-key', 'gpt-oss-120b')
+
+
+def test_response_phases_do_not_turn_commentary_into_an_action_plan():
+    commentary = {'type': 'message', 'phase': 'commentary', 'content': [{'type': 'output_text', 'text': 'Not a plan {broken}'}]}
+    final = {'type': 'message', 'phase': 'final_answer', 'status': 'completed',
+             'content': [{'type': 'output_text', 'text': '{"kind":'}, {'type': 'output_text', 'text': '"navigate"}'}]}
+    assert structured_text({'status': 'completed', 'output': [commentary, final]}) == '{"kind":"navigate"}'
+    for items in [[commentary], [final, final], [{**final, 'status': 'incomplete'}],
+                  [{**final, 'content': [{'type': 'refusal', 'refusal': 'No'}]}]]:
+        with pytest.raises(ValueError):
+            structured_text({'status': 'completed', 'output': items})

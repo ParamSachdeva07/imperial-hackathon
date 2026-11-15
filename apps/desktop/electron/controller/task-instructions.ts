@@ -3,7 +3,9 @@ export function exactInputs(input: TaskInput): { id: string; text: string }[] {
   if (input.inputs?.length) return input.inputs;
   const values = input.text ? [input.text] : [];
   // Preserve exact user-provided spans. Jev chooses a named input; it cannot invent text.
-  for (const match of input.goal.matchAll(/"([^"\n]+)"|“([^”\n]+)”|'([^'\n]+)'/g)) {
+  // A single quote only delimits text when it is not inside a word; "John's" and
+  // "what's" are apostrophes, not the start and end of a quoted span.
+  for (const match of input.goal.matchAll(/"([^"\n]+)"|“([^”\n]+)”|(?<![\p{L}\p{N}])'([^'\n]+)'(?![\p{L}\p{N}])/gu)) {
     const value = match[1] || match[2] || match[3];
     if (!values.includes(value)) values.push(value);
   }

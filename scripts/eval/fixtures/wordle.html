@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Wordle benchmark</title>
+<style>
+  *{box-sizing:border-box} body{font:18px system-ui;background:#111827;color:#f9fafb;margin:0}
+  main{max-width:650px;margin:30px auto;text-align:center;padding:20px} h1{margin:0 0 12px}
+  p{line-height:1.5} #board{display:grid;gap:8px;margin:24px auto;width:max-content}
+  .row{display:flex;gap:8px}.tile{display:grid;place-items:center;width:54px;height:54px;border:2px solid #94a3b8;font-weight:700;font-size:27px}
+  .correct{background:#166534}.present{background:#854d0e}.absent{background:#374151}
+  button{font:600 17px system-ui;background:#e2e8f0;color:#111827;border:0;border-radius:5px;min-width:38px;height:50px;padding:8px;margin:3px;cursor:pointer}
+  button:focus-visible{outline:3px solid #38bdf8;outline-offset:3px}button:disabled{opacity:.45}
+  #feedback{text-align:left;font-size:16px}#message{min-height:27px;font-weight:600}
+</style>
+<main>
+  <h1>Local Wordle</h1>
+  <p>Guess the hidden five-letter word in six tries. Use the letter buttons, then Enter.
+  Green = correct position. Yellow = present elsewhere. Grey = absent (including excess repeated letters).</p>
+  <p id="status" role="status"></p>
+  <div id="board" aria-hidden="true"></div>
+  <p id="current"></p>
+  <p id="message" role="status"></p>
+  <div id="keyboard" aria-label="On-screen keyboard"></div>
+  <section id="feedback" aria-label="Submitted guesses and letter feedback"></section>
+</main>
+<script>
+let game = { guesses: [], status: 'playing' }, draft = '', busy = false;
+const byId = id => document.getElementById(id);
+function render(message = '') {
+  const over = game.status !== 'playing';
+  byId('status').textContent = over ? (game.status === 'won' ? 'You won! ' : 'Game over. ') +
+    'Answer: ' + game.answer + '. Guesses used: ' + game.guesses.length + ' of 6.' : 'Guesses used: ' + game.guesses.length + ' of 6.';
+  byId('current').textContent = over ? 'Game finished.' : 'Current guess: ' + (draft || 'empty') + ' (' + draft.length + ' of 5 letters).';
+  byId('message').textContent = message;
+  byId('board').replaceChildren();
+  for (let row = 0; row < 6; row++) {
+    const entry = game.guesses[row], letters = entry?.word || (row === game.guesses.length ? draft : '');
+    const div = document.createElement('div'); div.className = 'row';
+    for (let i = 0; i < 5; i++) {
+      const tile = document.createElement('span'); tile.className = 'tile ' + (entry?.feedback[i] || '');
+      tile.textContent = letters[i] || ''; div.append(tile);
+    }
+    byId('board').append(div);
+  }
+  byId('feedback').replaceChildren();
+  for (const [i, entry] of game.guesses.entries()) {
+    const p = document.createElement('p');
+    p.textContent = 'Guess ' + (i + 1) + ': ' + entry.word + '. ' + [...entry.word].map((c, n) =>
+      'Position ' + (n + 1) + ': ' + c + ' ' + entry.feedback[n]).join('; ') + '.';
+    byId('feedback').append(p);
+  }
+  for (const button of byId('keyboard').querySelectorAll('button')) button.disabled = over || busy;
+}
+async function key(value) {
+  if (busy || game.status !== 'playing') return;
+  if (value === 'Delete') { draft = draft.slice(0, -1); render(); return; }
+  if (value !== 'Enter') { if (draft.length < 5) draft += value; render(); return; }
+  if (draft.length !== 5) { render('Enter five letters before submitting.'); return; }
+  busy = true; render('Checking guess…');
+  try {
+    const response = await fetch('/guess', { method: 'POST', body: draft });
+    if (!response.ok) throw new Error('Unable to check this guess.');
+    game = await response.json();
+    if (!game.error) draft = '';
+    busy = false; render(game.error || 'Feedback is ready.');
+  } catch (error) { busy = false; render(error.message); }
+}
+for (const row of ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM']) {
+  const div = document.createElement('div');
+  for (const c of row) {
+    const button = document.createElement('button'); button.textContent = c;
+    button.setAttribute('aria-label', 'Add ' + c); button.onclick = () => key(c); div.append(button);
+  }
+  byId('keyboard').append(div);
+}
+for (const name of ['Enter', 'Delete']) {
+  const button = document.createElement('button'); button.textContent = name;
+  button.onclick = () => key(name); byId('keyboard').append(button);
+}
+document.addEventListener('keydown', event => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (/^[a-z]$/i.test(event.key)) { event.preventDefault(); key(event.key.toUpperCase()); }
+  else if (event.key === 'Backspace') { event.preventDefault(); key('Delete'); }
+  else if (event.key === 'Enter' && event.target.tagName !== 'BUTTON') { event.preventDefault(); key('Enter'); }
+});
+fetch('/state').then(r => r.json()).then(state => { game = state; render(); });
+</script>
+</html>

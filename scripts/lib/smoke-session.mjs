@@ -7,7 +7,10 @@ import net from 'node:net';
 import http from 'node:http';
 import assert from 'node:assert/strict';
 
-export async function smokeSession(mode = 'jev', validateDecision) {
+// options.validate maps a broker route to a hook that may throw to block the response;
+// options.env adds environment variables for the Electron process.
+export async function smokeSession(mode = 'jev', validateDecision, options = {}) {
+  const hooks = { ...(validateDecision ? { '/navigation/decide': validateDecision } : {}), ...(options.validate || {}) };
   const requests = [];
   const root = process.cwd(),
     require = createRequire(import.meta.url);
@@ -51,7 +54,7 @@ export async function smokeSession(mode = 'jev', validateDecision) {
     }
     assert.equal(ready, true, 'Decision backend did not become ready.');
     let decisionUrl = apiUrl;
-    if (validateDecision) {
+    if (Object.keys(hooks).length) {
       proxy = http.createServer(async (request, response) => {
         try {
           const chunks = [];
@@ -67,8 +70,11 @@ export async function smokeSession(mode = 'jev', validateDecision) {
           const result = await upstream.json();
           timing.durationMs = Date.now() - timing.startedAt;
           timing.status = upstream.status;
-          if (request.url === '/navigation/decide' && upstream.ok) await validateDecision(JSON.parse(body), result);
-          response.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+          timing.model = result.model;
+          timing.usage = result.usage;
+          if (upstream.ok && hooks[request.url]) await hooks[request.url](JSON.parse(body), result);
+          const retryable = upstream.headers.get('x-retryable');
+          response.writeHead(upstream.status, { 'Content-Type': 'application/json', ...(retryable ? { 'X-Retryable': retryable } : {}) });
           response.end(JSON.stringify(result));
         } catch (error) {
           response.writeHead(409, { 'Content-Type': 'application/json' });
@@ -85,6 +91,8 @@ export async function smokeSession(mode = 'jev', validateDecision) {
       DECISION_API_TOKEN: token,
       ASSISTANT_NATIVE_STATE: path.join(root, '.runtime', 'ui-native-state'),
       ASSISTANT_BROWSER_STATE: path.join(root, '.runtime', 'browser-ui-state'),
+      ASSISTANT_TRACE_DIR: path.join(root, '.runtime', 'traces'),
+      ...(options.env || {}),
     };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.TYPESAFE_API_KEY;

@@ -26,6 +26,23 @@ export function rankApplicationPaths(paths: string[], query: string): string[] {
     .map((p) => p.path);
 }
 
+/** The bundle that opens web links for this user, read from Launch Services. Read-only. */
+export async function defaultBrowserBundle(signal?: AbortSignal): Promise<string | undefined> {
+  try {
+    const { stdout } = await exec('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(process.env.HOME || '',
+      'Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist')],
+      { signal, timeout: 3000, maxBuffer: 2 * 1024 * 1024 });
+    const handlers: any[] = JSON.parse(stdout).LSHandlers || [];
+    const handler = handlers.find(h => h.LSHandlerURLScheme === 'https') || handlers.find(h => h.LSHandlerURLScheme === 'http');
+    const bundle = handler?.LSHandlerRoleAll;
+    // With no recorded choice, macOS opens links in Safari.
+    return typeof bundle === 'string' && /^[A-Za-z0-9._-]{1,200}$/.test(bundle) ? bundle : 'com.apple.Safari';
+  } catch {
+    signal?.throwIfAborted();
+    return;
+  }
+}
+
 export async function searchIndexedApplications(query: string, signal?: AbortSignal): Promise<Application[]> {
   signal?.throwIfAborted();
   // The user's words never enter a shell command or Spotlight query language.

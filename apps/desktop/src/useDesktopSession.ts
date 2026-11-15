@@ -9,6 +9,8 @@ export function useDesktopSession() {
   const [error, setError] = useState('');
   const [maxSteps, setMaxSteps] = useState(160);
   const [supervisorEvery, setSupervisorEvery] = useState(12);
+  const [controller, setController] = useState<'v1' | 'v2'>('v2');
+  const [grounding, setGrounding] = useState<'planner' | 'jev'>('planner');
 
   async function refreshHealth() {
     try {
@@ -56,8 +58,20 @@ export function useDesktopSession() {
     health.native.accessibility === 'granted' &&
     !!health.backend.available &&
     health.backend.keyConfigured && !!health.backend.supervisorConfigured;
+  // Permissions and keys are changed outside the app. Notice the change without a manual check.
+  useEffect(() => {
+    if (connected || !window.desktop) return;
+    const timer = setInterval(() => void refreshHealth(), 3000);
+    const onFocus = () => void refreshHealth();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [connected]);
+  const waiting = state?.status === 'needs_user' && !state.busy;
   const run = (goal: string) =>
-    command(() =>
+    command(() => waiting ? window.desktop.answer(goal) :
       (state?.busy || state?.status === 'paused' ? window.desktop.replace : window.desktop.start)(
             {
               goal,
@@ -66,10 +80,13 @@ export function useDesktopSession() {
               text: '',
               app: '',
               allowPhysical: false,
+              // Applies to standalone controllers; orchestration renews its bounded sessions.
               maxSteps,
               supervisorEnabled: true,
               supervisorEvery,
               inputs: [],
+              // Only sent for the new controller, so the default request is unchanged.
+              ...(controller === 'v2' ? { controller, grounding, orchestration: true, confirmIrreversible: true } : {}),
             },
             false,
           ),
@@ -85,6 +102,10 @@ export function useDesktopSession() {
     run,
     maxSteps, setMaxSteps,
     supervisorEvery, setSupervisorEvery,
+    controller, setController,
+    grounding, setGrounding,
+    waiting,
+    answer: (text: string) => command(() => window.desktop.answer(text)),
     refreshHealth,
     stop: () => command(() => window.desktop.cancel()),
     openPermissions: () => command(() => window.desktop.openAccessibilitySettings()),

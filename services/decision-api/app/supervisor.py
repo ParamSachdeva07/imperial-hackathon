@@ -3,7 +3,7 @@
 import json
 import httpx
 from .schemas import SupervisorGuidance, SupervisorPlan, SupervisorRequest, SupervisorTarget
-from .supervisor_providers import prepare_request, normalize_response
+from .supervisor_providers import prepare_request, normalize_response, structured_text
 
 DEFAULT_MODEL = 'gpt-6.1-sol'
 
@@ -145,16 +145,19 @@ the subgoal states the concrete obstacle. No arbitrary actions, selectors or cod
 
 
 class SupervisorError(Exception):
-    pass
+    """retryable=False marks failures that an identical request would repeat."""
+    def __init__(self, message: str, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def validate_context(request: SupervisorRequest) -> None:
     observed = request.observation
     if (request.taskId != observed.taskId or request.snapshotId != observed.snapshotId
             or request.goal != observed.overallGoal):
-        raise SupervisorError('Supervisor context does not match the active task and observation.')
+        raise SupervisorError('Supervisor context does not match the active task and observation.', retryable=False)
     if request.previous and request.previous.taskId != str(request.taskId):
-        raise SupervisorError('Supervisor memory belongs to a different task.')
+        raise SupervisorError('Supervisor memory belongs to a different task.', retryable=False)
 
 
 def evidence_catalog(request: SupervisorRequest) -> dict[str, dict]:
@@ -234,20 +237,11 @@ def build_payload(request: SupervisorRequest, model: str, *,
 
 
 def parse_response(payload: dict, request: SupervisorRequest) -> SupervisorGuidance:
-    if payload.get('status') != 'completed':
-        raise SupervisorError('Supervisor response was incomplete. No desktop action was sent.')
-    texts = []
-    for item in payload.get('output', []):
-        if item.get('type') != 'message':
-            continue
-        for content in item.get('content', []):
-            if content.get('type') == 'refusal':
-                raise SupervisorError('Supervisor could not provide guidance. No desktop action was sent.')
-            if content.get('type') == 'output_text':
-                texts.append(content['text'])
-    if len(texts) != 1:
-        raise SupervisorError('Supervisor returned no unambiguous structured plan. No desktop action was sent.')
-    data = json.loads(texts[0])
+    try:
+        text = structured_text(payload)
+    except ValueError as error:
+        raise SupervisorError(f'Supervisor could not provide guidance: {str(error).lower()}. No desktop action was sent.') from error
+    data = json.loads(text)
     if set(data) != {'status', 'subgoal', 'memory', 'inputs', 'expectedOutcome', 'evidence'}:
         raise ValueError('Unexpected supervisor fields')
     data['plan'] = [data['subgoal']]
@@ -299,7 +293,7 @@ async def supervise(request: SupervisorRequest, key: str, model: str,
             async with httpx.AsyncClient(timeout=55.0, transport=transport) as local_client:
                 response = await local_client.post(endpoint, headers=headers, json=body)
         if response.status_code in (401, 403):
-            raise SupervisorError(f'{label} rejected the supervisor API key or model access. Check the backend configuration.')
+            raise SupervisorError(f'{label} rejected the supervisor API key or model access. Check the backend configuration.', retryable=False)
         if response.status_code == 429:
             raise SupervisorError(f'{label} supervisor rate limit or quota reached. No desktop action was sent.')
         response.raise_for_status()

@@ -20,7 +20,7 @@ if (major < 22 || (major === 22 && Number(process.versions.node.split('.')[1]) <
     console.error('Node 22.12+ is required. Install Node 24 or set ASSISTANT_NODE to its executable.');
     process.exit(1);
   }
-  const child = spawn(configuredNode, [fileURLToPath(import.meta.url), mode], {
+  const child = spawn(configuredNode, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
     cwd: root,
     stdio: 'inherit',
     env: process.env,
@@ -96,6 +96,17 @@ async function main() {
     await node('node_modules/vitest/vitest.mjs', ['run']);
     await node('scripts/test-paste.mjs');
     await python(['pytest', '-q']);
+    return;
+  }
+  if (mode === 'extension') {
+    // Runs the browser extension in Playwright's own Chromium against a local fixture page.
+    await node('node_modules/tsx/dist/cli.mjs', ['scripts/page-bridge-e2e.ts']);
+    return;
+  }
+  if (mode === 'eval' || mode === 'replay') {
+    // Live evaluation drives real applications; see scripts/eval/README.md before running it.
+    if (mode === 'eval') await ensureNative(root);
+    await node('node_modules/tsx/dist/cli.mjs', ['scripts/eval/' + (mode === 'eval' ? 'run.ts' : 'replay.ts'), ...process.argv.slice(3)]);
     return;
   }
   if (mode === 'native') {

@@ -13,6 +13,9 @@
     "build": "node scripts/launch.mjs build",
     "test": "node scripts/launch.mjs test",
     "test:native": "node scripts/launch.mjs native",
+    "test:extension": "node scripts/launch.mjs extension",
+    "eval": "node scripts/launch.mjs eval",
+    "eval:replay": "node scripts/launch.mjs replay",
     "typecheck": "tsc --noEmit",
     "package:mac": "node scripts/launch.mjs package"
   },
