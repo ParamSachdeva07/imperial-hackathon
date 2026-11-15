@@ -223,6 +223,7 @@ export class GestureInterpreter {
       const p = this.pointer;
       const changed = !!chosen || seen.has(p.hand);
       if (changed || t - p.lastSeen >= this.cfg.lostMs) {
+        this.selectRect(p, t, events); // letting go ends the drag, like releasing a mouse button
         events.push({ type: "hand_lost", hand: p.hand, reason: changed ? "pose_changed" : "absent", t });
         this.lastEnded = { hand: p.hand, kind: "draw", pos: p.pos, t };
         this.pointer = null;
@@ -634,12 +635,12 @@ export class GestureInterpreter {
         p.restPts = [];
       }
       p.restPts.push([x, y]);
-      if (!p.armed) return;
+      if (!p.armed || this.dragRect(p)) return; // pausing mid-drag selects nothing: the rectangle is taken on release
 
       const progress = Math.min(1, (t - p.restStart) / c.dwellMs);
       p.lastProgress = progress;
       events.push({ type: "dwell_progress", hand: p.hand, progress, x: round1(x), y: round1(y), displayId, t });
-      if (progress >= 1) this.select(p, t, events);
+      if (progress >= 1) this.selectPoint(p, t, events);
       return;
     }
 
@@ -657,39 +658,42 @@ export class GestureInterpreter {
     }
   }
 
-  /** The hold completed: the dragged rectangle if the finger travelled far enough, otherwise the held point. */
-  private select(p: PointerState, t: number, events: GestureEvent[]): void {
-    const displayId = this.display.id;
+  /** The rectangle dragged out so far (corners x0,y0 - x1,y1), or null while it is still too small to be one. */
+  private dragRect(p: PointerState): [number, number, number, number] | null {
+    if (!p.anchor) return null;
+    const [ax, ay] = p.anchor;
+    const [x, y] = p.pos;
+    if (Math.max(Math.abs(x - ax), Math.abs(y - ay)) < this.cfg.rectMinSize) return null;
+    return [round1(Math.min(ax, x)), round1(Math.min(ay, y)), round1(Math.max(ax, x)), round1(Math.max(ay, y))];
+  }
+
+  /** The two fingers let go: select the rectangle that was dragged out, if any. */
+  private selectRect(p: PointerState, t: number, events: GestureEvent[]): void {
+    const r = p.armed ? this.dragRect(p) : null;
+    if (!r) return;
+    const [x0, y0, x1, y1] = r;
+    events.push({
+      type: "region_selected",
+      hand: p.hand,
+      polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+      bbox: { x: x0, y: y0, width: round1(x1 - x0), height: round1(y1 - y0) },
+      displayId: this.display.id,
+      t,
+    });
+  }
+
+  /** Held still without dragging: select the held point. */
+  private selectPoint(p: PointerState, t: number, events: GestureEvent[]): void {
     const n = p.restPts.length;
-    const mx = p.restPts.reduce((s, q) => s + q[0], 0) / n;
-    const my = p.restPts.reduce((s, q) => s + q[1], 0) / n;
-    const [ax, ay] = p.anchor ?? [mx, my];
-    const width = Math.abs(mx - ax);
-    const height = Math.abs(my - ay);
-
-    if (Math.max(width, height) >= this.cfg.rectMinSize) {
-      const x0 = round1(Math.min(ax, mx)), y0 = round1(Math.min(ay, my));
-      const x1 = round1(Math.max(ax, mx)), y1 = round1(Math.max(ay, my));
-      events.push({
-        type: "region_selected",
-        hand: p.hand,
-        polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-        bbox: { x: x0, y: y0, width: round1(x1 - x0), height: round1(y1 - y0) },
-        displayId,
-        t,
-      });
-    } else {
-      events.push({
-        type: "point_selected",
-        hand: p.hand,
-        x: round1(mx),
-        y: round1(my),
-        displayId,
-        heldForMs: Math.round(t - (p.restStart ?? t)),
-        t,
-      });
-    }
-
+    events.push({
+      type: "point_selected",
+      hand: p.hand,
+      x: round1(p.restPts.reduce((s, q) => s + q[0], 0) / n),
+      y: round1(p.restPts.reduce((s, q) => s + q[1], 0) / n),
+      displayId: this.display.id,
+      heldForMs: Math.round(t - (p.restStart ?? t)),
+      t,
+    });
     p.armed = false;
     p.anchor = null;
     p.lastProgress = 0;

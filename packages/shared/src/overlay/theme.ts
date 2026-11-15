@@ -1,6 +1,6 @@
 /**
  * Visual design tokens (spec §3). Everything visual reads from here.
- * Designed for older users: big, high-contrast, calm and slow. Never flash.
+ * Legible, high-contrast, calm and slow, but light on the screen: marks are thin so they never hide the UI they point at. Never flash.
  * Never rely on colour alone: every tone pairs its colour with an icon or number.
  */
 import type { Tone } from "./schemas";
@@ -14,21 +14,23 @@ export const theme = {
   },
   /** Minimum font sizes in px. */
   fontMin: {
-    label: 24,
+    /** Labels sit on top of the UI, so they are kept small. */
+    label: 18,
+    cardBody: 24,
     cardTitle: 28,
   },
   /** Stroke width (px) for rings, arrows, underlines. */
-  stroke: 6,
+  stroke: 3,
   /** White outer outline (px) on every shape and label, so it is visible on any background. */
-  outline: 3,
+  outline: 1.5,
   colors: {
     info: "#2563EB",
     warning: "#F59E0B",
     success: "#16A34A",
-    /** #111827 at 92% opacity. */
-    labelBg: "rgba(17, 24, 39, 0.92)",
+    /** #111827 at 88% opacity. */
+    labelBg: "rgba(17, 24, 39, 0.88)",
     labelBgHex: "#111827",
-    labelBgOpacity: 0.92,
+    labelBgOpacity: 0.88,
     labelText: "#FFFFFF",
     outline: "#FFFFFF",
     /** Explainer card background (dark). */
@@ -53,6 +55,7 @@ export const theme = {
     /** Card entry starts from this scale (spec §7.1). */
     cardEnterScale: 0.96,
   },
+  /** Length (px) of the pointer arrow, tail to tip. */
   pointerSize: 96,
   /** Diameter (px) of the small, faint "next step" hint on step guides (one step at a time). */
   stepHintSize: 32,

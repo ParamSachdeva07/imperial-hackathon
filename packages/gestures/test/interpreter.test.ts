@@ -221,14 +221,15 @@ describe("pointing", () => {
 });
 
 describe("dragging a rectangle", () => {
-  /** Two fingers go up at (x0, y0), drag in a straight line to (x1, y1) over 1 s, then hold still. */
-  const drag = (x0: number, y0: number, x1: number, y1: number) => [
+  /** Two fingers go up at (x0, y0), drag in a straight line to (x1, y1) over 1 s, pause `holdMs`, then (optionally) let go. */
+  const drag = (x0: number, y0: number, x1: number, y1: number, holdMs = 300, release = true) => [
     ...frames(0, 300, () => [twoFingersAt("Right", x0, y0)]),
     ...frames(300, 1000, (i, n) => [twoFingersAt("Right", x0 + (x1 - x0) * (i / (n - 1)), y0 + (y1 - y0) * (i / (n - 1)))]),
-    ...frames(1300, 1200, () => [twoFingersAt("Right", x1, y1)]),
+    ...frames(1300, holdMs, () => [twoFingersAt("Right", x1, y1)]),
+    ...(release ? frames(1300 + holdMs, 400, () => [palmAt("Right", 0.5, 0.6)]) : []),
   ];
 
-  it("a diagonal drag followed by a pause selects the rectangle between its two ends", () => {
+  it("letting go after a diagonal drag selects the rectangle between its two ends", () => {
     const evs = run(active(), drag(0.6, 0.3, 0.4, 0.5));
 
     expect(ofType(evs, "point_selected")).toHaveLength(0);
@@ -254,24 +255,32 @@ describe("dragging a rectangle", () => {
     expect(bbox.y).toBeCloseTo(200, -1);
   });
 
+  it("pausing mid-drag selects nothing: only letting go does", () => {
+    const evs = run(active(), drag(0.6, 0.3, 0.4, 0.5, 3000, false));
+    expect(ofType(evs, "region_selected")).toHaveLength(0);
+    expect(ofType(evs, "point_selected")).toHaveLength(0);
+    expect(ofType(evs, "dwell_progress").filter((e) => e.t >= 1300 && e.progress > 0)).toHaveLength(0); // no hold ring over a drag
+  });
+
+  it("the hand leaving the picture also ends the drag", () => {
+    const evs = run(active(), [...drag(0.6, 0.3, 0.4, 0.5, 300, false), ...frames(1600, 600, () => [])]);
+    expect(ofType(evs, "region_selected")).toHaveLength(1);
+  });
+
   it("reports where the drag began with every cursor move, so the rectangle can be drawn live", () => {
     const evs = run(active(), drag(0.6, 0.3, 0.4, 0.5));
-    const moves = ofType(evs, "cursor_moved").filter((e) => e.t < 1300);
+    const moves = ofType(evs, "cursor_moved");
+    expect(moves.length).toBeGreaterThan(30);
     expect(moves.every((e) => e.anchor && Math.abs(e.anchor.x - 514) < 10 && Math.abs(e.anchor.y - 200) < 10)).toBe(true);
   });
 
-  it("after a selection, moving on starts a new rectangle from there", () => {
-    const it = active();
-    run(it, drag(0.6, 0.3, 0.4, 0.5));
-    const evs = run(it, [
-      ...frames(2500, 800, (i, n) => [twoFingersAt("Right", 0.4 - 0.1 * (i / (n - 1)), 0.5 - 0.1 * (i / (n - 1)))]),
-      ...frames(3300, 1200, () => [twoFingersAt("Right", 0.3, 0.4)]),
+  it("letting go without having dragged selects nothing", () => {
+    const evs = run(active(), [
+      ...frames(0, 400, () => [twoFingersAt("Right", 0.5, 0.4)]),
+      ...frames(400, 400, () => [palmAt("Right", 0.5, 0.6)]),
     ]);
-    const regions = ofType(evs, "region_selected");
-    expect(regions).toHaveLength(1);
-    // From about (926, 600) to (1131, 400): far smaller than a rectangle anchored at the first drag's start.
-    expect(at(regions, 0).bbox.width).toBeLessThan(260);
-    expect(at(regions, 0).bbox.x).toBeGreaterThan(880);
+    expect(ofType(evs, "region_selected")).toHaveLength(0);
+    expect(ofType(evs, "point_selected")).toHaveLength(0);
   });
 });
 
@@ -475,14 +484,14 @@ describe("dwell click (mouse mode)", () => {
     expect(ofType(evs, "click_progress")).toHaveLength(0);
   });
 
-  it("drawing mode still selects instead of clicking", () => {
+  it("drawing mode never clicks", () => {
     const it = active();
     const evs = run(it, [
       ...frames(0, 800, (i, n) => [twoFingersAt("Right", 0.4 + 0.2 * (i / (n - 1)), 0.4)]),
       ...frames(800, 1500, () => [twoFingersAt("Right", 0.6, 0.4)]),
     ]);
     expect(ofType(evs, "click")).toHaveLength(0);
-    expect(ofType(evs, "region_selected")).toHaveLength(1);
+    expect(ofType(evs, "region_selected")).toHaveLength(0); // still dragging: taken on release
   });
 });
 

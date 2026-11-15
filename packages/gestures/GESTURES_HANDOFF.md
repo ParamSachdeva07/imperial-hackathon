@@ -32,7 +32,7 @@ Plan mapping (Notion plan "Pointy (TBD)"): this covers the **MediaPipe worker** 
 | Open palm, raised, fingers up, held **still** 0.7 s | `wake_progress` 0→1 (ring around the hand), then `wake_requested` | Only while the session is **closed**. Edge-triggered (once per raise), re-arms when the palm goes away. A moving hand (scratching, waving) does not wake. Works anywhere in the camera frame. |
 | **One finger** (index) | `mouse` start/move/end | Drives the **real system mouse** (if the controller attaches it). |
 | One finger, still ~1 s | `click_progress` 0→1, then `click` | **Dwell left click** where the mouse is. Needs ≥40 pt of movement before it can click again. Raising a still finger never clicks. |
-| **Two fingers held together** (index + middle) | `cursor_moved`, `dwell_progress`, then `point_selected` or `region_selected` | Drawing/selection cursor. Still ~0.8 s → point. Drag then still → region (the rectangle between the drag's start and end). |
+| **Two fingers held together** (index + middle) | `cursor_moved`, `dwell_progress`, then `point_selected` or `region_selected` | Drawing/selection cursor. Still ~0.8 s → point. Drag then let go → region (the rectangle between the drag's start and end). |
 | Closed **fist**, moved | `scroll` start/move/end with `dx`, `dy` | Drag semantics (hand down ⇒ content down ⇒ scroll up). With `attachSystemMouse`, becomes real wheel scrolling of the window under the mouse pointer. |
 | Two fingers spread (V) | nothing | Intentionally unused. |
 | Drawing hand disappears or changes pose | `hand_lost` | `reason: "absent" \| "pose_changed"`. **Only** emitted for the drawing (two-finger) cursor: it means "the stroke ended without a selection". |

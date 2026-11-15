@@ -37,10 +37,11 @@ export function textWidth(text: string, fontSize: number, factor = 1): number {
 
 export const LABEL = {
   fontSize: theme.fontMin.label,
-  padX: 20,
-  padY: 12,
-  /** Width reserved for the tone glyph (28 px icon + 8 px gap). */
-  glyph: 36,
+  padX: 12,
+  padY: 6,
+  /** Width reserved for the tone glyph (`glyphSize` icon + 6 px gap). */
+  glyph: 26,
+  glyphSize: 20,
   maxWidth: 440,
 } as const;
 
@@ -91,7 +92,7 @@ export function measureLabel(text: string, withGlyph = false): Size {
   return { width, height };
 }
 
-const BODY = theme.fontMin.label;
+const BODY = theme.fontMin.cardBody;
 const BODY_LH = Math.ceil(BODY * LINE_HEIGHT); // 30
 const TITLE_LH = Math.ceil(theme.fontMin.cardTitle * LINE_HEIGHT); // 35
 

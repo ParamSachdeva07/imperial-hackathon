@@ -34,7 +34,7 @@ The playground shows the camera with landmarks, a simulated page with the cursor
 | Open palm, raised, fingers up, held **still** `wakeHoldMs` (700 ms) | `wake_progress` (0→1, ring around the hand), then `wake_requested` | Fires **once per raise**, only when no session is active. A moving hand (scratching, waving) restarts the hold. Re-arms after the palm has been gone `wakeRearmMs`. |
 | **Two fingers together** (index + middle) — `drawPose` | `cursor_moved` every frame | Index tip mapped from the active zone of the mirrored camera image to the display, smoothed with a One Euro filter (tremor). An open palm never drives the cursor, so one hand can wake while the other points. |
 | Draw pose, fingers still for `dwellMs` (800 ms) | `dwell_progress` (0→1), then `point_selected` | Selects once, then re-arms when the finger moves again. |
-| Drag with the draw pose, then still for `dwellMs` | `region_selected` | The rectangle between where the drag began and where the hold happens (four-corner polygon and bbox). `cursor_moved.anchor` carries the start corner so the rectangle can be drawn live. |
+| Drag with the draw pose, then let go (change pose or lower the hand) | `region_selected` | The rectangle between where the drag began and where the fingers let go, like a mouse drag (four-corner polygon and bbox). `cursor_moved.anchor` carries the start corner so the rectangle can be drawn live. |
 | Pointing hand gone (`lostMs`) or pose changed | `hand_lost` | UI hides the cursor. |
 | **One finger** (index) — `mousePose` | `mouse` (`start` / `move` / `end`, `x`, `y`) | Drives the **real system mouse**: the controller moves the OS cursor to (x, y). No drawing, no selection. In the playground, `npm run mouse-bridge` does the moving (browsers can't). |
 | One finger, still for `clickDwellMs` (1 s) | `click_progress` (0→1), then `click` (`button: "left"`, `x`, `y`) | **Dwell click** where the mouse is. Arms only after the mouse has moved `clickArmDist` (40 pt) since it appeared or last clicked, so raising a still finger or resting the hand never clicks, and one hold = one click. `clickEnabled: false` turns it off. |
@@ -45,7 +45,7 @@ The finger mapping is configurable: `new GestureInterpreter(display, { drawPose:
 
 **Session gating.** Before the session is open, only `wake_requested` is emitted. The controller calls `interp.setSessionActive(true)` when it accepts a wake, and `setSessionActive(false)` when the session closes (stop button, timeout). Cursor, selections and scroll only exist inside a session. Any hand can point once the session is open, including the one that woke it (useful for one-handed users).
 
-Point vs region is decided **when the hold completes**: if the hold is at least `rectMinSize` away (along either axis) from where the drag began, it is a region; otherwise it is a point. A drag begins where the two fingers went up, or where the finger moved off again after a selection.
+A point is selected by holding still for `dwellMs` before dragging. Once the cursor is at least `rectMinSize` away (along either axis) from where the drag began, it is a drag: pausing selects nothing, and the rectangle is selected when the fingers let go. A drag begins where the two fingers went up, or where the finger moved off again after a point selection.
 
 ## Event contract (`src/events.ts`)
 

@@ -70,8 +70,8 @@ export interface GestureConfig {
   /** Hold duration that confirms a selection. */
   dwellMs: number;
   /**
-   * A drag whose longer side is at least this many points selects the rectangle between where the
-   * drag began and where the hold happens; anything smaller selects the held point.
+   * Once the cursor is this many points (along either axis) from where the drag began, it is a drag:
+   * letting go selects that rectangle. Below it, holding still selects the held point.
    */
   rectMinSize: number;
 

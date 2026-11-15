@@ -87,8 +87,8 @@ body,
   animation: halo var(--pulse-ms) var(--enter-ms) ease-out var(--pulse-count) both;
 }
 @keyframes halo {
-  0% { opacity: 0.75; stroke-width: 6px; }
-  100% { opacity: 0; stroke-width: 30px; }
+  0% { opacity: 0.75; stroke-width: 3px; }
+  100% { opacity: 0; stroke-width: 16px; }
 }
 .spotlight-dim {
   fill: var(--spotlight-dim);
@@ -128,12 +128,12 @@ body,
   position: absolute;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: var(--label-pad-y) var(--label-pad-x);
   background: var(--label-bg);
   color: var(--label-text);
   border: var(--outline) solid var(--outline-color);
-  border-radius: 14px;
+  border-radius: 9px;
   font-family: var(--font);
   font-size: var(--label-size);
   font-weight: var(--label-weight);
@@ -152,13 +152,13 @@ body,
 /* ---------- connector ---------- */
 .connector-outline {
   stroke: var(--outline-color);
-  stroke-width: calc(4px + 2 * var(--outline));
+  stroke-width: calc(2px + 2 * var(--outline));
   stroke-linecap: round;
 }
 .connector-line {
   stroke: var(--label-bg);
   stroke: #111827;
-  stroke-width: 4px;
+  stroke-width: 2px;
   stroke-linecap: round;
 }
 .connector-dot-outline { fill: var(--outline-color); }
@@ -196,20 +196,18 @@ body,
 }
 .ptr.motion-double_tap .ptr-body { animation-name: ptr-press-double_tap; }
 .ptr.motion-drag_to .ptr-body { animation-name: ptr-press-drag_to; }
-.ptr-svg { display: block; overflow: visible; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35)); }
-.ptr-hand-outline {
-  fill: var(--outline-color);
-  stroke: var(--outline-color);
-  stroke-width: calc(2 * var(--outline) + 2px);
+.ptr-svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)); }
+/* A chalk-drawn arrow: thin strokes with a rough edge, the tail fading out like the start of a crayon line.
+   White underneath, info blue on top: reads on light and dark backgrounds without covering what it points at. */
+.ptr-chalk path {
+  fill: none;
+  stroke-linecap: round;
   stroke-linejoin: round;
 }
-/* Info blue fill + thin dark edge: reads on light and dark wallpapers alike. */
-.ptr-hand {
-  fill: var(--info);
-  stroke: #111827;
-  stroke-width: 2px;
-  stroke-linejoin: round;
-}
+.ptr-hand-outline { stroke-width: calc(var(--ptr-stroke) + 2 * var(--outline) + 1px); }
+.ptr-hand { stroke-width: var(--ptr-stroke); }
+.ptr-streak { stroke-width: calc(var(--ptr-stroke) * 0.45); opacity: 0.55; }
+.ptr-svg { --ptr-stroke: 4.5px; }
 
 /* ---------- steps ---------- */
 /* One step at a time: the current step's ring and label glide to the next control (calm,
