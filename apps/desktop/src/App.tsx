@@ -14,7 +14,6 @@ const statusLabels: Record<string, string> = {
   blocked: 'Needs attention',
   completed: 'Complete',
   completed_unverified: 'Done, not fully verified',
-  needs_user: 'Waiting for you',
   failed: 'Needs attention',
 };
 export default function App() {
@@ -23,7 +22,6 @@ export default function App() {
   const [expanded, setExpanded] = useState(false);
   const [overlayError, setOverlayError] = useState('');
   const status = session.state?.status || 'idle';
-  const question = session.waiting ? session.state?.question : null;
   const canRun = session.ready && session.connected && !session.pending && !!goal.trim();
   const events = session.state?.events || [];
   async function submit() {
@@ -51,14 +49,13 @@ export default function App() {
             if (canRun) void submit();
           }}
         >
-          {question && <p className="question" role="status">{question.text}</p>}
           <label className="visually-hidden" htmlFor="goal">What would you like to do?</label>
           <textarea
             id="goal"
             rows={2}
             maxLength={1000}
             value={goal}
-            placeholder={session.busy || question ? 'New instruction replaces the current task…' : 'What would you like to do?'}
+            placeholder={session.busy ? 'New instruction replaces the current task…' : 'What would you like to do?'}
             onChange={(event) => setGoal(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canRun) {
@@ -71,11 +68,7 @@ export default function App() {
             <button type="submit" className="primary" aria-label="Send instruction" disabled={!canRun}>
               {session.pending ? 'Starting…' : 'Send'}
             </button>
-            {question && <>
-              <button type="button" className="primary" disabled={session.pending} onClick={() => void session.answer('yes')}>Allow</button>
-              <button type="button" disabled={session.pending} onClick={() => void session.answer('no')}>Don’t</button>
-            </>}
-            {(session.busy || question) && <button
+            {session.busy && <button
               type="button"
               className="stop"
               onClick={session.stop}

@@ -116,7 +116,6 @@ app.whenReady().then(() => {
   handle('assistant:start', (input) => controller.start(input));
   handle('assistant:replace', (input) => controller.replace(input));
   handle('assistant:cancel', () => controller.cancel());
-  handle('assistant:answer', (text) => controller.answer(text));
   handle('assistant:accessibility', async () => {
     await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
   });

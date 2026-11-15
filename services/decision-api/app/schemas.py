@@ -41,7 +41,6 @@ class Mission(Loose):
     objective: str
     doneWhen: str = ''
     context: str = ''
-    irreversible: bool = False
 
 
 class PlanRequest(Loose):
@@ -79,7 +78,6 @@ class PlanWire(Strict):
     text: str = Field(max_length=5000)
     key: str = Field(max_length=40)
     direction: Literal['', 'up', 'down', 'left', 'right']
-    risk: Literal['reversible', 'irreversible']
     expect: str = Field(max_length=500)
     query: str = Field(max_length=300)
     scope: str
@@ -114,7 +112,6 @@ class OrchestratorWire(Strict):
     objective: str = Field(max_length=1000)
     doneWhen: str = Field(max_length=1000)
     context: str = Field(max_length=3000)
-    irreversible: bool
     plan: list[PlanItem] = Field(max_length=12)
     message: str = Field(max_length=1500)
 

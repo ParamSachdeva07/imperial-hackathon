@@ -56,8 +56,6 @@ type Task = {
   issues: string[];
   /** How often each step that sent nothing was proposed against the same screen. */
   repeats: Map<string, number>;
-  pending?: { text: string; approval: string };
-  approvals: Set<string>;
   /** What the last report pointed at, so Luna is shown the same elements. */
   cited: ElementIdentity[];
 };
@@ -76,7 +74,7 @@ export class Navigator {
   begin(taskId: string, input: TaskInput) {
     if (this.task?.taskId === taskId) return;
     this.task = { taskId, input, ledger: new Ledger(), context: input.app ? { app: input.app } : {}, seenUrls: new Set(),
-      shallow: new Set(), menu: new MenuIndex(), steps: 0, query: '', issues: [], repeats: new Map(), approvals: new Set(), cited: [] };
+      shallow: new Set(), menu: new MenuIndex(), steps: 0, query: '', issues: [], repeats: new Map(), cited: [] };
   }
   /** Whether an action of this task may or may not have reached the application. */
   hasUncertainActions() { return !!this.task?.ledger.uncertain().length; }
@@ -109,7 +107,8 @@ export class Navigator {
   }
   private allowedKeys({ context, snapshots, windows }: DesktopObservation): string[] {
     if (context.driver === 'browser') return snapshots[0] ? PAGE_KEYS : [];
-    return snapshots[0]?.complete && context.windowId && windows.some(w => w.id === context.windowId && w.focused) ? KEYS : [];
+    // The window need not be in front now: it is brought forward before a key is sent.
+    return snapshots[0]?.complete && context.windowId && windows.some(w => w.id === context.windowId) ? KEYS : [];
   }
   /** The window's own title, also while only one region or surface of it is being read. */
   private windowTitle(observation?: DesktopObservation): string {
@@ -143,17 +142,10 @@ export class Navigator {
       notices: observation.notices.slice(0, 12).map(n => clip(n, 1000)), elements: selected.elements, scopes: selected.scopes, tools: this.tools() };
   }
 
-  /** Returns the session's result, or nothing when it stopped to ask the user about an irreversible action. */
-  async run(host: Host, mission: Mission, signal: AbortSignal, answer?: string): Promise<SessionResult | undefined> {
+  /** Runs until the navigator yields or stops making progress, and returns where things stand. */
+  async run(host: Host, mission: Mission, signal: AbortSignal): Promise<SessionResult> {
     const { state } = host, t = this.task!, input = t.input;
-    if (t.mission !== mission) Object.assign(t, { mission, steps: 0, query: '', issues: [], repeats: new Map(), pending: undefined });
-    if (t.pending) {
-      const pending = t.pending;
-      t.pending = undefined;
-      state.question = null;
-      if (answer !== undefined && /^\s*(y|yes|allow|confirm|ok|okay|go ahead|do it)\b/i.test(answer)) t.approvals.add(pending.approval);
-      else t.issues.push('The user did not allow this irreversible action. Do not propose it again.');
-    }
+    Object.assign(t, { mission, steps: 0, query: '', issues: [], repeats: new Map() });
 
     for (;;) {
       signal.throwIfAborted();
@@ -322,22 +314,7 @@ export class Navigator {
       const blocked = problem || !operation ? undefined : t.ledger.retryBlock(state.step, operation, args, node?.identity, recipient?.identity);
       if (blocked) problem = 'The same action was just sent as ' + blocked.id + ' and ' + (blocked.delivery === 'uncertain'
         ? 'may or may not have arrived' : 'nothing has changed yet') + '. Look at the screen (read, wait or find) before sending it again.';
-      if (!problem && step.risk === 'irreversible' && !mission.irreversible)
-        problem = 'This session was not given an irreversible action. Return to Luna with what is ready to be sent, deleted or bought.';
       if (problem || !operation) { const again = refuse(problem); if (again) return again; continue; }
-      if (step.risk === 'irreversible' && input.confirmIrreversible) {
-        // The approval is for this action on this target; if either changes, the user is asked again.
-        const approval = JSON.stringify([operation, node?.identity ?? null, recipient?.identity ?? null, args]);
-        if (!t.approvals.has(approval)) {
-          const text = 'Allow this action, which cannot be undone? ' + operation + ' ' + (node?.label || args.key || '') + ' — for: ' + mission.objective;
-          t.pending = { text, approval };
-          state.question = { text };
-          host.trace?.('confirmation', { text });
-          host.status('needs_user', text);
-          return;
-        }
-        t.approvals.delete(approval);
-      }
 
       // Preconditions on the live element. A failure sends nothing.
       let owner = node?.owner ?? observation, acting = view;
@@ -380,7 +357,7 @@ export class Navigator {
       }
 
       const effect = t.ledger.propose({ step: state.step, operation, args, target: node?.identity,
-        targetLabel: node?.label || args.key || clip(args.text || '', 200), recipient: recipient?.identity, risk: step.risk, expect: step.expect });
+        targetLabel: node?.label || args.key || clip(args.text || '', 200), recipient: recipient?.identity, expect: step.expect });
       if (node?.element) host.event('target', 'Resolved accessibility target.', { targetRef: node.element.ref, bounds: node.element.bounds,
         coordinateSpace: 'native-screen', app: owner.context.app, windowId: node.snapshot?.windowId });
       host.status('executing', 'Executing ' + operation + ' ' + clip(effect.targetLabel, 120) + '.');

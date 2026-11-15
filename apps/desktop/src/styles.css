@@ -286,12 +286,3 @@ pre {
 .compact .error-message { margin: 5px 0 0; padding: 6px; }
 
 
-.question {
-  margin: 0 0 6px;
-  padding: 6px 8px;
-  border-left: 3px solid #b26a00;
-  background: #fff6e5;
-  color: #3d2a00;
-  font-size: 12px;
-  line-height: 1.35;
-}

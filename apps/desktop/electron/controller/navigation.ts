@@ -8,7 +8,7 @@ import { nativeErrorDetails } from '../desktop/action-verification';
 import { Orchestrator } from './orchestrator';
 
 const initial = (): ControllerState => ({ taskId: null, status: 'idle', busy: false, input: null, step: 0, events: [],
-  plan: [], completion: null, question: null });
+  plan: [], completion: null });
 
 /** One task at a time: start it, replace it, stop it, and publish what it is doing. */
 export class NavigationController {
@@ -57,7 +57,6 @@ export class NavigationController {
   start(input: unknown): ControllerState {
     if (this.replacing) throw new Error('A replacement task is already waiting for the previous action to settle.');
     if (this.current.busy) throw new Error('A task is still running. Stop it or send a replacement.');
-    if (this.current.status === 'needs_user') throw new Error('Answer or stop the current task first.');
     const parsed = TaskInputSchema.parse(input);
     this.current = { ...initial(), taskId: randomUUID(), input: parsed, busy: true };
     this.abort = new AbortController();
@@ -83,24 +82,14 @@ export class NavigationController {
       return state;
     } finally { this.replacing = false; }
   }
-  /** The user's yes or no to an irreversible action. */
-  answer(text: unknown): ControllerState {
-    if (this.current.busy || this.current.status !== 'needs_user') throw new Error('There is no question waiting for an answer.');
-    if (typeof text !== 'string' || !text.trim() || text.length > 1000) throw new Error('Give an answer of at most 1,000 characters.');
-    this.current.busy = true;
-    this.trace('answer', { text });
-    this.activeRun = this.advance(text.trim());
-    return this.state();
-  }
   cancel(): ControllerState {
     this.cancellationRevision++;
-    if (!this.current.busy && this.current.status !== 'needs_user') return this.state();
+    if (!this.current.busy) return this.state();
     this.abort?.abort();
-    this.status(this.current.busy ? 'stopping' : 'cancelled', this.current.busy
-      ? 'Stopping. An already-dispatched action may finish; no further step will start.' : 'Task cancelled.');
+    this.status('stopping', 'Stopping. An already-dispatched action may finish; no further step will start.');
     return this.state();
   }
-  private async advance(answer?: string) {
+  private async advance() {
     const signal = this.abort!.signal;
     try {
       await this.orchestrator.advance({
@@ -108,7 +97,7 @@ export class NavigationController {
         status: (status, message) => this.status(status, message),
         event: (type, message, details) => this.event(type, message, details),
         trace: (kind, data) => this.trace(kind, data),
-      }, signal, answer);
+      }, signal);
     } catch (error) {
       if (signal.aborted) this.status('cancelled', 'Cancelled. No further desktop actions will run.');
       else {

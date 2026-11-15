@@ -58,9 +58,8 @@ Type a request and press Send or ⌘ Enter. The overlay stays on top; **Show log
 - **Stop** or ⌘ ⇧ . ends the task. An action that was already sent cannot be undone.
 - There is no limit on steps, time or sessions. A task runs until Luna finishes it, reports that it cannot
   be done, or you stop it.
-- Nothing asks you what to do. The one prompt is for an action that cannot be undone (send, buy, delete,
-  overwrite): the overlay asks **Allow** or **Don't**. A caller can turn that off with
-  `confirmIrreversible: false`.
+- Nothing asks you anything. A request to send, buy or delete something is carried out; there is no
+  confirmation step.
 - ⌘ ⇧ Space shows the overlay.
 
 A caller such as a voice agent starts a task with `{ goal, context }`. `context` is a short note about what

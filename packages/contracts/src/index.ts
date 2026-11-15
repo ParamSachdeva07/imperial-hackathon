@@ -7,15 +7,13 @@ export const TaskInputSchema = z.object({
   context: z.string().max(2000).default(''),
   app: z.string().trim().max(200).default(''),
   allowPhysical: z.boolean().default(false),
-  /** When true, a send, purchase, deletion or overwrite waits for the user's yes. */
-  confirmIrreversible: z.boolean().default(true),
 }).strict();
 export type TaskInput = z.infer<typeof TaskInputSchema>;
 /** What a caller sends: fields with defaults may be left out. */
 export type TaskRequest = z.input<typeof TaskInputSchema>;
 
 export type TaskStatus = 'idle' | 'preparing' | 'observing' | 'deciding' | 'executing' | 'verifying' | 'stopping'
-  | 'cancelled' | 'blocked' | 'completed' | 'completed_unverified' | 'needs_user' | 'failed';
+  | 'cancelled' | 'blocked' | 'completed' | 'completed_unverified' | 'failed';
 export type TaskEvent = {
   id: number;
   at: number;
@@ -37,8 +35,6 @@ export type ControllerState = {
   plan: PlanItem[];
   /** How the task ended, and where it left the desktop. A caller can pass this to its next request. */
   completion: { summary: string; facts: string[]; location: Location } | null;
-  /** An irreversible action waiting for the user's yes. */
-  question: { text: string } | null;
 };
 export type Health = {
   native: { available: boolean; version?: string; accessibility: string; message?: string };
@@ -53,7 +49,6 @@ export interface DesktopApi {
   start(input: TaskRequest): Promise<ApiResult<ControllerState>>;
   replace(input: TaskRequest): Promise<ApiResult<ControllerState>>;
   cancel(): Promise<ApiResult<ControllerState>>;
-  answer(text: string): Promise<ApiResult<ControllerState>>;
   openAccessibilitySettings(): Promise<ApiResult<void>>;
   setOverlayExpanded(expanded: boolean): Promise<ApiResult<void>>;
   onState(listener: (state: ControllerState) => void): () => void;
@@ -153,7 +148,7 @@ const ModelUsageSchema = z.object({
 }).strict();
 
 /** What Luna assigns to one navigator session. */
-export type Mission = { objective: string; doneWhen: string; context: string; irreversible: boolean };
+export type Mission = { objective: string; doneWhen: string; context: string };
 /** What one navigator session hands back. The same object is stored, traced and shown to Luna. */
 export type SessionResult = {
   status: 'done' | 'progress' | 'needs_decision' | 'blocked' | 'unverified' | 'error';
@@ -167,7 +162,7 @@ export type SessionResult = {
 };
 export type EffectView = {
   id: string; operation: string; target: string; text?: string; key?: string; direction?: string;
-  risk: string; delivery: string; outcome: string; expect: string; readback?: string;
+  delivery: string; outcome: string; expect: string; readback?: string;
   added: string[]; removed: string[]; scopeChanged: boolean; note: string;
 };
 export type PlanRequest = {
@@ -202,7 +197,6 @@ export const PlanStepSchema = z.object({
   text: z.string().max(5000),
   key: z.string().max(40),
   direction: z.enum(['', 'up', 'down', 'left', 'right']),
-  risk: z.enum(['reversible', 'irreversible']),
   expect: z.string().max(500),
   query: z.string().max(300),
   scope: z.string().max(60),
@@ -233,7 +227,6 @@ export const OrchestratorResultSchema = z.object({
   taskId: z.string(), model: z.string(),
   next: z.enum(['continue', 'finish', 'blocked']),
   objective: z.string().max(1000), doneWhen: z.string().max(1000), context: z.string().max(3000),
-  irreversible: z.boolean(),
   plan: z.array(z.object({ text: z.string().max(500), status: z.enum(['todo', 'done', 'skipped']) }).strict()).max(12),
   message: z.string().max(1500),
   usage: ModelUsageSchema.optional(),

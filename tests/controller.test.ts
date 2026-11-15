@@ -27,6 +27,8 @@ class Desk implements WorkspaceBridge {
   fail?: Error;
   report?: ActionReport;
   searchable = true;
+  frontmost = true;
+  fronted = 0;
   applications = async () => [{ name: 'Example', id: 'example', running: true }];
   private tree() {
     const s = this.revision, m = this.model;
@@ -51,7 +53,7 @@ class Desk implements WorkspaceBridge {
     this.reads.push(context);
     const raw = this.tree();
     return { id: 'o' + this.revision, capturedAt: this.revision, applications: await this.applications(),
-      windows: [{ id: 'w1', title: 'Document', app: 'Example', focused: true }], notices: [],
+      windows: [{ id: 'w1', title: 'Document', app: 'Example', focused: this.frontmost }], notices: [],
       context: { app: 'Example', windowId: 'w1', surface: context.surface || 'window' },
       snapshots: context.surface && context.surface !== 'window' ? [] : [{ id: 's' + this.revision, app: 'Example', windowId: 'w1',
         windowTitle: 'Document', surface: 'window', complete: true, capturedAt: this.revision, tree: accessibilityTree(raw), elements: flattenTree(raw) }] };
@@ -61,7 +63,7 @@ class Desk implements WorkspaceBridge {
   }
   async act(candidate: DesktopCandidate, observation: DesktopObservation, text?: string) {
     this.report = undefined;
-    if (candidate.operation === 'FOCUS_WINDOW') return observation.context;
+    if (candidate.operation === 'FOCUS_WINDOW') { this.fronted++; this.frontmost = true; return observation.context; }
     this.acts.push({ operation: candidate.operation, name: candidate.name, text, key: candidate.key });
     if (this.fail) { const error = this.fail; this.fail = undefined; throw error; }
     if (candidate.operation === 'SET_VALUE' && candidate.name === 'Font Size') {
@@ -80,7 +82,7 @@ class Desk implements WorkspaceBridge {
 }
 
 const mission = (over: Partial<Mission> = {}): Mission => ({ objective: 'Make the text 24 pt', doneWhen: 'Applied size reads 24 pt',
-  context: 'Use the value 24.', irreversible: false, ...over });
+  context: 'Use the value 24.', ...over });
 const id = (request: PlanRequest, label: string) => request.elements.find(e => e.label === label)!.id;
 const yielded = (request: PlanRequest, status: NonNullable<PlanStep['report']>['status'] = 'done', labels: string[] = []): Partial<PlanStep> =>
   ({ kind: 'yield', report: { status, summary: 'Reported ' + status + '.', evidence: labels.map(label => id(request, label)) } });
@@ -92,34 +94,34 @@ function models(script: (request: PlanRequest, call: number) => Partial<PlanStep
     plan: async request => {
       requests.push(structuredClone(request));
       return { taskId: request.taskId, observationId: request.observationId, model: 'scripted', reconciliations: [], kind: 'yield',
-        operation: '', target: '', text: '', key: '', direction: '', risk: 'reversible', expect: '', query: '', scope: '', waitMs: 0,
+        operation: '', target: '', text: '', key: '', direction: '', expect: '', query: '', scope: '', waitMs: 0,
         report: null, ...script(request, requests.length) } as PlanStep;
     },
     orchestrate: async request => {
       lunaRequests.push(structuredClone(request));
       return { taskId: request.taskId, model: 'luna', next: 'continue', objective: 'Make the text 24 pt', doneWhen: 'Applied size reads 24 pt',
-        context: '', irreversible: false, plan: [], message: '', ...luna(request, lunaRequests.length) } as OrchestratorResult;
+        context: '', plan: [], message: '', ...luna(request, lunaRequests.length) } as OrchestratorResult;
     },
   };
   return { provider, requests, lunaRequests };
 }
 function makeHost(over: Record<string, unknown> = {}) {
-  const state: ControllerState = { taskId, status: 'idle', busy: true, step: 0, events: [], plan: [], completion: null, question: null,
+  const state: ControllerState = { taskId, status: 'idle', busy: true, step: 0, events: [], plan: [], completion: null,
     input: TaskInputSchema.parse({ goal: 'Make the text 24 pt', ...over }) };
   const traces: { kind: string; data: any }[] = [];
   const host: Host = { state, status: (status, message) => { state.status = status; state.events.push({ id: state.events.length, at: 0, taskId, type: 'state', message }); },
     event: () => {}, trace: (kind, data) => traces.push({ kind, data: structuredClone(data) }) };
   return { host, state, traces };
 }
-function session(desk: Desk, provider: DecisionProvider, host: Host, assignment = mission(), answer?: string, navigator = new Navigator(desk, provider)) {
+function session(desk: Desk, provider: DecisionProvider, host: Host, assignment = mission(), navigator = new Navigator(desk, provider)) {
   navigator.begin(taskId, host.state.input!);
-  return { navigator, result: navigator.run(host, assignment, new AbortController().signal, answer) };
+  return { navigator, result: navigator.run(host, assignment, new AbortController().signal) };
 }
 const signal = () => new AbortController().signal;
 
 describe('the ledger: one rule about sending an action again', () => {
   const effect = (ledger: Ledger, step: number, delivery: 'delivered' | 'uncertain') => Object.assign(
-    ledger.propose({ step, operation: 'PRESS', args: { key: 'return' }, targetLabel: 'return', risk: 'reversible', expect: '' }), { delivery });
+    ledger.propose({ step, operation: 'PRESS', args: { key: 'return' }, targetLabel: 'return', expect: '' }), { delivery });
   it('holds back an identical action straight after it was sent with no result, and lets it through once the screen was looked at', () => {
     const ledger = new Ledger();
     effect(ledger, 4, 'delivered');
@@ -147,10 +149,10 @@ describe('the ledger: one rule about sending an action again', () => {
 describe('a navigator session', () => {
   it('reads a step exactly as the broker sends it, with empty fields left out', () => {
     const wire = { taskId, observationId: 'o1', model: 'm', reconciliations: [], kind: 'act', operation: 'OPEN_URL', target: '',
-      text: 'https://twitch.tv', key: '', direction: '', risk: 'reversible', expect: '', query: '', scope: '', waitMs: 0 };
+      text: 'https://twitch.tv', key: '', direction: '', expect: '', query: '', scope: '', waitMs: 0 };
     expect(PlanStepSchema.parse(wire).report).toBeUndefined();
     expect(OrchestratorResultSchema.parse({ taskId, model: 'm', next: 'finish', objective: '', doneWhen: '', context: '',
-      irreversible: false, plan: [], message: 'Done.' }).usage).toBeUndefined();
+      plan: [], message: 'Done.' }).usage).toBeUndefined();
   });
 
   it('acts, sees the result, and returns one object saying what is true and where things stand', async () => {
@@ -190,7 +192,7 @@ describe('a navigator session', () => {
   it('lets the same control be used again as soon as the screen answered the first time', async () => {
     const desk = new Desk();
     const { provider } = models((request, call) => call <= 3 ? { kind: 'act', operation: 'CLICK', target: id(request, 'Send') } : yielded(request));
-    const result = await session(desk, provider, makeHost().host, mission({ irreversible: false })).result;
+    const result = await session(desk, provider, makeHost().host).result;
     expect(desk.model.sent).toBe(3);
     expect(result!.unresolved).toEqual([]);
   });
@@ -258,31 +260,20 @@ describe('a navigator session', () => {
     expect(desk.searches).toEqual([]);
   });
 
-  it('sends an irreversible action only in a session Luna opened for it, and asks the user once when asked to confirm', async () => {
-    const send = (request: PlanRequest): Partial<PlanStep> => ({ kind: 'act', operation: 'CLICK', target: id(request, 'Send'), risk: 'irreversible' });
-    const refused = new Desk();
-    const first = models((request, call) => call === 1 ? send(request) : yielded(request, 'needs_decision'));
-    await session(refused, first.provider, makeHost().host).result;
-    expect(refused.model.sent).toBe(0);
-    expect(first.requests[1].issues.join(' ')).toMatch(/not given an irreversible action/);
-
+  it('sends what it was asked to send without asking anyone, also when the window is not in front', async () => {
     const desk = new Desk();
-    const { provider } = models((request, call) => call <= 2 ? send(request) : yielded(request, 'done', ['Outbox']));
+    desk.frontmost = false;
+    const { provider, requests } = models((request, call) => call === 1 ? { kind: 'act', operation: 'CLICK', target: id(request, 'Send') }
+      : call === 2 ? { kind: 'act', operation: 'PRESS', key: 'return' } : yielded(request, 'done', ['Outbox']));
     const { host, state } = makeHost();
-    const assignment = mission({ objective: 'Send the message', irreversible: true });
-    const { navigator, result } = session(desk, provider, host, assignment);
-    expect(await result).toBeUndefined();
-    expect(state.status).toBe('needs_user');
-    expect(state.question?.text).toMatch(/cannot be undone/);
-    expect(desk.model.sent).toBe(0);
-    const resumed = await navigator.run(host, assignment, signal(), 'yes');
+    const result = await session(desk, provider, host, mission({ objective: 'Send the message', doneWhen: 'Outbox shows 1 sent' })).result;
     expect(desk.model.sent).toBe(1);
-    expect(resumed).toMatchObject({ status: 'done', facts: ['statictext "Outbox" = "1 sent"'] });
-
-    const unprompted = new Desk();
-    const third = models((request, call) => call === 1 ? send(request) : yielded(request));
-    await session(unprompted, third.provider, makeHost({ confirmIrreversible: false }).host, assignment).result;
-    expect(unprompted.model.sent).toBe(1);
+    expect(result).toMatchObject({ status: 'done', facts: ['statictext "Outbox" = "1 sent"'] });
+    expect(state.status).not.toBe('blocked');
+    // Keys are offered for a known window; it is brought forward before the key goes out.
+    expect(requests[0].allowedKeys).toContain('return');
+    expect(desk.fronted).toBe(1);
+    expect(desk.acts.at(-1)).toMatchObject({ operation: 'PRESS', key: 'return' });
   });
 
   it('records an action whose delivery is unknown and will not send it again blind', async () => {
@@ -312,7 +303,7 @@ describe('Luna and the sessions she runs', () => {
     expect(state.completion).toEqual({ summary: 'Sent.', facts: ['statictext "Outbox" = "1 sent"'], location: { app: 'Example', window: 'Document', address: '' } });
     expect(lunaRequests).toHaveLength(2);
     expect(lunaRequests[0]).toMatchObject({ goal: 'Make the text 24 pt', callerContext: 'The document is already open.', history: [] });
-    expect(lunaRequests[1].history).toEqual([{ assignment: { objective: 'Press Send', doneWhen: 'Applied size reads 24 pt', context: '', irreversible: false },
+    expect(lunaRequests[1].history).toEqual([{ assignment: { objective: 'Press Send', doneWhen: 'Applied size reads 24 pt', context: '' },
       result: expect.objectContaining({ status: 'done', steps: 2 }) }]);
     // Luna reviews the very screen the navigator ended on: no second read between the session and her call.
     expect(lunaRequests[1].screen.elements.some(e => e.label === 'Outbox' && e.value === '1 sent')).toBe(true);
@@ -337,7 +328,6 @@ describe('Luna and the sessions she runs', () => {
     await new Orchestrator(new Desk(), provider).advance(host, signal());
     expect(state.status).toBe('blocked');
     expect(state.completion?.summary).toBe('The site needs your sign-in code.');
-    expect(state.question).toBeNull();
   });
 
   it('labels a finish as unverified when an action may not have landed, without refusing Luna', async () => {

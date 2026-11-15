@@ -13,7 +13,7 @@ export const RETRY = { baseMs: 2000 };
 /**
  * Luna plans, the navigator executes, and that repeats. Each session's result describes where
  * things stand, so one Luna call decides what happens next: another session, finished, or
- * cannot be done. Luna alone ends a task, and nothing here asks the user what to do.
+ * cannot be done. Luna alone ends a task, and nothing here asks the user anything.
  */
 export class Orchestrator {
   private taskId?: string;
@@ -26,8 +26,7 @@ export class Orchestrator {
     this.navigator = new Navigator(bridge, provider, defaultBrowser);
   }
 
-  /** `answer` is the user's reply to an irreversible-action confirmation, when one was pending. */
-  async advance(host: Host, signal: AbortSignal, answer?: string) {
+  async advance(host: Host, signal: AbortSignal) {
     const { state } = host, taskId = state.taskId!, input = state.input!;
     if (this.taskId !== taskId) Object.assign(this, { taskId, history: [], plan: [], mission: undefined });
     this.navigator.begin(taskId, input);
@@ -50,12 +49,12 @@ export class Orchestrator {
             (unverified ? ' The result of at least one action could not be confirmed.' : ''));
           return;
         }
-        this.mission = { objective: decision.objective, doneWhen: decision.doneWhen, context: decision.context, irreversible: decision.irreversible };
+        this.mission = { objective: decision.objective, doneWhen: decision.doneWhen, context: decision.context };
         host.trace?.('session_start', this.mission);
       }
       let result;
       try {
-        result = await this.navigator.run(host, this.mission, signal, answer);
+        result = await this.navigator.run(host, this.mission, signal);
       } catch (error) {
         signal.throwIfAborted();
         // An adapter or model failure is something Luna can route around. Anything else is a defect and fails the task.
@@ -63,8 +62,6 @@ export class Orchestrator {
         result = this.navigator.failed('The session stopped on an error: ' + error.message);
         host.event('result', result.summary);
       }
-      answer = undefined;
-      if (!result) return;
       host.trace?.('session_end', { assignment: this.mission, result });
       this.history.push({ assignment: this.mission, result });
       this.mission = undefined;

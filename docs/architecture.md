@@ -14,14 +14,15 @@ flowchart LR
 
 Luna plans, the navigator executes, and that repeats. Each call to Luna returns exactly one decision:
 
-- **continue**: assign the next session, as `{ objective, doneWhen, context, irreversible }`;
+- **continue**: assign the next session, as `{ objective, doneWhen, context }`;
 - **finish**: the request is done;
 - **blocked**: it cannot be done, for a reason outside the assistant's reach (a sign-in or code that needs
   the user, something unavailable, a control that cannot be operated, information only the user has).
 
-Luna alone ends a task. She never asks the user anything, and code never refuses her decision. Code states
-two facts she cannot override: a finish while an action may not have arrived is reported as "completed,
-unverified", and an action that cannot be undone follows the caller's `confirmIrreversible` setting.
+Luna alone ends a task. Nothing asks the user anything: there are no questions and no confirmation step, so
+a request to send, buy or delete something is carried out. Code never refuses Luna's decision. It states one
+fact she cannot override: a finish while an action may not have arrived is reported as "completed,
+unverified".
 
 There is no limit on steps, time or sessions.
 
@@ -65,8 +66,6 @@ carries `completion` (summary, facts, location) to pass back. Nothing is written
 - **Addresses.** A site may be opened by its front page. An address with a path, query or fragment must
   come from the user or from a page that was read. Opening an address and searching the web go through the
   extension, never through the browser's address bar.
-- **Irreversible actions** are sent only in a session Luna opened for one, and wait for the user when
-  `confirmIrreversible` is on.
 - **Screen text is data.** Only the user's request authorises work.
 
 ## Failures

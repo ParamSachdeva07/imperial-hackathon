@@ -59,13 +59,11 @@ export function useDesktopSession() {
       window.removeEventListener('focus', onFocus);
     };
   }, [connected]);
-  const waiting = state?.status === 'needs_user' && !state.busy;
   return {
-    state, health, ready, pending, connected, modelsConfigured, error, waiting,
+    state, health, ready, pending, connected, modelsConfigured, error,
     busy: !!state?.busy || pending,
     /** A new instruction replaces whatever is running. */
-    run: (goal: string) => command(() => (state?.busy || waiting ? window.desktop.replace : window.desktop.start)({ goal })),
-    answer: (text: string) => command(() => window.desktop.answer(text)),
+    run: (goal: string) => command(() => (state?.busy ? window.desktop.replace : window.desktop.start)({ goal })),
     refreshHealth,
     stop: () => command(() => window.desktop.cancel()),
     openPermissions: () => command(() => window.desktop.openAccessibilitySettings()),

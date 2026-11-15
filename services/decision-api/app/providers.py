@@ -45,7 +45,7 @@ def compact(value):
     """Drop empty fields so the model reads facts, not padding."""
     if isinstance(value, dict):
         return {key: compact(item) for key, item in value.items()
-                if item not in ('', [], None, False) or key in ('complete', 'focused', 'irreversible')}
+                if item not in ('', [], None, False) or key in ('complete', 'focused')}
     if isinstance(value, list):
         return [compact(item) for item in value]
     return value

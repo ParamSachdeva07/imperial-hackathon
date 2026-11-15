@@ -16,7 +16,7 @@ OPENAI = ModelConfig('openai', 'openai-key', 'gpt-6-luna', 'none', 'priority')
 def plan_request(**over):
     return PlanRequest.model_validate({
         'taskId': 't1', 'observationId': 'o1', 'goal': 'Open YouTube',
-        'mission': {'objective': 'Open YouTube', 'doneWhen': 'YouTube is showing', 'context': '', 'irreversible': False},
+        'mission': {'objective': 'Open YouTube', 'doneWhen': 'YouTube is showing', 'context': ''},
         'effects': [], 'observation': {'app': 'Google Chrome', 'complete': True, 'notices': []},
         'elements': [{'id': 'e1', 'role': 'button', 'label': 'Search', 'value': '', 'states': [], 'path': '', 'operations': ['CLICK'], 'tags': []},
                      {'id': 'e2', 'role': 'statictext', 'label': 'Home', 'value': '', 'states': [], 'path': '', 'operations': [], 'tags': []}],
@@ -26,12 +26,12 @@ def plan_request(**over):
 
 def step(**over):
     return json.dumps({'reconciliations': [], 'kind': 'act', 'operation': 'CLICK', 'target': 'e1', 'text': '', 'key': '', 'direction': '',
-                       'risk': 'reversible', 'expect': 'results', 'query': '', 'scope': '', 'waitMs': 0, 'report': None, **over})
+                       'expect': 'results', 'query': '', 'scope': '', 'waitMs': 0, 'report': None, **over})
 
 
 def decision(**over):
     return json.dumps({'next': 'continue', 'objective': 'Open YouTube', 'doneWhen': 'YouTube is showing', 'context': '',
-                       'irreversible': False, 'plan': [{'text': 'Open YouTube', 'status': 'todo'}], 'message': '', **over})
+                       'plan': [{'text': 'Open YouTube', 'status': 'todo'}], 'message': '', **over})
 
 
 def cerebras_reply(text):

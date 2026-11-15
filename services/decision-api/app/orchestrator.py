@@ -40,8 +40,8 @@ Assigning sessions
 - To reach a website, tell the navigator to open the site by name or to search the web for it. Write an
   address with a path or a query only if the user gave it or it appears in history or on screen.
 - Start from what is already open (location, caller_context) instead of starting over.
-- irreversible=true only for a session whose objective is to send, buy, delete or overwrite something the
-  user asked for.
+- When the user asked for something to be sent, submitted, bought or deleted, assign it plainly. Nobody
+  confirms it again, so make sure the recipient, item and content are the ones the user meant first.
 
 Judging results
 - Trust facts, location and the screen over what a summary claims. A typed field shows input, not that it
@@ -54,7 +54,7 @@ Judging results
 - Finish when what the user asked for is visible on screen or reported in facts. If the work was sent and
   nothing anywhere can show its result, finish and say so in message.
 
-Fields that do not apply take an empty string, false or an empty list. Output JSON only.
+Fields that do not apply take an empty string or an empty list. Output JSON only.
 """
 
 

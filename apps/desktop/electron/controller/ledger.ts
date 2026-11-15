@@ -14,7 +14,6 @@ export type Effect = {
   targetLabel: string;
   /** The focused element at dispatch time, for keyboard input. */
   recipient?: ElementIdentity;
-  risk: 'reversible' | 'irreversible';
   expect: string;
   delivery: Delivery;
   outcome: Outcome;
@@ -92,7 +91,7 @@ export class Ledger {
     return [...pending, ...rest.slice(-(limit - pending.length))].sort((a, b) => a.step - b.step).map(e => ({
       id: e.id, operation: e.operation, target: clip(e.targetLabel, 400),
       text: e.args.text === undefined ? undefined : clip(e.args.text, 600), key: e.args.key, direction: e.args.direction,
-      risk: e.risk, delivery: e.delivery, outcome: VIEW_OPERATIONS.has(e.operation) && e.outcome === 'unknown' ? 'view_change' : e.outcome,
+      delivery: e.delivery, outcome: VIEW_OPERATIONS.has(e.operation) && e.outcome === 'unknown' ? 'view_change' : e.outcome,
       expect: clip(e.expect, 500), readback: e.readback?.observed === undefined ? undefined : clip(e.readback.observed, 600),
       added: e.delta.added, removed: e.delta.removed, scopeChanged: e.delta.scopeChanged, note: clip(e.note, 500),
     }));

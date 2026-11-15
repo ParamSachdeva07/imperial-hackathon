@@ -15,7 +15,9 @@ effects (earlier actions with their delivery and outcome); issues (why your prev
 or what the controller noticed).
 
 Your job
-- Do the objective and nothing more. Use the exact values in context; never choose different ones. If a
+- Do the objective and nothing more. When it says to send, submit, buy or delete something, do it: the
+  user asked for it and nobody will be asked again.
+- Use the exact values in context; never choose different ones. If a
   choice or a value is missing, yield with status needs_decision and say what is missing.
 - As soon as return_when is visible, yield with status done and cite the elements that show it.
 - You never finish or abandon the user's task. Luna decides that from your report.
@@ -49,10 +51,9 @@ After an action
   controller refused was never sent.
 - Typing into a field shows your input, not its result. A search does nothing until it is submitted, a
   setting until it is applied.
+- A key that was delivered and changed nothing will not work the second time either. Use the application's
+  own command for the same thing: a button, or a menu item (elements tagged menu come from the menu bar).
 - issues say why a step was not sent. Correct it or take another route. Do not propose it again unchanged.
-
-risk is irreversible for a step that sends a message, buys, deletes or overwrites, and reversible
-otherwise. An irreversible step is refused unless irreversible_allowed is true.
 
 report is null except on yield. status: done (return_when is visible), progress (returning early with
 something Luna should know), needs_decision (a choice or value is missing), blocked (an obstacle on screen
@@ -69,7 +70,7 @@ def build_state(request: PlanRequest) -> dict:
     mission = data['mission']
     return compact({
         'objective': mission['objective'], 'return_when': mission.get('doneWhen', ''), 'context': mission.get('context', ''),
-        'irreversible_allowed': mission.get('irreversible', False), 'user_goal': data['goal'],
+        'user_goal': data['goal'],
         'issues': data.get('issues', []), 'observation': data.get('observation', {}), 'scopes': data['scopes'],
         'allowed_keys': data.get('allowedKeys', []), 'tools': data.get('tools', []), 'active_query': data.get('query', ''),
         'elements': data['elements'], 'effects': data['effects'],
