@@ -148,6 +148,118 @@ describe("OverlayService", () => {
     expect(sink.items).toHaveLength(0);
   });
 
+  describe("label_parts", () => {
+    const part = (id: string, label: string, tone?: "info" | "warning" | "success") => ({ target: el(id), label, ...(tone ? { tone } : {}) });
+    const overlap = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+    it("draws a ring and a placed label per item as ONE overlay, resolvedBounds = union", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "Odd sender", "warning"), part("attach", "Strange link"), part("to", "Rushing you", "warning")], title: "Warning signs" });
+      expect(r).toMatchObject({ ok: true, visible: true });
+      expect(r.resolvedBounds).toEqual({ x: 300, y: 400, width: 420, height: 140 });
+      expect(sink.items.filter((i) => i.kind === "parts")).toHaveLength(1);
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "parts") throw new Error();
+      expect(item.parts.map((p) => p.label?.text)).toEqual(["Odd sender", "Strange link", "Rushing you"]);
+      expect(item.parts.map((p) => p.tone)).toEqual(["warning", "info", "warning"]);
+      expect(item.parts.every((p) => p.label?.tone === p.tone)).toBe(true); // a glyph per label: never colour alone
+      expect(item.title?.text).toBe("Warning signs");
+      // No label covers any ring or another label.
+      const boxes = [...item.parts.map((p) => p.label!.rect), item.title!.rect];
+      const rings = item.parts.map((p) => p.target.bounds);
+      for (const [i, bx] of boxes.entries()) {
+        for (const ring of rings) expect(overlap(bx, ring)).toBe(false);
+        for (const other of boxes.slice(i + 1)) expect(overlap(bx, other)).toBe(false);
+      }
+    });
+
+    it("places the title chip adjacent to the group's union, above its top edge, clear of every ring", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "Odd sender", "warning"), part("attach", "Strange link"), part("to", "Rushing you", "warning")], title: "Warning signs" });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "parts") throw new Error();
+      const union = r.resolvedBounds!;
+      const title = item.title!.rect;
+      expect(title.y + title.height).toBeLessThanOrEqual(union.y); // above the union's top edge
+      expect(union.y - (title.y + title.height)).toBeLessThanOrEqual(24); // adjacent, not far away
+      for (const p of item.parts) expect(overlap(title, p.target.bounds)).toBe(false);
+    });
+
+    it("skips items that can't be found; fails (visible:false) only if none can", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("ghost", "Nope"), part("send", "Here")] });
+      expect(r).toMatchObject({ ok: true, visible: true, resolvedBounds: rect(600, 400) });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "parts") throw new Error();
+      expect(item.parts.map((p) => p.index)).toEqual([1]);
+      expect(await svc.handleTool("label_parts", { items: [part("ghost", "a"), part("ghost2", "b")] })).toEqual({ ok: true, visible: false, reason: "target_not_found" });
+    });
+
+    it("does not replace the current highlight, and is evicted like any drawing", async () => {
+      const h = await svc.handleTool("highlight", { target: el("send") });
+      const p = await svc.handleTool("label_parts", { items: [part("attach", "A"), part("to", "B")] });
+      expect(sink.byId(h.overlayId!)?.state).toBe("visible");
+      expect(sink.byId(p.overlayId!)?.state).toBe("visible");
+      expect(events.some((e) => e.type === "overlay.dismissed")).toBe(false);
+    });
+
+    it("follows moving elements, survives losing one part, and fades when all are lost", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "A"), part("attach", "B")], expires: "manual" });
+      bounds.set("send", { rect: rect(700, 450), displayId: "1" });
+      await clock.advance(1000);
+      await flushPromises();
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "parts") throw new Error();
+      expect(item.parts[0]!.target.bounds).toEqual(rect(700, 450));
+      expect(sink.byId(r.overlayId!)?.state).toBe("visible");
+    });
+
+    it("losing one of two parts keeps the drawing; losing both at once fades it with target_lost", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "A"), part("attach", "B")], expires: "manual" });
+      bounds.set("send", null);
+      clock.advance(300);
+      await flushPromises();
+      clock.advance(300);
+      await flushPromises();
+      expect(events).not.toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+      const item = sink.byId(r.overlayId!);
+      if (item?.kind !== "parts") throw new Error();
+      expect(item.parts.map((p) => p.index)).toEqual([1]);
+      bounds.set("attach", null);
+      clock.advance(300);
+      await flushPromises();
+      clock.advance(300);
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+    });
+
+    it("losing every part in the same pass fades with target_lost (no frozen ghost)", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "A"), part("attach", "B"), part("to", "C")], expires: "manual" });
+      for (const id of ["send", "attach", "to"]) bounds.set(id, { rect: rect(9000, 9000), displayId: "1" }); // all off every display at once
+      bounds.fireChange();
+      await flushPromises();
+      expect(events).toContainEqual({ type: "overlay.target_lost", overlayId: r.overlayId });
+      expect(sink.byId(r.overlayId!)?.state).toBe("exiting");
+    });
+
+    it("expires on the next turn", async () => {
+      const r = await svc.handleTool("label_parts", { items: [part("send", "A")] });
+      svc.onTurnStart("t2");
+      expect(sink.byId(r.overlayId!)?.state).toBe("exiting");
+    });
+  });
+
+  it("shows a verdict card with its tone and reasons", async () => {
+    const r = await svc.handleTool("show_explainer", {
+      anchor: el("attach"),
+      title: "Likely a scam",
+      spec: { kind: "verdict", tone: "warning", reasons: ["Fake sender", "Threatens you"] },
+    });
+    expect(r).toMatchObject({ ok: true, visible: true });
+    const item = sink.byId(r.overlayId!);
+    if (item?.kind !== "explainer") throw new Error();
+    expect(item.body).toEqual({ kind: "verdict", tone: "warning", reasons: ["Fake sender", "Threatens you"] });
+    expect(item.designSize.height).toBeGreaterThan(150);
+    expect(item.card.width).toBeLessThanOrEqual(520);
+  });
+
   it("a new highlight replaces the old one; the old fades then disappears", async () => {
     const a = await svc.handleTool("highlight", { target: el("send") });
     const b = await svc.handleTool("highlight", { target: el("attach") });

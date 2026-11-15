@@ -12,13 +12,14 @@ import { join } from "node:path";
 import type { BrowserWindow } from "electron";
 import type { AvatarController, AvoidRectsProvider, BoundsProvider, OverlayControl, ScreenCaptureProvider } from "@pointy/shared/overlay";
 import { loadRendererPage, PRELOAD_DIR } from "../rendererPages";
-import { FalClient, type ImageSource } from "./explainer/falClient";
+import type { ImageSource } from "./explainer/falClient";
+import { DEFAULT_BROKER_URL, imagesEnabled, resolveImageSource } from "./imagesFlag";
 import { OverlayService } from "./OverlayService";
 import { ElectronScreen, OverlayWindowManager } from "./OverlayWindowManager";
 import { getOverlayPlatform } from "./platform";
 import type { OverlayDebug, ScreenSource } from "./ports";
 
-export const DEFAULT_BROKER_URL = "http://127.0.0.1:47620";
+export { DEFAULT_BROKER_URL, imagesEnabled };
 
 export interface CreateOverlayOptions {
   /** Accessibility teammate: where elements are (spec §6). */
@@ -30,11 +31,13 @@ export interface CreateOverlayOptions {
   /** The voice avatar window: enables the `move_avatar` tool and auto-dodge. Usually the same object as `avoidRects`. */
   avatar?: AvatarController;
   /**
-   * Folder with pre-generated explainer pictures (assets/explainers). Enables concept/compare
-   * pictures (local assets first, then the fal.ai broker). Without it — and without `imageSource` —
-   * those panels show their large fallback icon.
+   * Folder with pre-generated explainer pictures (assets/explainers). With `images: true` it enables
+   * concept/compare pictures (local assets first, then the fal.ai broker). Without it, or with
+   * `images` off, and without `imageSource`, those panels show their large fallback icon.
    */
   assetsDir?: string;
+  /** Opt in to explainer pictures (assetsDir + fal.ai broker). Default false: no ImageSource, no broker calls, no pregenerated assets. Apps pass `imagesEnabled()` (POINTY_IMAGES=1). */
+  images?: boolean;
   /** fal.ai broker (backend/explainer-broker). Default DEFAULT_BROKER_URL. */
   brokerUrl?: string;
   /** Replace the picture source entirely (tests, other backends). */
@@ -76,9 +79,7 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     screen,
   );
   windows.start();
-  const imageSource =
-    opts.imageSource ??
-    (opts.assetsDir ? new FalClient({ brokerUrl: opts.brokerUrl ?? DEFAULT_BROKER_URL, assetsDir: opts.assetsDir }) : undefined);
+  const imageSource = resolveImageSource(opts);
   const service = new OverlayService({
     boundsProvider: opts.boundsProvider,
     captureProvider: opts.captureProvider,

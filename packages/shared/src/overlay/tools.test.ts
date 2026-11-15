@@ -3,6 +3,23 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { exportToolDefinitions, MVP_TOOL_NAMES, parseToolInput, TOOLS, toolJsonSchema } from "./tools";
 
+describe("show_explainer pictures switch", () => {
+  const desc = (opts?: Parameters<typeof exportToolDefinitions>[0]) => exportToolDefinitions(opts).find((t) => t.name === "show_explainer")?.description ?? "";
+  it("images: false says pictures are off and prefers verdict/sequence/anatomy/label_parts; the schema is unchanged", () => {
+    const off = desc({ images: false, pregeneratedImagePrompts: ["a cat"] });
+    expect(off).toContain("Pictures are off");
+    expect(off).toContain("label_parts");
+    expect(off).not.toContain("a cat"); // never advertises pregenerated prompts
+    const a = exportToolDefinitions({ images: false }).find((t) => t.name === "show_explainer")?.parameters;
+    const b = exportToolDefinitions().find((t) => t.name === "show_explainer")?.parameters;
+    expect(a).toEqual(b);
+  });
+  it("default and images: true keep the base description (plus pregenerated prompts when given)", () => {
+    expect(desc()).not.toContain("Pictures are off");
+    expect(desc({ images: true, pregeneratedImagePrompts: ["a cat"] })).toContain('"a cat"');
+  });
+});
+
 describe("tool registry", () => {
   it("offers move_avatar to the model as an MVP tool", () => {
     expect(TOOLS.move_avatar).toMatchObject({ tier: "mvp", audience: "model" });
@@ -11,6 +28,18 @@ describe("tool registry", () => {
     expect(schema.properties.position?.default).toBe("auto");
     expect(schema.required ?? []).toEqual([]);
     expect(JSON.stringify(schema)).not.toContain("turnId");
+  });
+
+  it("offers label_parts to the model as an MVP tool with 1-5 items and no turnId", () => {
+    expect(TOOLS.label_parts).toMatchObject({ tier: "mvp", audience: "model" });
+    expect(MVP_TOOL_NAMES).toContain("label_parts");
+    const schema = toolJsonSchema("label_parts") as { properties: { items: { minItems: number; maxItems: number } }; required: string[] };
+    expect(schema.properties.items).toMatchObject({ minItems: 1, maxItems: 5 });
+    expect(schema.required).toEqual(["items"]);
+    expect(JSON.stringify(schema)).not.toContain("turnId");
+    expect(TOOLS.label_parts.description).toMatch(/several|SEVERAL/);
+    expect(TOOLS.show_explainer.description).toContain("verdict");
+    expect(parseToolInput("label_parts", { items: [{ target: { kind: "element", elementId: "a" }, label: "x" }] }).success).toBe(true);
   });
 
   it("exports the MVP tools by default", () => {

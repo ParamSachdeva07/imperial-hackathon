@@ -51,7 +51,7 @@ import { ExplainerService } from "./explainer/ExplainerService";
 import type { ImageSource } from "./explainer/falClient";
 import { chooseAvatarPosition } from "./avatar/avatarPlacement";
 import { inflate, intersects, rectsEqual } from "./geometry";
-import { placeBeside, pointerBody } from "./LayoutEngine";
+import { placeBeside, pointerBody, type Placement } from "./LayoutEngine";
 import { OverlayManager } from "./OverlayManager";
 import type { OverlayDebug, SceneSink, ScreenSource } from "./ports";
 import { advanceSteps, startSteps } from "./steps";
@@ -110,6 +110,8 @@ function movableBoxes(item: RenderItem): Rect[] {
     case "highlight":
     case "pointer":
       return item.label ? [item.label.rect] : [];
+    case "parts":
+      return [...item.parts.flatMap((p) => (p.label ? [p.label.rect] : [])), ...(item.title ? [item.title.rect] : [])];
     case "steps":
       return item.steps.flatMap((s) => (s.labelBox ? [s.labelBox.rect] : []));
     case "explainer":
@@ -207,6 +209,7 @@ export class OverlayService implements OverlayControl {
       case "move_avatar":
         return this.moveAvatar(parsed.data as MoveAvatarInput);
       case "highlight":
+      case "label_parts":
       case "point_at":
       case "show_steps":
       case "show_explainer":
@@ -299,15 +302,19 @@ export class OverlayService implements OverlayControl {
 
     const resolved = new Map<Slot, ResolvedTarget | null>();
     let anchorFailure: ToolResult["reason"];
+    let firstFailure: ToolResult["reason"];
     for (const [slot, r] of results) {
       if (r.ok) {
         resolved.set(slot, r.target);
         continue;
       }
       resolved.set(slot, null);
+      firstFailure ??= r.reason;
       if (kind.required(input, slot)) return { ok: true, visible: false, reason: r.reason };
       if (slot === "anchor") anchorFailure = r.reason;
     }
+
+    if (kind.drawable && !kind.drawable(input, resolved)) return { ok: true, visible: false, reason: firstFailure ?? "target_not_found" };
 
     const elements = new Map<string, Slot[]>();
     for (const [slot, target] of slots) {
@@ -611,7 +618,7 @@ export class OverlayService implements OverlayControl {
    */
   private applyLostSlots(l: Live, lost: Slot[]): void {
     const kind = kindOfLive(l);
-    if (lost.some((s) => kind.critical(l, s))) {
+    if (lost.some((s) => kind.critical(l, s, lost))) {
       this.fade(l.id, { type: "overlay.target_lost", overlayId: l.id });
       return;
     }
@@ -690,6 +697,10 @@ export class OverlayService implements OverlayControl {
       const it = l.item;
       if (it.kind === "explainer") rects.push(it.card);
       if ((it.kind === "highlight" || it.kind === "pointer") && it.label) rects.push(it.label.rect);
+      if (it.kind === "parts") {
+        for (const p of it.parts) if (p.label) rects.push(p.label.rect);
+        if (it.title) rects.push(it.title.rect);
+      }
       if (it.kind === "pointer") rects.push(pointerBody(it.rest, it.angle));
       if (it.kind === "steps") {
         for (const s of it.steps) {
@@ -709,15 +720,17 @@ export class OverlayService implements OverlayControl {
     around: Rect,
     display: DisplayInfo,
     avoid: Rect[],
+    opts?: { prefer?: Placement; gap?: number },
   ): RenderLabel | null {
     if (!text) return null;
-    const prefer = l.placements.get(key);
+    const prefer = l.placements.get(key) ?? opts?.prefer;
     const res = placeBeside({
       target: around,
       size: measureLabel(text, tone !== undefined),
       workArea: display.workArea,
       avoid,
       allowShrink: false,
+      ...(opts?.gap !== undefined ? { gap: opts.gap } : {}),
       ...(prefer ? { prefer } : {}),
     });
     l.placements.set(key, res.placement);
@@ -739,7 +752,7 @@ export class OverlayService implements OverlayControl {
       avoid: () => (avoid ??= this.avoidFor(l.id)),
       displayOf: (r) => this.displayOf(r),
       otherDisplayBounds: (d) => this.displays().filter((o) => o.id !== d.id).map((o) => o.bounds),
-      placeLabel: (key, text, tone, around, display, rects) => this.placeLabel(l, key, text, tone, around, display, rects),
+      placeLabel: (key, text, tone, around, display, rects, opts) => this.placeLabel(l, key, text, tone, around, display, rects, opts),
       previousSide: (key) => l.placements.get(key),
       rememberSide: (key, side) => void l.placements.set(key, side),
       explainerBody: (state) => this.explainers.body(state),

@@ -19,6 +19,25 @@ describe("pointy-draw args (spec §8.1 commands)", () => {
       input: { target: { kind: "element", elementId: "fixture.sendButton" }, tone: "warning" },
     });
   });
+  it("label-parts ID:Label pairs, tone and title", () => {
+    expect(p(["label-parts", "fixture.emailSender:Odd sender", "fixture.emailLink:Strange link", "--tone", "warning", "--title", "Warning signs"])).toEqual({
+      kind: "tool",
+      name: "label_parts",
+      input: {
+        items: [
+          { target: { kind: "element", elementId: "fixture.emailSender" }, label: "Odd sender", tone: "warning" },
+          { target: { kind: "element", elementId: "fixture.emailLink" }, label: "Strange link", tone: "warning" },
+        ],
+        title: "Warning signs",
+      },
+    });
+  });
+  it("label-parts --json / --file, and needs something", () => {
+    expect(p(["label-parts", "--json", '{"items":[]}'])).toMatchObject({ name: "label_parts", input: { items: [] } });
+    expect(p(["label-parts", "--file", "x.json"])).toMatchObject({ name: "label_parts" });
+    expect(() => p(["label-parts"])).toThrow(UsageError);
+    expect(() => p(["label-parts", "nocolon"])).toThrow(UsageError);
+  });
   it("point with motion and drag target", () => {
     expect(p(["point", "--element", "fixture.attach", "--motion", "double_tap"])).toMatchObject({
       name: "point_at",

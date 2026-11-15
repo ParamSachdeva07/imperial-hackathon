@@ -15,6 +15,7 @@
  *   POINTY_CAPTURABLE=1     disable content protection (dev screenshots of the overlay itself)
  *   POINTY_HIDE_DURING_CAPTURE=1  hide overlays while capturing anatomy crops
  *   POINTY_REDUCE_MOTION=1  force reduce-motion
+ *   POINTY_IMAGES=1         enable explainer pictures (pre-generated assets + the fal.ai broker; FAL_KEY). Off by default: concept/compare show icons.
  *   POINTY_PROBE=1          overlay windows draw a fixed ring only (canvas check)
  *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
  *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
@@ -36,7 +37,7 @@
 import { join, resolve } from "node:path";
 import { app, dialog, screen } from "electron";
 import { loadRepoEnv } from "@pointy/shared/node/env";
-import { createOverlayControl } from "./overlay";
+import { createOverlayControl, imagesEnabled } from "./overlay";
 import { AnamAvatarClient } from "./overlay/avatar/AnamAvatarClient";
 import { CompositeAvoidRects } from "./overlay/avatar/CompositeAvoidRects";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
@@ -120,6 +121,7 @@ async function main(): Promise<void> {
     avoidRects: anam ? new CompositeAvoidRects(anam, new MockAvoidRects(primary)) : new MockAvoidRects(primary),
     ...(anam ? { avatar: anam } : {}),
     assetsDir,
+    images: imagesEnabled(),
     screen: displays,
     dev: {
       contentProtection,
@@ -173,6 +175,7 @@ async function main(): Promise<void> {
       boundsProvider,
       screen: displays,
       assetsDir,
+      images: imagesEnabled(),
       openFixture: env("POINTY_NO_FIXTURE") !== "1",
       openVoice: env("POINTY_VOICE") === "1",
       selection: attachSelection ? { store: selectionStore, attach: attachSelection } : null,

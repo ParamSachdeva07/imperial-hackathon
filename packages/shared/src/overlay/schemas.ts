@@ -20,6 +20,9 @@
  *      "replaced" keeps its §5.2 meaning: a drawing that was shown and then superseded.
  *   6. `MoveAvatarInput` (new MVP tool `move_avatar`) and `ToolResult.reason` "avatar_unavailable"
  *      (no avatar window to move: no call in progress, collapsed, being dragged, or not running).
+ *   7. `LabelPartsInput` (new MVP tool `label_parts`: up to 5 labelled rings drawn as ONE drawing) and
+ *      `VerdictSpec` (new `show_explainer` template `verdict`: a tone glyph, the card title as the
+ *      headline and 1-3 short reasons).
  *
  * Lifetime note: for `show_steps`, `expires: "on_target_selected"` means "until the guide is
  * completed" (each selected step advances it; the last one ends it after a brief "All done"),
@@ -76,6 +79,20 @@ export const HighlightInput = z.object({
   style: z.enum(["ring", "spotlight", "underline"]).default("ring"),
   tone: Tone.default("info"),
   ...Common,
+});
+
+// Additive: point out several parts of one thing at once (e.g. the sender, link and urgent wording of
+// a suspicious email). Draws a ring and a label per item as ONE drawing; unlike `highlight` it does not
+// replace the current highlight. `tone` defaults to "info" (neutral); use "warning" for risks.
+// Items whose target cannot be found are skipped; the call fails only if none can be found.
+export const LabelPartsInput = z.object({
+  items: z
+    .array(z.object({ target: Target, label: z.string().max(40), tone: Tone.default("info") }))
+    .min(1)
+    .max(5),
+  title: z.string().max(40).optional(),
+  expires: Expiry.optional(),
+  turnId: z.string().optional(),
 });
 
 export const ShowStepsInput = z.object({
@@ -166,7 +183,15 @@ export const AnatomySpec = z.object({
     .max(6),
 });
 
-export const ExplainerSpec = z.discriminatedUnion("kind", [ConceptSpec, SequenceSpec, CompareSpec, AnatomySpec]);
+// Additive: a verdict ("Likely a scam", "Looks safe"). The card title is the headline; `tone` picks the
+// glyph and accent (warning = risky, success = fine, info = unsure); `reasons` are 1-3 short bullets.
+export const VerdictSpec = z.object({
+  kind: z.literal("verdict"),
+  tone: Tone,
+  reasons: z.array(z.string().max(60)).min(1).max(3),
+});
+
+export const ExplainerSpec = z.discriminatedUnion("kind", [ConceptSpec, SequenceSpec, CompareSpec, AnatomySpec, VerdictSpec]);
 
 export const ShowExplainerInput = z.object({
   anchor: Target.optional(), // card is placed beside this; if absent, centred-right of the screen
@@ -242,6 +267,8 @@ export type Tone = z.infer<typeof Tone>;
 export type IconName = z.infer<typeof IconName>;
 export type PointAtInput = z.infer<typeof PointAtInput>;
 export type HighlightInput = z.infer<typeof HighlightInput>;
+export type LabelPartsInput = z.infer<typeof LabelPartsInput>;
+export type VerdictSpec = z.infer<typeof VerdictSpec>;
 export type ShowStepsInput = z.infer<typeof ShowStepsInput>;
 export type AdvanceStepInput = z.infer<typeof AdvanceStepInput>;
 export type MoveAvatarInput = z.infer<typeof MoveAvatarInput>;

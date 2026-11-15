@@ -30,6 +30,12 @@ export interface SelectionSnapshot {
   displayId: string;
   /** Region: the selection's bounding box. Point: the focus box around the point. Global DIP. */
   regionGlobal: Rect;
+  /**
+   * The exact global-DIP box the `focus` close-up was cropped from (padded / grown to a minimum size / clamped to the display, so
+   * it differs from `regionGlobal`). Map focus-image pixel (px, py) to global: x = focusGlobal.x + px / focus.width * focusGlobal.width,
+   * y likewise. Optional for older producers.
+   */
+  focusGlobal?: Rect;
   /** Region only: the circled polygon, global DIP. */
   polygonGlobal?: Point[];
   /** Point only: the selected point, global DIP. */

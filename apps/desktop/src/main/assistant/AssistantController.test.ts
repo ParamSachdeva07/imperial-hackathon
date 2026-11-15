@@ -63,10 +63,13 @@ function setup(over: Partial<AssistantDeps> = {}) {
   let ctxMode: "now" | "manual" = "now";
   let selection: SelectionSnapshot | null = null;
   const tools: Array<{ name: string; args: unknown; opts?: unknown }> = [];
+  const buildOpts: unknown[] = [];
+  const snapListeners = new Set<(s: SelectionSnapshot) => void>();
+  let revision = 0;
   const deps: AssistantDeps = {
     transport,
     clock,
-    buildContext: () => (ctxMode === "now" ? Promise.resolve(ctx()) : new Promise((r) => (ctxResolve = r))),
+    buildContext: (o) => (buildOpts.push(o), ctxMode === "now" ? Promise.resolve(ctx()) : new Promise((r) => (ctxResolve = r))),
     anam: {
       startSession: async () => void calls.push("anam.start"),
       endSession: async () => void calls.push("anam.end"),
@@ -82,14 +85,25 @@ function setup(over: Partial<AssistantDeps> = {}) {
       },
       onTurnStart: (id) => void calls.push(`turnStart.${id}`),
     },
-    gestures: { setSessionActive: (a) => void calls.push(`gestures.${a}`) },
-    selection: { latest: () => selection, clear: () => void calls.push("selection.clear") },
+    gestures: { setSessionActive: (a) => void calls.push(`gestures.${a}`), clearSelection: () => void calls.push("outline.clear") },
+    selection: {
+      latest: () => selection,
+      clear: () => void calls.push("selection.clear"),
+      onSnapshot: (cb) => (snapListeners.add(cb), () => snapListeners.delete(cb)),
+    },
+    contextRevision: () => revision,
     log: (m) => log.push(m),
     ...over,
   };
   const c = new AssistantController(deps);
   return {
-    c, clock, transport, log, calls, talks, tools,
+    c, clock, transport, log, calls, talks, tools, buildOpts,
+    bumpRevision: () => void revision++,
+    /** A gesture selection captured: the store holds it and notifies listeners. */
+    select: (snap: SelectionSnapshot) => {
+      selection = snap;
+      for (const cb of [...snapListeners]) cb(snap);
+    },
     setState: (s: AnamSpeakerState | null) => (anamState = s),
     manualContext: () => (ctxMode = "manual"),
     resolveContext: (x: ScreenContext) => ctxResolve?.(x),
@@ -750,5 +764,374 @@ describe("review regressions", () => {
     await speak(s); // leaked echo while gated
     expect(s.transport.count("response.create")).toBe(creates);
     expect(s.calls.filter((c) => c.startsWith("turnStart.")).length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------- selection offer
+const png = "data:image/jpeg;base64,AA";
+const snap = (id: string, capturedAt = 0): SelectionSnapshot => ({
+  id, kind: "point", capturedAt, displayId: "1", regionGlobal: { x: 0, y: 0, width: 10, height: 10 }, pointGlobal: { x: 1, y: 1 },
+  full: { mime: "image/jpeg", dataUrl: png, width: 10, height: 10, markedRegion: { x: 0, y: 0, width: 1, height: 1 } },
+  focus: { mime: "image/jpeg", dataUrl: png, width: 10, height: 10 },
+});
+const creates = (s: S) => s.transport.sent.filter((e) => e.type === "response.create");
+
+describe("selection offer", () => {
+  it("sends the selection + [offer] with tool_choice none and takes no screenshot", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    expect(s.buildOpts).toEqual([]); // no capture
+    const items = s.transport.sent.filter((e) => e.type === "conversation.item.create");
+    expect(items.map((e) => e.item?.id)).toEqual(["sel_1_1_0", "offer_1"]);
+    expect(JSON.stringify(items[1])).toContain("[offer]");
+    expect(creates(s)).toHaveLength(1);
+    expect(creates(s)[0]).toMatchObject({ response: { tool_choice: "none" } });
+    expect(s.calls).toContain("turnStart.turn-1");
+    expect(s.c.status.get()).toBe("thinking");
+  });
+
+  it("the offer reply is spoken, and its response.created does not clear the outline", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "That looks like a bank email. Want me to check it?");
+    await done(s, "o1");
+    expect(s.talks.length).toBeGreaterThan(0);
+    expect(s.calls).not.toContain("outline.clear");
+  });
+
+  it("follow-up keeps the offer's selection items, takes no screenshot, and clears the outline on the answer's response.created", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 8000); // finish speaking, mic released
+    s.transport.sent.length = 0;
+    await speak(s);
+    expect(s.buildOpts.at(-1)).toEqual({ skipScreenshot: true });
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete")).toEqual([]); // offer items kept
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.create").map((e) => e.item?.id)).toEqual(["scr_2"]);
+    expect(creates(s)[0]).not.toHaveProperty("response");
+    expect(s.calls).not.toContain("outline.clear");
+    created(s, "r2");
+    expect(s.calls).toContain("outline.clear");
+    await done(s, "r2");
+    // the turn after that drops the offer items with the old screen item
+    await settle(s, 8000);
+    s.transport.sent.length = 0;
+    await speak(s);
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(["scr_2", "sel_1_1_0", "offer_1"]);
+    expect(s.buildOpts.at(-1)).toBeUndefined(); // normal capture again
+  });
+
+  it("clears the outline 15 s after the mic is released, not before, and speech cancels the timer", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 1000); // still speaking: mic gated
+    expect(s.transport.mic.at(-1)).toBe(false);
+    let releasedAt = -1;
+    for (let t = 1; t <= 40 && !s.calls.includes("outline.clear"); t++) {
+      await settle(s, 1000); // step so the mic release (async anam state check) lands before the timer is measured
+      if (releasedAt < 0 && s.transport.mic.at(-1) === true) releasedAt = t;
+      if (releasedAt >= 0 && t < releasedAt + 14) expect(s.calls).not.toContain("outline.clear");
+    }
+    expect(releasedAt).toBeGreaterThan(0);
+    expect(s.calls).toContain("outline.clear");
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(["sel_1_1_0", "offer_1"]);
+  });
+
+  it("speech cancels the 15 s timer", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 8000);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    await settle(s, 30_000);
+    expect(s.calls).not.toContain("outline.clear");
+  });
+
+  it("a selection while the answer is still being created: the doomed response.created does not clear the outline", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s); // response.create sent, response.created not yet received
+    s.calls.length = 0;
+    s.select(snap("a"));
+    await flushPromises(40);
+    created(s, "r1"); // the stale response: cancelled on creation
+    expect(s.transport.types()).toContain("response.cancel");
+    expect(s.calls).not.toContain("outline.clear");
+    await done(s, "r1", [], "cancelled");
+    expect(creates(s).at(-1)).toMatchObject({ response: { tool_choice: "none" } });
+    created(s, "o1");
+    expect(s.calls).not.toContain("outline.clear");
+  });
+
+  it("the follow-up inherits the offer's context revision: coordinates from the selection images are stale after the desktop changed", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 8000);
+    s.bumpRevision(); // the user switched apps before answering
+    await speak(s);
+    created(s, "r2");
+    await done(s, "r2", [{ type: "function_call", name: "highlight", call_id: "c9", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) }]);
+    expect(s.tools).toHaveLength(0);
+    const out = s.transport.sent.filter((e) => e.item?.call_id === "c9").map((e) => JSON.parse(e.item?.output ?? "{}"));
+    expect(out[0]).toMatchObject({ ok: false, reason: "stale_context" });
+  });
+
+  it("a false VAD start does not consume the offer: the next real utterance keeps the selection images", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 8000);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" }); // cough: never commits
+    await flushPromises();
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    await flushPromises();
+    s.transport.sent.length = 0;
+    await speak(s); // "yes, check that"
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(["scr_2"]); // only the false turn's screen item; the offer's images stay
+    expect(s.buildOpts.at(-1)).toEqual({ skipScreenshot: true });
+    created(s, "r2");
+    await done(s, "r2");
+    await settle(s, 8000);
+    s.transport.sent.length = 0;
+    await speak(s);
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(expect.arrayContaining(["sel_1_1_0", "offer_1"]));
+  });
+
+  it("interrupts speech, then makes the offer", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "Here is a long answer that goes on for a good while. ");
+    await flushPromises();
+    expect(s.c.status.get()).toBe("speaking");
+    s.transport.sent.length = 0;
+    s.calls.length = 0;
+    s.select(snap("a"));
+    await flushPromises(40);
+    expect(s.calls).toContain("anam.interrupt");
+    expect(s.transport.types()).toContain("response.cancel");
+    expect(creates(s)).toHaveLength(0); // never two responses at once: waits for the cancelled one
+    // the cancelled response finishes, then the offer goes out with tool_choice none
+    await done(s, "r1", [], "cancelled");
+    expect(creates(s)).toHaveLength(1);
+    expect(creates(s)[0]).toMatchObject({ response: { tool_choice: "none" } });
+    const order = s.transport.sent.map((e) => e.type);
+    expect(order.indexOf("response.cancel")).toBeLessThan(order.indexOf("response.create"));
+  });
+
+  it("the offer keeps the revision from selection time, not from after the interrupt wait", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "Here is a long answer that goes on for a good while. ");
+    await flushPromises();
+    s.select(snap("a"));
+    await flushPromises(40);
+    s.bumpRevision(); // the desktop changes while the cancelled answer winds down
+    await done(s, "r1", [], "cancelled");
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await speak(s);
+    created(s, "r2");
+    await done(s, "r2", [{ type: "function_call", name: "highlight", call_id: "c8", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) }]);
+    expect(s.tools).toHaveLength(0);
+    const out = s.transport.sent.filter((e) => e.item?.call_id === "c8").map((e) => JSON.parse(e.item?.output ?? "{}"));
+    expect(out[0]).toMatchObject({ ok: false, reason: "stale_context" });
+  });
+
+  it("a newer selection replaces a pending offer", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    await settle(s, 3000);
+    s.transport.sent.length = 0;
+    s.select(snap("b"));
+    await flushPromises(40);
+    const deleted = s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id);
+    expect(deleted).toEqual(expect.arrayContaining(["sel_1_1_0", "offer_1"]));
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.create").map((e) => e.item?.id)).toEqual(["sel_2_2_0", "offer_2"]);
+  });
+
+  it("no offer while the user is speaking: the selection rides the user's turn instead", async () => {
+    const s = setup();
+    await openIt(s);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    s.transport.sent.length = 0;
+    s.select(snap("a"));
+    await flushPromises();
+    expect(s.transport.sent).toEqual([]);
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    s.transport.emit({ type: "input_audio_buffer.committed" });
+    await flushPromises();
+    expect(s.transport.sent.some((e) => e.item?.id?.startsWith("sel_"))).toBe(true);
+    expect(creates(s)[0]).not.toHaveProperty("response");
+    created(s, "r1"); // the user's answer starts: the outline goes
+    expect(s.calls).toContain("outline.clear");
+  });
+
+  it("ignores selections while closed and clears the outline on teardown", async () => {
+    const s = setup();
+    s.select(snap("a"));
+    await flushPromises();
+    expect(creates(s)).toHaveLength(0);
+    await openIt(s);
+    s.select(snap("b"));
+    await flushPromises();
+    s.calls.length = 0;
+    await s.c.close("test");
+    expect(s.calls).toContain("outline.clear");
+  });
+});
+
+describe("stale desktop context", () => {
+  const rectCall = { type: "function_call", name: "highlight", call_id: "c1", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) };
+  const elCall = { type: "function_call", name: "highlight", call_id: "c2", arguments: JSON.stringify({ target: { kind: "element", elementId: "ax-1" } }) };
+
+  it("skips coordinate tools when the context changed since the turn's screenshot, still runs element tools", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    s.bumpRevision(); // the user scrolled / switched window while the model was thinking
+    await done(s, "r1", [rectCall, elCall]);
+    expect(s.tools.map((t) => (t.args as { target: { kind: string } }).target.kind)).toEqual(["element"]);
+    const out = s.transport.sent.filter((e) => e.item?.call_id === "c1").map((e) => JSON.parse(e.item?.output ?? "{}"));
+    expect(out[0]).toMatchObject({ ok: false, visible: false, reason: "stale_context" });
+  });
+
+  it("runs coordinate tools when the context is unchanged", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    await done(s, "r1", [{ type: "function_call", name: "highlight", call_id: "c7", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) }]);
+    expect(s.tools.map((t) => t.name)).toEqual(["highlight"]);
+  });
+});
+
+describe("codex review regressions", () => {
+  const rect = { type: "function_call", name: "highlight", call_id: "k1", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) };
+
+  it("a mid-utterance selection's revision (captured after speech start) governs coordinate tools derived from it", async () => {
+    const s = setup();
+    await openIt(s);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" }); // turn revision 0
+    await flushPromises();
+    s.bumpRevision(); // desktop changes, then the user selects: the selection images are from revision 1
+    s.select(snap("m"));
+    await flushPromises();
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    s.transport.emit({ type: "input_audio_buffer.committed" });
+    await flushPromises();
+    created(s, "r1");
+    await done(s, "r1", [rect]);
+    expect(s.tools.map((t) => t.name)).toEqual(["highlight"]); // not wrongly blocked as stale
+    created(s, "r2");
+    s.bumpRevision(); // but a later change still blocks
+    await done(s, "r2", [{ ...rect, call_id: "k2" }]);
+    expect(s.tools).toHaveLength(1);
+  });
+
+  it("a response.create rejection dispatches the deferred offer create", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    const first = creates(s)[0] as { event_id?: string };
+    s.select(snap("a")); // the offer waits behind the not-yet-created response
+    await flushPromises(40);
+    expect(creates(s)).toHaveLength(1);
+    s.transport.emit({ type: "error", error: { event_id: first.event_id, message: "bad create" } });
+    await flushPromises();
+    expect(creates(s)).toHaveLength(2);
+    expect(creates(s)[1]).toMatchObject({ response: { tool_choice: "none" } });
+  });
+
+  it("re-arms the 15 s no-answer timer when a barge-in produces no committed utterance", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    for (let t = 0; t < 30 && s.transport.mic.at(-1) !== true; t++) await settle(s, 1000);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" }); // a cough
+    await flushPromises();
+    await settle(s, 20_000);
+    expect(s.calls).not.toContain("outline.clear"); // still hearing speech: timer cancelled
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" }); // no commit follows
+    await settle(s, 16_000);
+    expect(s.calls).toContain("outline.clear");
+  });
+
+  it("a committed utterance after speech_stopped does not leave a live no-answer timer", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises();
+    created(s, "o1");
+    delta(s, "o1", "Want me to check it?");
+    await done(s, "o1");
+    for (let t = 0; t < 30 && s.transport.mic.at(-1) !== true; t++) await settle(s, 1000);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    s.transport.emit({ type: "input_audio_buffer.committed" });
+    await flushPromises();
+    await settle(s, 20_000);
+    expect(s.calls).not.toContain("outline.clear");
+  });
+  it("stamps the revision at screenshot capture, not speech start", async () => {
+    const s = setup();
+    s.manualContext();
+    await openIt(s);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    s.bumpRevision(); // app switch while the AX / overlay-hide wait is still running
+    s.resolveContext(ctx());
+    await flushPromises();
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    s.transport.emit({ type: "input_audio_buffer.committed" });
+    await flushPromises();
+    created(s, "r1");
+    await done(s, "r1", [{ type: "function_call", name: "highlight", call_id: "c7", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) }]);
+    expect(s.tools.map((t) => t.name)).toEqual(["highlight"]);
   });
 });

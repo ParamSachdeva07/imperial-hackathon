@@ -88,6 +88,14 @@ describe("selectionItems", () => {
     expect(item.content[2]?.detail).toBe("auto");
   });
 
+  it("states the focus box so focus-image pixels map to global DIP", () => {
+    const withFocus = { ...snap(), focusGlobal: { x: 0, y: 5, width: 360, height: 240 } };
+    const txt = JSON.stringify(selectionItems(withFocus).events);
+    expect(txt).toContain("global-DIP box x=0, y=5, 360x240");
+    expect(txt).toContain("Prefer element ids");
+    expect(JSON.stringify(selectionItems(snap()).events)).not.toContain("global-DIP box");
+  });
+
   it("describes a point selection", () => {
     const { events } = selectionItems(snap(10, 10, "point"));
     expect(JSON.stringify(events)).toContain("a point");

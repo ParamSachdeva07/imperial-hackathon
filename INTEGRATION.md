@@ -47,7 +47,7 @@ Keep it standalone.
 | Anam token broker (FastAPI) | `cd anam-overlay && backend/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765` | **8765** |
 
 Secrets:
-- Root `.env` holds `FAL_KEY` and similar.
+- Root `.env` holds `FAL_KEY` and similar. `FAL_KEY` (and the explainer broker) is only needed with `POINTY_IMAGES=1`: explainer pictures (fal.ai broker + pre-generated assets) are **off by default**, so concept/compare cards show icons and the model is told to prefer verdict, sequence, anatomy and label_parts. `npm run pointy` never needs `FAL_KEY` or the broker.
 - `anam-overlay/backend/.env` holds `ANAM_API_KEY` and `ANAM_PERSONA_ID`.
 - Never put the Anam key in the root `.env`. See `anam-overlay/README.md`.
 
@@ -444,7 +444,28 @@ In Anam Lab, **disable the persona LLM** for the persona in `ANAM_PERSONA_ID`; t
   - An offline eval with a TextEdit screenshot + AX list produced `point_at` on the right AX id.
 - **Known limitations (from review):**
   - Trackpad or mouse-wheel scrolling is not observed, so coordinate drawings stay until the next turn. Only gesture scrolling invalidates them.
-  - An answer still being generated when you switch apps can draw coordinates from the old screenshot.
-  - In speak-only mode, a call started manually by clicking the dot that then fails can leave the avatar expanded.
-  - The last two are scheduled for the next change (selection-offer).
+  - Fixed in the selection-offer change: answers generated before an app switch no longer draw coordinates from the old
+    screenshot (coordinate-target tool calls are skipped with `stale_context`; element ids still run), and a failed manual
+    speak-only call now collapses the avatar. Still open: a control-API start during a connected manual speak-only call is ignored.
+  - If an offer reply is cancelled, or the user speaks with no response following, the outline stays until the next response or the 120 s cap.
+
+### 10.8 Selection -> offer -> explain
+
+1. **Select.** The user circles/selects something with gestures. The outline now lives 120 s in production
+   (`selectionTtlMs` -> feedback page `?selectionTtlMs=`; dev keeps 4 s).
+2. **Offer.** `AssistantController` subscribes to `selection.onSnapshot` while open. If the user is not mid-utterance it
+   (interrupting first if busy) sends the selection images plus an `[offer]` note and `response.create` with
+   `response: { tool_choice: "none" }` (spoken only, no screen capture). Mid-utterance, the existing late-attach path carries the selection.
+   The model briefly offers to explain it or check whether it is safe.
+3. **Answer.** Decline: the model says okay and the outline clears. Safe/scam check: `label_parts` on the suspicious parts
+   (<=5, tone `warning`), then `show_explainer` with the `verdict` template (tone + 1-3 reasons), then a spoken summary.
+   Explain: `label_parts` and/or an explainer plus speech. Follow-up turns keep the offer items and skip the screenshot (AX list only).
+4. **Clear.** The first user response clears the outline via `gestures.clearSelection`. If the user stays silent for 15 s
+   after the offer finished (mic released), the offer items and outline are dropped. A newer selection replaces a pending offer.
+
+Tools: `label_parts` (MVP tool, items `{target,label<=40,tone}`), `show_explainer` `{kind:"verdict",tone,reasons}`. Stale-context
+guard: `AssistantDeps.contextRevision` is bumped by AX context events and the scroll invalidator.
+
+How to test: `npm test` (AssistantController offer/stale tests, toolTargets, overlay tests); `npm run pointy`, select an email, listen for the offer;
+gallery scenes `parts-scam`, `explainer-verdict`; `pointy-draw label-parts ID:"Label" --tone warning`.
 

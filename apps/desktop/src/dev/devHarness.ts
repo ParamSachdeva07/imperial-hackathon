@@ -23,6 +23,8 @@ export interface DevHarnessOptions {
   boundsProvider: MockBoundsProvider;
   screen: ScreenSource;
   assetsDir: string;
+  /** Explainer pictures are on (POINTY_IMAGES=1): lists the pre-generated prompts and lets the model use pictures. Default off. */
+  images?: boolean;
   openFixture: boolean;
   openVoice: boolean;
   /**
@@ -96,7 +98,8 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
         listElements: () => boundsProvider.listElementRects(),
         getDisplays: () => screen.getDisplays(),
         primaryDisplayId: () => screen.getPrimaryDisplayId(),
-        pregeneratedImagePrompts: () => readManifestPrompts(opts.assetsDir),
+        pregeneratedImagePrompts: () => (opts.images ? readManifestPrompts(opts.assetsDir) : Promise.resolve([])),
+        images: opts.images === true,
       },
     });
     console.log("[pointy] voice test window opened");

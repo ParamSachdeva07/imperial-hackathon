@@ -113,6 +113,9 @@ export const CARD = {
   /** Bullet glyph (✓ / ⚠) plus gap. */
   bullet: 28,
   bulletGap: 8,
+  /** Verdict: the tone glyph sits inline at the start of the headline (one title line tall), then this gap. */
+  titleGlyph: TITLE_LH,
+  titleGlyphGap: 12,
 } as const;
 
 export const CARD_INNER = CARD.width - 2 * CARD.pad;
@@ -152,10 +155,26 @@ export function compareSideHeight(s: Side, hasImage = Boolean(s.imagePrompt), im
   return (hasImage ? compareImageHeight(imageScale) + CARD.gap : 0) + head + pts;
 }
 
+/** Verdict card body: one bullet row per reason (the tone glyph lives inline in the title row, see verdictTitleHeight). */
+export function verdictBodyHeight(reasons: string[]): number {
+  return rows(reasons.map((r) => textH(r, verdictTextWidth)));
+}
+/** Width available to the verdict headline: the card's inner width minus the inline tone glyph and its gap. */
+export const verdictTitleWidth = CARD_INNER - CARD.titleGlyph - CARD.titleGlyphGap;
+/** Headline height; the inline glyph is one title line tall and top-aligned, so it never adds height. */
+export function verdictTitleHeight(title: string): number {
+  return textH(title, verdictTitleWidth, CARD.titleSize, TITLE_LH, BOLD_FACTOR);
+}
+/** Width available to a verdict reason's text. */
+export const verdictTextWidth = CARD_INNER - CARD.bullet - CARD.bulletGap;
+
 /** Unscaled design size of an explainer card. Width is always cardMaxWidth. */
 export function measureCard(title: string, spec: ExplainerSpec, imageScale = 1): Size {
   let body = 0;
   switch (spec.kind) {
+    case "verdict":
+      body = verdictBodyHeight(spec.reasons);
+      break;
     case "sequence":
       body = CARD.tile + CARD.gap + rows(spec.steps.map((s) => textH(s.caption, captionTextWidth)));
       break;
@@ -174,6 +193,6 @@ export function measureCard(title: string, spec: ExplainerSpec, imageScale = 1):
         CARD.gap * (spec.panels.length - 1);
       break;
   }
-  const titleH = textH(title, CARD_INNER, CARD.titleSize, TITLE_LH, BOLD_FACTOR);
+  const titleH = spec.kind === "verdict" ? verdictTitleHeight(title) : textH(title, CARD_INNER, CARD.titleSize, TITLE_LH, BOLD_FACTOR);
   return { width: CARD.width, height: CARD.pad + titleH + CARD.gap + body + CARD.pad };
 }

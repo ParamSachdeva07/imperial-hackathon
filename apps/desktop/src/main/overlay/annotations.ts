@@ -12,6 +12,8 @@ import {
   type DisplayInfo,
   type ExplainerBody,
   type HighlightInput,
+  type LabelPartsInput,
+  type LabelledPart,
   type ItemState,
   type PointAtInput,
   type Rect,
@@ -34,8 +36,10 @@ import type { ResolvedTarget } from "./TargetResolver";
 
 export type StepSlot = `step:${number}`;
 /** A named target of a tool call. "region" is the anatomy crop region (avoided by the card, never required). */
-export type Slot = "target" | "dragTo" | "anchor" | "region" | StepSlot;
+export type PartSlot = `part:${number}`;
+export type Slot = "target" | "dragTo" | "anchor" | "region" | StepSlot | PartSlot;
 export const stepSlot = (index: number): StepSlot => `step:${index}`;
+export const partSlot = (index: number): PartSlot => `part:${index}`;
 
 interface LiveBase {
   id: string;
@@ -57,6 +61,7 @@ interface LiveBase {
 /** Service-side state for one annotation, discriminated by tool. */
 export type Live =
   | (LiveBase & { toolName: "highlight"; input: HighlightInput })
+  | (LiveBase & { toolName: "label_parts"; input: LabelPartsInput })
   | (LiveBase & { toolName: "point_at"; input: PointAtInput })
   | (LiveBase & { toolName: "show_steps"; input: ShowStepsInput; steps: StepsState })
   | (LiveBase & { toolName: "show_explainer"; input: ShowExplainerInput; explainer: ExplainerState });
@@ -73,7 +78,7 @@ export interface LayoutContext {
   displayOf(r: ResolvedTarget | null): DisplayInfo;
   otherDisplayBounds(display: DisplayInfo): Rect[];
   /** Place a label beside `around`; `key` names it so it keeps its side across re-layouts. */
-  placeLabel(key: string, text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[]): RenderLabel | null;
+  placeLabel(key: string, text: string | undefined, tone: Tone | undefined, around: Rect, display: DisplayInfo, avoid: Rect[], opts?: { prefer?: Placement; gap?: number }): RenderLabel | null;
   /** The previous side of a box (by key), to keep it stable. */
   previousSide(key: string): Placement | undefined;
   rememberSide(key: string, side: Placement): void;
@@ -88,8 +93,10 @@ export interface AnnotationKind<T extends DrawTool> {
   slots(input: InputOf<T>): Map<Slot, Target>;
   /** Slots that must resolve for the call to show anything (else visible:false + reason). */
   required(input: InputOf<T>, slot: Slot): boolean;
-  /** Losing this (previously resolved) slot means the drawing can't stand → fade + target_lost. */
-  critical(l: LiveOf<T>, slot: Slot): boolean;
+  /** Extra gate after resolving: false means nothing can be drawn (visible:false + the first failure reason). */
+  drawable?(input: InputOf<T>, resolved: ReadonlyMap<Slot, ResolvedTarget | null>): boolean;
+  /** `lost` is the whole batch going away together. Losing this (previously resolved) slot means the drawing can't stand → fade + target_lost. */
+  critical(l: LiveOf<T>, slot: Slot, lost: readonly Slot[]): boolean;
   /** The target the annotation is "about" (ToolResult.resolvedBounds, manager bookkeeping). */
   primary(l: LiveOf<T>): ResolvedTarget | null;
   /** Keep watching elements that weren't found yet (later steps may appear). */
@@ -129,6 +136,65 @@ const highlight: AnnotationKind<"highlight"> = {
       target: t,
       label: ctx.placeLabel("label", l.input.label, l.input.tone, t.bounds, ctx.displayOf(r), ctx.avoid()),
     };
+  },
+};
+
+const partSlots = (input: LabelPartsInput): PartSlot[] => input.items.map((_, i) => partSlot(i));
+const resolvedParts = (l: LiveOf<"label_parts">): { index: number; r: ResolvedTarget }[] =>
+  partSlots(l.input).flatMap((slot, index) => {
+    const r = l.resolved.get(slot);
+    return r ? [{ index, r }] : [];
+  });
+
+/** Smallest rect containing all the rects (null for none). */
+function unionRect(rects: Rect[]): Rect | null {
+  if (rects.length === 0) return null;
+  const x1 = Math.min(...rects.map((r) => r.x));
+  const y1 = Math.min(...rects.map((r) => r.y));
+  const x2 = Math.max(...rects.map((r) => r.x + r.width));
+  const y2 = Math.max(...rects.map((r) => r.y + r.height));
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+/** Gap between a label_parts title chip and the group's union bounds (tighter than a normal label so it reads as the group's header). */
+const TITLE_GAP = 12;
+
+const labelParts: AnnotationKind<"label_parts"> = {
+  idPrefix: "lp",
+  slots: (input) => new Map<Slot, Target>(input.items.map((it, i) => [partSlot(i), it.target])),
+  // Items that can't be found are skipped; the call only fails when none can be found (drawable).
+  required: () => false,
+  drawable: (input, resolved) => partSlots(input).some((s) => resolved.get(s)),
+  // Losing a part is fine while another one is still there.
+  critical: (l, _slot, lost) => !resolvedParts(l).some((p) => !lost.includes(partSlot(p.index))),
+  primary(l) {
+    const parts = resolvedParts(l);
+    const first = parts[0];
+    const union = unionRect(parts.map((p) => p.r.bounds));
+    return first && union ? { ...first.r, bounds: union, shape: { kind: "rect" } } : null;
+  },
+  watchUnresolved: false,
+  selectionElementIds: (l) => [...l.elements.keys()],
+  onSelected: () => "emit",
+  layout(l, ctx) {
+    const parts = resolvedParts(l);
+    if (parts.length === 0) return null;
+    const rings = parts.map((p) => p.r.bounds);
+    const placedLabels: Rect[] = [];
+    const rendered: LabelledPart[] = parts.map(({ index, r }) => {
+      const it = l.input.items[index]!;
+      const t = renderTarget(r)!;
+      // Never cover any of the group's rings or the labels already placed.
+      const label = ctx.placeLabel(`label:${index}`, it.label, it.tone, t.bounds, ctx.displayOf(r), [...ctx.avoid(), ...rings, ...placedLabels]);
+      if (label) placedLabels.push(label.rect);
+      return { index, tone: it.tone, target: t, label };
+    });
+    const union = unionRect(rings)!;
+    const first = parts[0]!.r;
+    // The group's title chip sits adjacent to the union of the items: above its top edge first (then right / left / below if that is
+    // blocked), never over any item's ring or label.
+    const title = ctx.placeLabel("title", l.input.title, undefined, union, ctx.displayOf(first), [...ctx.avoid(), ...rings, ...placedLabels], { prefer: "above", gap: TITLE_GAP });
+    return { kind: "parts", id: l.id, state: ctx.state, parts: rendered, title };
   },
 };
 
@@ -274,6 +340,7 @@ const explainer: AnnotationKind<"show_explainer"> = {
 
 const KINDS: { [T in DrawTool]: AnnotationKind<T> } = {
   highlight,
+  label_parts: labelParts,
   point_at: pointAt,
   show_steps: steps,
   show_explainer: explainer,

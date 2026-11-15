@@ -7,7 +7,7 @@ the code on `feat/overlay-tools` (PR #1), and the TypeScript blocks compile agai
 marked *pseudo-code* stand in for your own model client.
 
 > **What the overlay is.** A drawing layer. The AI calls tools (`point_at`, `highlight`,
-> `show_steps`, `advance_step`, `show_explainer`, `clear`, plus `move_avatar` to shift the voice
+> `label_parts`, `show_steps`, `advance_step`, `show_explainer`, `clear`, plus `move_avatar` to shift the voice
 > avatar out of the way) and the overlay draws pointers, rings,
 > step-by-step guides and explainer cards **over the real macOS desktop**. It uses transparent,
 > click-through windows, one per display. It never clicks or types. It only draws, follows the
@@ -417,6 +417,18 @@ prompt changes.
   with `target_lost` if its element is missing twice in a row. For a guide, only the **current**
   step's element counts. A later step's element may appear once earlier steps are done; it gets
   2 s after the guide reaches it.
+- **`label_parts`** (additive tool) points out 1 to 5 parts of one thing as **one drawing**: a ring and
+  a label per item, each label with its tone glyph (never colour alone). `tone` defaults to `info`;
+  use `warning` for risks. It does **not** replace the current highlight and counts as one of the 3
+  visible drawings. Element targets follow their element. Items whose target can't be found are
+  skipped (the `ToolResult` shape is unchanged; `resolvedBounds` is the union of the parts drawn);
+  it only fails (`visible:false`, `target_not_found`) when none can be found. Use it for "point out
+  the sender, the link and the urgent wording"; use `highlight` for a single thing.
+- **`show_explainer` template `verdict`** (additive): `{ kind: "verdict", tone, reasons: string[1..3] }`
+  with the card `title` as the headline ("Likely a scam"). It shows a large tone glyph, a tone accent
+  bar and one bullet per reason. Use it for "is this safe / real / a scam?", usually alongside
+  `label_parts` on the suspicious parts. Dev: `pointy-draw label-parts --file examples/label-parts-scam.json`,
+  `pointy-draw explainer --file examples/verdict-scam.json`.
 - **Step guides:** one step at a time. A ring and "Step i of n · label" sit on the current
   control, with a faint hint on the next one. The ring glides on as steps are done, then shows
   "✓ All done" and fades.
@@ -429,15 +441,24 @@ prompt changes.
   full-screen apps.
 - Reduce-motion (macOS setting) turns movement into fades.
 
-## 9. Explainer pictures (optional)
+## 9. Explainer pictures (optional, off by default)
+
+**Pictures are off unless `POINTY_IMAGES=1`.** By default no `ImageSource` exists: no fal.ai broker
+calls and no pre-generated assets, and concept/compare panels show their large fallback icon. Apps
+opt in with `createOverlayControl({ ..., assetsDir, images: imagesEnabled() })` (`imagesEnabled()`
+reads `POINTY_IMAGES=1`). Tell the model too: `exportToolDefinitions({ images })` appends "pictures are
+off, prefer verdict, sequence, anatomy, label_parts" to `show_explainer` when `images` is false (the
+schema, including `imagePrompt`, is unchanged), and `buildAssistantInstructions({ images })` does the
+same for the production prompt. Pass `pregeneratedImagePrompts` only when images are on.
+`FAL_KEY` is only needed with `POINTY_IMAGES=1`.
 
 - `assetsDir` with `manifest.json` holds pre-generated pictures. These are instant and work offline.
-- Passing `assetsDir` also enables the **fal.ai broker** for new prompts. It is a localhost Node
+- With `images: true`, passing `assetsDir` also enables the **fal.ai broker** for new prompts. It is a localhost Node
   service: run `npm run broker`, with `FAL_KEY` in `.env`. Its port is `EXPLAINER_BROKER_PORT`
   (default 47620); if you change it, pass a matching `brokerUrl`.
 - If the broker is down or slower than 8 s, the panel shows its large fallback icon. Nothing breaks.
 - `npm run pregen` adds pictures to the manifest ahead of a demo.
-- Without `assetsDir` (and without `imageSource`), concept and compare panels show large icons.
+- Without `images: true` (or without `assetsDir`, and without `imageSource`), concept and compare panels show large icons.
 
 ## 10. Gestures (`@pointy/gestures`, branch `feat/gestures`)
 

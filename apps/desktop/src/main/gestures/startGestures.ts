@@ -62,6 +62,8 @@ export interface StartGesturesOptions {
   env?: NodeJS.ProcessEnv;
   /** Production: the gesture session is opened/closed only by the caller (AssistantController); no idle timer. */
   manualSession?: boolean;
+  /** How long the user's selection outline stays on screen (default: the feedback package's 4 s). */
+  selectionTtlMs?: number;
 }
 
 export interface GesturesHandle {
@@ -120,7 +122,7 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     disposers.push(() => sessionCtl.dispose());
 
     // Feedback failure is logged and must not stop gestures. Disposed before the service (disposers run in reverse).
-    const feedback = await launchGestureFeedback(sim, env, log);
+    const feedback = await launchGestureFeedback(sim, env, log, { selectionTtlMs: opts.selectionTtlMs });
     if (feedback) disposers.push(() => feedback.dispose());
 
     let mouseOn = mouseEnabled;

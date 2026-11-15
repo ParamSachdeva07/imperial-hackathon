@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lineCount, measureCard, measureLabel } from "./measure";
+import { CARD, lineCount, measureCard, measureLabel, verdictBodyHeight } from "./measure";
 import { theme } from "./theme";
 
 describe("measure", () => {
@@ -25,5 +25,18 @@ describe("measure", () => {
     const size = measureCard("Title", { kind: "sequence", steps: [{ icon: "click", caption: "a" }, { icon: "send", caption: "b" }] });
     expect(size.width).toBe(theme.cardMaxWidth);
     expect(size.height).toBeGreaterThan(100);
+  });
+
+  it("verdict cards measure the headline (glyph inline) plus one row per reason, with no standalone glyph tile (never 0)", () => {
+    const one = measureCard("Looks safe", { kind: "verdict", tone: "success", reasons: ["Known sender"] });
+    const three = measureCard("Likely a scam", { kind: "verdict", tone: "warning", reasons: ["Fake sender", "Threatens you", "Odd link"] });
+    expect(one.width).toBe(theme.cardMaxWidth);
+    expect(one.height).toBeGreaterThan(2 * CARD.pad);
+    // Short headline + one reason: pad + one title line + gap + one bullet row + pad. The glyph is inline, so no CARD.tile of extra height.
+    expect(one.height).toBe(2 * CARD.pad + CARD.titleLineHeight + CARD.gap + CARD.bodyLineHeight);
+    expect(verdictBodyHeight(["a", "b"])).toBe(2 * CARD.bodyLineHeight + CARD.rowGap);
+    expect(three.height).toBeGreaterThan(one.height);
+    const wrapped = measureCard("Likely a scam", { kind: "verdict", tone: "warning", reasons: ["x ".repeat(29).trim(), "b", "c"] });
+    expect(wrapped.height).toBeGreaterThan(three.height);
   });
 });

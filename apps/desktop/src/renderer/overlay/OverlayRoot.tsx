@@ -25,6 +25,8 @@ function itemRects(item: RenderItem): Rect[] {
       return [item.target.bounds];
     case "pointer":
       return [item.target.bounds];
+    case "parts":
+      return item.parts.map((p) => p.target.bounds);
     case "steps":
       return item.steps.flatMap((s) => (s.target ? [s.target.bounds] : []));
     case "explainer":

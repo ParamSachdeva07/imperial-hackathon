@@ -140,6 +140,7 @@ export type ExplainerBody =
       aspect: number;
       callouts: AnatomyCallout[];
     }
+  | { kind: "verdict"; tone: Tone; reasons: string[] }
   | { kind: "concept"; panels: { caption: string; image: ImageSlot }[] };
 
 export interface ExplainerItem extends ItemBase {
@@ -158,7 +159,23 @@ export interface ExplainerItem extends ItemBase {
   body: ExplainerBody;
 }
 
-export type RenderItem = HighlightItem | PointerItem | StepsItem | ExplainerItem;
+/** One part of a `label_parts` drawing: a ring on a target and its caption. */
+export interface LabelledPart {
+  index: number;
+  tone: Tone;
+  target: RenderTarget;
+  label: RenderLabel | null;
+}
+
+/** `label_parts`: several rings with labels, one overlay id. */
+export interface PartsItem extends ItemBase {
+  kind: "parts";
+  parts: LabelledPart[];
+  /** Optional heading, placed beside the whole group (no tone glyph). */
+  title: RenderLabel | null;
+}
+
+export type RenderItem = HighlightItem | PointerItem | StepsItem | ExplainerItem | PartsItem;
 
 export interface RenderScene {
   /** Monotonic; the renderer echoes it in `overlay:painted`. */

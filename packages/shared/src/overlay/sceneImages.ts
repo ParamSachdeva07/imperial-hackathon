@@ -23,6 +23,7 @@ export function mapImageSrcs(items: RenderItem[], fn: (src: string) => string): 
       case "anatomy":
         return { ...b, image: slot(b.image) };
       case "sequence":
+      case "verdict":
         return b;
     }
   };

@@ -55,6 +55,8 @@ export class ExplainerService {
   /** Initial body: everything that can be shown instantly, async parts as loading slots. */
   create(spec: ExplainerSpec): ExplainerState {
     switch (spec.kind) {
+      case "verdict":
+        return { body: { kind: "verdict", tone: spec.tone, reasons: [...spec.reasons] } };
       case "sequence":
         return { body: { kind: "sequence", steps: spec.steps.map((s) => ({ icon: s.icon, caption: s.caption })) } };
       case "compare": {
@@ -144,6 +146,7 @@ export class ExplainerService {
         void this.loadAnatomy(state, spec, hooks);
         return;
       case "sequence":
+      case "verdict":
         return;
     }
   }

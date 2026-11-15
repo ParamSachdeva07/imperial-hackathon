@@ -29,6 +29,8 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw highlight <target> [--style ring|spotlight|underline] [--tone info|warning|success] [--label TEXT] [--expires E]
   pointy-draw point <target> [--motion tap|double_tap|drag_to] [--drag-to-element ID | --drag-to-rect x,y,w,h] [--label TEXT] [--expires E]
   pointy-draw steps ID:"Label" ID:"Label" ... [--start-at N] [--expires E]
+  pointy-draw label-parts ID:"Label" ID:"Label" ... [--tone info|warning|success] [--title TEXT] [--expires E]   ring + label on each part (one drawing)
+  pointy-draw label-parts --file PATH.json      full label_parts input (see examples/label-parts-scam.json)
   pointy-draw advance STEPS_ID
   pointy-draw explainer --file PATH.json
   pointy-draw clear all|OVERLAY_ID
@@ -119,6 +121,7 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       style: { type: "string" },
       tone: { type: "string" },
       label: { type: "string" },
+      title: { type: "string" },
       expires: { type: "string" },
       motion: { type: "string" },
       "drag-to-element": { type: "string" },
@@ -172,6 +175,17 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
         name: "show_steps",
         input: { steps, ...optional("startAt", v["start-at"] === undefined ? undefined : Number(v["start-at"])), ...expiry(v) },
       };
+    }
+    case "label-parts": {
+      if (v.file) return { kind: "tool", name: "label_parts", input: ctx.readJsonFile(v.file as string) as Record<string, unknown> };
+      if (v.json) return { kind: "tool", name: "label_parts", input: JSON.parse(v.json as string) as Record<string, unknown> };
+      if (rest.length === 0) throw new UsageError('label-parts: give ID:"Label" pairs, or --file PATH.json / --json \'{...}\'');
+      const items = rest.map((s) => {
+        const i = s.indexOf(":");
+        if (i <= 0) throw new UsageError(`label-parts: expected ID:"Label", got "${s}"`);
+        return { target: { kind: "element", elementId: s.slice(0, i) }, label: s.slice(i + 1), ...optional("tone", v.tone) };
+      });
+      return { kind: "tool", name: "label_parts", input: { items, ...optional("title", v.title), ...expiry(v) } };
     }
     case "advance":
       if (!rest[0]) throw new UsageError("advance: give a steps id");

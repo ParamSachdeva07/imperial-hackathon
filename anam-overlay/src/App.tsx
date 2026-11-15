@@ -12,6 +12,8 @@ export function App() {
   const expandedRef = useRef(false);
   /** True while the call was started by the speak-only control API (Pointy), which owns the window. */
   const externalRef = useRef(false);
+  /** ANAM_SPEAK_ONLY (decided by the main process): a failed call, even a manual one, must not strand the window expanded. */
+  const speakOnlyRef = useRef(false);
   const closingRef = useRef(false);
   /** A start that arrived mid-teardown, replayed afterwards: its session id, or null. */
   const pendingStart = useRef<number | null>(null);
@@ -100,6 +102,12 @@ export function App() {
     previousPhase.current = anam.phase;
   }, [anam.phase, anam.error, endCall]);
 
+  useEffect(() => {
+    let disposed = false;
+    void window.overlay?.getMode?.().then((mode) => { if (!disposed) speakOnlyRef.current = mode.speakOnly; }, () => undefined);
+    return () => { disposed = true; };
+  }, []);
+
   // Speak-only: the control API (Pointy) starts, speaks, interrupts and ends the call.
   const handlers = useRef({ open, endCall, talk: anam.talk, interrupt: anam.interrupt });
   handlers.current = { open, endCall, talk: anam.talk, interrupt: anam.interrupt };
@@ -124,11 +132,15 @@ export function App() {
       window.overlay?.reportSpeak?.({ connected: false, session: phaseSession.current });
       // Speak-only: main already collapsed the native window on this failure/drop. Reset the renderer too,
       // otherwise expandedRef stays true and later start/end commands are ignored.
-      if (externalRef.current && !closingRef.current && (anam.phase === 'error' || anam.error)) {
+      // A manual call (user clicked the dot) in speak-only mode is not tracked by main, so the native
+      // window is still expanded: collapse it too, restoring the dot, so later control-API starts work.
+      if ((externalRef.current || speakOnlyRef.current) && !closingRef.current && (anam.phase === 'error' || anam.error)) {
+        const manual = !externalRef.current;
         ++opening.current;
         externalRef.current = false;
         expandedRef.current = false;
         setExpanded(false);
+        if (manual) void Promise.resolve(window.overlay?.setExpanded(false)).catch(() => setWindowError('The call failed. Please relaunch Anam to restore the dot.'));
       }
     }
   }, [anam.phase, anam.error]);
