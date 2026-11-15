@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent } from 'react';
-import { Mic, MicOff, PhoneOff, RotateCcw } from 'lucide-react';
+import { Mic, MicOff, Phone, PhoneOff, RotateCcw } from 'lucide-react';
 import { useAnam } from './useAnam';
 
 export function App() {
@@ -186,7 +186,7 @@ export function App() {
       onFocus={() => window.overlay?.setLauncherFocused(true)}
       onBlur={() => window.overlay?.setLauncherFocused(false)}
       onClick={() => void open()}>
-      <span className="launcher-dot" aria-hidden="true" />
+      <span className="launcher-dot" aria-hidden="true"><Phone size={17} strokeWidth={0} fill="currentColor" /></span>
     </button>
 
     <section id="anam-call" className="call" hidden={!expanded} aria-label="Anam call">
