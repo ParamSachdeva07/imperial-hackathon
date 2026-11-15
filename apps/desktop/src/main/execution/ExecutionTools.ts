@@ -1,7 +1,8 @@
 /**
  * The execution tool: the voice agent hands a request to the execution agent and keeps talking.
  * A call returns at once; the outcome arrives later as one "[execution]" note the agent then reports.
- * The voice agent chooses what earlier context to pass along; this file never decides relevance.
+ * Every task is told how the earlier tasks of this call ended and where they left the computer (see priorWork),
+ * so it can carry on from there; the voice agent adds what only the conversation knows.
  * No electron import.
  */
 import type { ExecutionPort, TaskReport } from "./ExecutionClient";
@@ -25,7 +26,7 @@ export const EXECUTION_TOOLS: ExecutionToolDefinition[] = [
       required: ["request", "context"],
       properties: {
         request: { type: "string", description: "What to do, in plain words, with every name, text and choice the user gave. If they pointed at or selected something, say what it is." },
-        context: { type: "string", description: "Anything from earlier in this conversation that this task depends on: what an earlier task did or where it failed, where things were left. Empty when nothing earlier matters." },
+        context: { type: "string", description: "What only the conversation knows and this task depends on: what the user means by words like 'it', 'that one' or 'the same', choices they made earlier, corrections to an earlier attempt. How earlier tasks ended and where they left the computer is added automatically, so do not repeat it. Empty when nothing applies." },
       },
     },
   },
@@ -65,6 +66,38 @@ export function executionNote(r: TaskReport): string {
   );
 }
 
+/** How many earlier tasks the next one is told about, and how much room they and the agent's own words get. */
+const PRIOR_TASKS = 4;
+const AGENT_CONTEXT_CHARS = 1500;
+const CONTEXT_CHARS = 6000; // the execution service's limit
+
+/** One earlier task as the next task should know it: what was asked, how it ended, how far it got, where it left the computer. Pure. */
+export function priorTask(r: TaskReport, replaced = false): string {
+  const c = r.completion;
+  const done = r.plan.filter((s) => s.status === "done").map((s) => s.text);
+  const open = r.plan.filter((s) => s.status === "todo").map((s) => s.text);
+  const where = c ? [c.location.app, c.location.window, c.location.address].filter(Boolean).join(" / ") : "";
+  return [
+    `"${r.goal}" ${replaced ? "was still running when this request replaced it" : (ENDINGS[r.status] ?? r.status)}.`,
+    c?.summary || r.message ? `Outcome: ${c?.summary || r.message}` : "",
+    done.length ? `Steps finished: ${done.join("; ")}.` : "",
+    open.length ? `Steps not finished: ${open.join("; ")}.` : "",
+    c?.facts.length ? `Seen on screen: ${c.facts.slice(0, 8).join("; ")}.` : "",
+    where ? `Left at: ${where}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
+/** The context a new task is started with: the agent's own words, then the earlier tasks of this call, oldest first. Pure. */
+export function taskContext(agentContext: string, earlier: string[]): string {
+  const said = agentContext.trim().slice(0, AGENT_CONTEXT_CHARS);
+  if (earlier.length === 0) return said;
+  const head = "Earlier tasks in this conversation, oldest first. The last one says where the computer was left: continue from there, do not redo finished steps, and trust the screen over this if they differ.";
+  let kept = earlier.slice(-PRIOR_TASKS);
+  const build = () => [said, [head, ...kept.map((t, i) => `${i + 1}. ${t}`)].join("\n")].filter(Boolean).join("\n\n");
+  while (kept.length > 1 && build().length > CONTEXT_CHARS) kept = kept.slice(1); // the oldest goes first: the latest matters most
+  return build().slice(0, CONTEXT_CHARS);
+}
+
 export interface ExecutionToolDeps {
   client: ExecutionPort;
   /** Put a note into the conversation and have the agent speak about it. */
@@ -79,6 +112,8 @@ export interface ExecutionToolDeps {
 export class ExecutionToolHost {
   private running: string | null = null;
   private last: TaskReport | null = null;
+  /** How the earlier tasks of this call ended (see priorTask), oldest first. */
+  private earlier: string[] = [];
   private unwatch: (() => void) | null = null;
 
   constructor(private readonly deps: ExecutionToolDeps) {}
@@ -98,7 +133,9 @@ export class ExecutionToolHost {
         const replaced = this.running !== null;
         // Watch before starting, so a task that ends at once is not missed.
         this.unwatch ??= this.deps.client.watch((r) => this.onReport(r));
-        const taskId = await this.deps.client.start(a.request.trim().slice(0, 1000), typeof a.context === "string" ? a.context.slice(0, 2000) : "");
+        // A task replaced mid-way never reports an ending: record how far it got, so its successor does not start over.
+        if (replaced && this.last?.taskId === this.running) this.earlier.push(priorTask(this.last, true));
+        const taskId = await this.deps.client.start(a.request.trim().slice(0, 1000), taskContext(typeof a.context === "string" ? a.context : "", this.earlier));
         this.running = taskId;
         if (!replaced) this.deps.onTaskStart?.();
         this.deps.log?.(`execution started ${taskId}${replaced ? " (replaced the running task)" : ""}`);
@@ -121,6 +158,8 @@ export class ExecutionToolHost {
   dispose(): void {
     this.unwatch?.();
     this.unwatch = null;
+    this.earlier = []; // nothing is carried from one call to the next
+    this.last = null;
     if (this.running) void this.deps.client.stop().catch(() => undefined);
     this.finish();
   }
@@ -130,6 +169,8 @@ export class ExecutionToolHost {
     this.last = r;
     if (r.busy) return;
     this.deps.log?.(`execution ended ${r.taskId}: ${r.status}`);
+    this.earlier.push(priorTask(r));
+    if (this.earlier.length > PRIOR_TASKS) this.earlier.shift();
     this.finish();
     this.deps.announce(executionNote(r));
   }

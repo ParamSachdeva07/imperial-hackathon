@@ -70,7 +70,7 @@ export class ExecutionService {
       let raw = '';
       for await (const chunk of request) { raw += chunk; if (raw.length > 20_000) throw new Error('Request too large.'); }
       const { goal, context } = JSON.parse(raw || '{}');
-      const input = { goal, ...(typeof context === 'string' && context ? { context: context.slice(0, 2000) } : {}) };
+      const input = { goal, ...(typeof context === 'string' && context ? { context: context.slice(0, 6000) } : {}) };
       const state = this.controller.state().busy ? await this.controller.replace(input) : this.controller.start(input);
       return send(200, { taskId: state.taskId });
     }

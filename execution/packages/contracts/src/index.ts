@@ -3,8 +3,8 @@ import { z } from 'zod';
 // ---- What a caller sends and what the overlay shows ----
 export const TaskInputSchema = z.object({
   goal: z.string().trim().min(1).max(1000),
-  /** Short context from the caller, for example the result of its previous request. */
-  context: z.string().max(2000).default(''),
+  /** What the caller says came before: its own notes, and how its earlier requests ended and where they left the computer. */
+  context: z.string().max(6000).default(''),
   app: z.string().trim().max(200).default(''),
   allowPhysical: z.boolean().default(false),
 }).strict();
