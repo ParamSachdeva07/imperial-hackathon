@@ -1,10 +1,44 @@
 # Merging the execution agent into the voice app
 
-Written 15 November 2026. "The voice app" is the `imperial-hackathon` repository (latest `main`, commit
-`ba7d3f6`); its name is not decided. "The execution agent" is this repository.
+Written 15 November 2026. "The voice app" is the code from the `imperial-hackathon` repository (merged from its `main`, commit
+`ba7d3f6`); its name is not decided. "The execution agent" is the code in `execution/`.
 
 Facts about ElevenLabs and Anam below come from their public documentation, read on the date above.
 Anything marked **unconfirmed** has to be tested in Phase 0 before work that depends on it starts.
+
+## Status (15 November 2026)
+
+The two repositories are merged in this one: the voice app at the root, the execution agent in
+`execution/`. The standalone execution agent is kept as the tag `execution-standalone`, the branch
+`execution-standalone-branch`, and a copy in `~/Documents/personal-assistant`.
+
+**Done and tested**
+
+- Phase 1: the headless execution service (`npm run serve` in `execution/`). It boots, checks the
+  token and answers `/state`; a full task through it has not been run.
+- Phase 2: the asynchronous execution tool on the current OpenAI Realtime stack. `run_on_computer`
+  returns at once, the result is announced when it ends, a new request replaces the running task, the
+  assistant stays open while a task runs, drawings are cleared and the hand stops driving the mouse.
+  Unit-tested with fakes; **not yet run by voice.**
+- ElevenLabs agent definition: `scripts/elevenlabs-agent.ts` builds the agent with GPT-6.1 Sol on the
+  fast service tier, low reasoning, PCM 16000 Hz input and all twelve tools as client tools.
+  `--print` works; **creating the agent has not been run** (no ElevenLabs key on this machine).
+- Avatar backend: with `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` and `ANAM_AVATAR_ID` set, the
+  session token is created for that ElevenLabs agent on a Cara 4 avatar. Tested with fake upstreams.
+
+**Not done: what still stands between this and talking to ElevenLabs through Anam**
+
+1. Phase 0's four questions. Nothing below can be finished without the first two answers.
+2. Avatar app, agent mode: microphone on, register a handler per tool with the Anam SDK, forward each
+   call to the main app and return its result. Add a control route that injects a message.
+3. Main app, agent mode: a local tool bridge the avatar app calls (drawing tools, the three execution
+   tools, `look_at_screen` returning today's "[screen]" text), and a small lifecycle in place of the
+   Realtime controller (open, close, idle, gestures, tray status).
+4. Announcing a finished task in agent mode, and the selection offer: both need message injection.
+5. One start command that also launches the execution service.
+6. Interruptions in agent mode are ElevenLabs' and Anam's own; what remains is forwarding the
+   "interrupted" event so memory records what was actually said. On the current stack interruption
+   already works, and a running task is stopped by `stop_computer_task`, the hotkey or the hand.
 
 ## Target shape
 
