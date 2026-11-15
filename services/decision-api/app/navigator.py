@@ -45,8 +45,10 @@ Operations
 - SET_VALUE and FOCUS_AND_PASTE replace a field's whole content. TYPE inserts at the caret.
 
 After an action
-- Read what changed. For each effect whose outcome is unknown, add a reconciliation (confirmed or refuted)
-  citing current element ids, in the same response as your next step when you can.
+- Read what changed. An effect's outcome is unknown (nothing changed on screen), screen_changed (the screen
+  changed after it, which is not proof it did what you meant), confirmed or refuted. For an unknown one, add
+  a reconciliation (confirmed or refuted) citing current element ids, in the same response as your next step
+  when you can. Refute a screen_changed one if the screen shows it did the wrong thing.
 - No visible change is not proof of failure: look before sending the same thing again. A step the
   controller refused was never sent.
 - Typing into a field shows your input, not its result. A search does nothing until it is submitted, a
@@ -83,7 +85,7 @@ def wire_schema(request: PlanRequest) -> dict:
     properties = schema['properties']
     properties['target'] = {'type': 'string', 'enum': ['', *[e.id for e in request.elements if e.operations]]}
     properties['scope'] = {'type': 'string', 'enum': ['', *[s.id for s in request.scopes]]}
-    unknown = [e.id for e in request.effects if e.outcome == 'unknown']
+    unknown = [e.id for e in request.effects if e.outcome in ('unknown', 'screen_changed')]
     if unknown:
         schema['$defs']['Reconciliation']['properties']['effectId'] = {'type': 'string', 'enum': unknown}
     else:

@@ -52,6 +52,8 @@ type Task = {
   // The session in progress.
   mission?: Mission;
   steps: number;
+  /** The task's decision count when this session began. */
+  startStep: number;
   query: string;
   issues: string[];
   /** How often each step that sent nothing was proposed against the same screen. */
@@ -74,7 +76,7 @@ export class Navigator {
   begin(taskId: string, input: TaskInput) {
     if (this.task?.taskId === taskId) return;
     this.task = { taskId, input, ledger: new Ledger(), context: input.app ? { app: input.app } : {}, seenUrls: new Set(),
-      shallow: new Set(), menu: new MenuIndex(), steps: 0, query: '', issues: [], repeats: new Map(), cited: [] };
+      shallow: new Set(), menu: new MenuIndex(), steps: 0, startStep: 0, query: '', issues: [], repeats: new Map(), cited: [] };
   }
   /** Whether an action of this task may or may not have reached the application. */
   hasUncertainActions() { return !!this.task?.ledger.uncertain().length; }
@@ -122,7 +124,7 @@ export class Navigator {
   }
   private result(t: Task, status: SessionResult['status'], summary: string, facts: string[] = []): SessionResult {
     return { status, summary: clip(summary, 1500), facts: facts.slice(0, 12), location: this.location(t),
-      unresolved: t.ledger.unknown().slice(-8).map(e => t.ledger.describe(e)), steps: t.steps };
+      unresolved: t.ledger.unresolved(t.startStep).slice(-8).map(e => t.ledger.describe(e)), steps: t.steps };
   }
   /** A session that ended in an adapter or model failure, with the ledger as it stands. */
   failed(message: string): SessionResult {
@@ -145,7 +147,7 @@ export class Navigator {
   /** Runs until the navigator yields or stops making progress, and returns where things stand. */
   async run(host: Host, mission: Mission, signal: AbortSignal): Promise<SessionResult> {
     const { state } = host, t = this.task!, input = t.input;
-    Object.assign(t, { mission, steps: 0, query: '', issues: [], repeats: new Map() });
+    Object.assign(t, { mission, steps: 0, startStep: state.step, query: '', issues: [], repeats: new Map() });
 
     for (;;) {
       signal.throwIfAborted();
@@ -156,7 +158,7 @@ export class Navigator {
         ? await t.menu.nodes(t.context.app, this.bridge, signal) : [];
       index.adopt(menu);
       const selection = index.select({ query: t.query, requirementTerms: [mission.objective, mission.doneWhen],
-        pinned: t.ledger.unknown().flatMap(e => (e.target ? [e.target] : [])), previous: t.previous, extra: menu });
+        pinned: t.ledger.unresolved().flatMap(e => (e.target ? [e.target] : [])), previous: t.previous, extra: menu });
       // Which browser a web address belongs in is the user's setting, not something to guess.
       const browser = (await (this.browser ??= this.defaultBrowser?.().catch(() => undefined) ?? Promise.resolve(undefined)))?.toLowerCase();
       if (browser) for (const element of selection.elements) {
@@ -275,6 +277,9 @@ export class Navigator {
       // A key meant for a named field goes to that field: give it keyboard focus first, then ask again.
       const named = operation === 'PRESS' && sent.has(step.target) ? index.get(step.target) : undefined;
       if (named?.element && named !== index.focused() && named.operations.includes('FOCUS')) {
+        // Focusing that does not take is no progress either: the second time, Luna gets the session back.
+        const again = stalled('Focusing ' + named.label + ' did not give it keyboard focus.');
+        if (again) return again;
         await this.bridge.act(this.candidate('focus', 'FOCUS', named, observation, {}), named.owner, undefined, input.allowPhysical, signal);
         t.issues = [...issues, named.label + ' did not have keyboard focus, so it was focused for you. No key was sent yet: press it now.'];
         host.event('result', 'Focused ' + named.label + ' before the key.');
@@ -311,9 +316,10 @@ export class Navigator {
       if (TEXT_OPERATIONS.has(operation) || operation === 'OPEN_URL' || operation === 'SEARCH_WEB') args.text = step.text;
       if (operation === 'PRESS') args.key = step.key;
       if (operation === 'SCROLL') args.direction = step.direction;
-      const blocked = problem || !operation ? undefined : t.ledger.retryBlock(state.step, operation, args, node?.identity, recipient?.identity);
-      if (blocked) problem = 'The same action was just sent as ' + blocked.id + ' and ' + (blocked.delivery === 'uncertain'
-        ? 'may or may not have arrived' : 'nothing has changed yet') + '. Look at the screen (read, wait or find) before sending it again.';
+      const blocked = problem || !operation ? undefined : t.ledger.retryBlock(observation.id, operation, args, node?.identity, recipient?.identity);
+      if (blocked) problem = blocked.delivery === 'uncertain'
+        ? 'The same action was sent as ' + blocked.id + ' and may or may not have arrived. Reconcile ' + blocked.id + ' (confirmed or refuted, citing what the screen shows) before sending it again.'
+        : 'The same action was just sent as ' + blocked.id + ' and nothing has changed yet. Read the screen again or wait before sending it again; a slow result looks the same as none.';
       if (problem || !operation) { const again = refuse(problem); if (again) return again; continue; }
 
       // Preconditions on the live element. A failure sends nothing.
@@ -362,7 +368,7 @@ export class Navigator {
         coordinateSpace: 'native-screen', app: owner.context.app, windowId: node.snapshot?.windowId });
       host.status('executing', 'Executing ' + operation + ' ' + clip(effect.targetLabel, 120) + '.');
       const before = { viewKey: acting.index.viewKey(), facts: acting.index.facts() };
-      let delivery: Delivery = 'delivered', note = '', next = t.context;
+      let delivery: Delivery = 'delivered', note = '', next = t.context, watched = false;
       // Launch may succeed while resolving its focused window fails. Inspect the requested app,
       // rather than falling back to the old app inventory and choosing OPEN_APP again.
       const recovery: DesktopContext = { app: operation === 'OPEN_APP' ? node?.label : t.context.app, surface: 'window' };
@@ -383,14 +389,15 @@ export class Navigator {
         delivery = error instanceof NativeError ? (disposition?.delivery === 'not_delivered' ? 'not_delivered' : 'uncertain')
           : direct ? 'uncertain' : 'not_delivered';
         note = error.message;
+        // The adapter already watched the control for the result and did not see it.
+        watched = error instanceof NativeError && error.code === 'UNVERIFIED_ACTION';
+        if (watched && WRITE_OPERATIONS.has(operation)) note += ' The field does not show the text. Click or focus the field and look again before writing it a second time.';
         if (delivery === 'uncertain') next = recovery;
       }
       const report = this.bridge.takeActionReport?.();
       if (delivery === 'delivered' && report?.verification === 'unverified' && (report.nativeError || ['uncertain', 'unknown'].includes(report.delivery))) {
         delivery = 'uncertain';
-        note = (report.nativeError?.message || 'The input was sent but its delivery could not be confirmed.') +
-          // Some fields take text, or show it, only while they have keyboard focus.
-          (WRITE_OPERATIONS.has(operation) ? ' The field does not show the text. Click or focus the field and look again before writing it a second time.' : '');
+        note = report.nativeError?.message || 'The input was sent but its delivery could not be confirmed.';
         next = recovery;
       }
       if (report?.verification === 'already_satisfied') note = 'The control already held this value; nothing was sent.';
@@ -406,8 +413,8 @@ export class Navigator {
             ...(acting.observation.context.driver === 'browser' ? { beforePage: { url: acting.observation.snapshots[0]?.tree?.value || '', content: pageContentKey(acting.index) } } : {}),
             intervalMs: SETTLE.intervalMs,
             // Focusing or scrolling changes nothing the content comparison looks at, so it is not waited on.
-            // Nor is a write the adapter already watched without seeing its text appear.
-            capMs: ['FOCUS', 'SCROLL', 'SCROLL_TO'].includes(operation) || report?.verification === 'unverified' ? 0 : SETTLE.capMs });
+            // Nor is an action the adapter itself already watched without seeing its result.
+            capMs: ['FOCUS', 'SCROLL', 'SCROLL_TO'].includes(operation) || watched ? 0 : SETTLE.capMs });
       } catch (error) {
         signal.throwIfAborted();
         // The action was sent whether or not the screen can be read afterwards. Record that first.
@@ -422,7 +429,7 @@ export class Navigator {
       }
       const after = settled ? this.adopt(t, settled.observation, settled.index) : (t.view = undefined, undefined);
       t.previous = before;
-      Object.assign(effect, { delivery, recipient: recipient?.identity,
+      Object.assign(effect, { delivery, recipient: recipient?.identity, changed: settled?.changed === true, seenIn: after?.observation.id,
         note: note + (!settled || settled.changed ? '' : ' Nothing on screen changed after this action.'),
         delta: after ? after.index.delta(before) : effect.delta,
         readback: report && (report.expectedValue !== undefined || report.observedValue !== undefined)
@@ -433,15 +440,13 @@ export class Navigator {
           t.ledger.settle(effect.id, 'confirmed', 'readback');
         else if (report && POSTCONDITION_OPERATIONS.has(operation) && report.verification === 'verified')
           t.ledger.settle(effect.id, 'confirmed', 'postcondition');
-        // The screen answering an action is the plainest sign that it arrived.
-        else if (settled?.changed) t.ledger.settle(effect.id, 'confirmed', 'observed_change');
       }
       // The screen is different now, so earlier attempts say nothing about what is worth trying.
       if (settled?.changed) t.repeats.clear();
       host.trace?.('effect', { effect, settle: settled && { reads: settled.reads, changed: settled.changed, ms: settled.ms } });
       host.event('result', delivery === 'not_delivered' ? 'Nothing was sent: ' + note
         : delivery === 'uncertain' ? 'The action may have been delivered; inspecting before anything is repeated.'
-        : effect.outcome === 'confirmed' ? 'Delivered and confirmed.' : 'Delivered. Nothing changed yet.',
+        : effect.outcome === 'confirmed' ? 'Delivered and confirmed.' : effect.changed ? 'Delivered. The screen changed.' : 'Delivered. Nothing changed yet.',
         { effect: { id: effect.id, operation, target: effect.targetLabel, delivery, outcome: effect.outcome, delta: effect.delta } });
       host.event('step', clip(operation + ' ' + effect.targetLabel + ': ' + delivery + '. ' +
         (effect.delta.scopeChanged ? 'The view changed.' : effect.delta.added.length + ' added, ' + effect.delta.removed.length + ' removed.'), 1000));

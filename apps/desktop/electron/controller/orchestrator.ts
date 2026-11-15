@@ -43,10 +43,10 @@ export class Orchestrator {
           const last = this.history.at(-1)?.result;
           state.completion = { summary: decision.message, facts: last?.facts ?? [], location: { app: screen.app, window: screen.title, address: screen.address } };
           // Luna decides that the task is over. Whether every action is known to have landed is a fact, so code states it.
-          const unverified = decision.next === 'finish' && (this.navigator.hasUncertainActions() || last?.status === 'unverified');
+          const unverified = decision.next === 'finish' && (this.navigator.hasUncertainActions() || last?.status === 'unverified' || !!last?.unresolved.length);
           host.status(decision.next === 'blocked' ? 'blocked' : unverified ? 'completed_unverified' : 'completed',
             (decision.message || (decision.next === 'blocked' ? 'The task cannot be completed.' : 'Done.')) +
-            (unverified ? ' The result of at least one action could not be confirmed.' : ''));
+            (unverified ? ' At least one action has no visible result yet.' : ''));
           return;
         }
         this.mission = { objective: decision.objective, doneWhen: decision.doneWhen, context: decision.context };
@@ -68,11 +68,11 @@ export class Orchestrator {
     }
   }
 
-  /** A transient failure is retried for as long as the task runs; a rejected request once, with less history. */
+  /** A transient failure is retried for as long as the task runs. A rejected request fails the task: memory is never cut to get an answer. */
   private async decide(host: Host, request: OrchestratorRequest, signal: AbortSignal): Promise<OrchestratorResult> {
     host.trace?.('orchestrator_request', request);
     host.status('deciding', 'Luna is choosing what happens next.');
-    for (let attempt = 0, trimmed = false; ; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       const started = Date.now();
       try {
         const result = OrchestratorResultSchema.parse(await this.provider.orchestrate(request, signal));
@@ -81,13 +81,7 @@ export class Orchestrator {
         return result;
       } catch (error) {
         signal.throwIfAborted();
-        if (!(error instanceof BrokerError)) throw error;
-        if (!error.retryable) {
-          if (trimmed || request.history.length < 2) throw error;
-          trimmed = true;
-          request = { ...request, history: request.history.slice(-1) };
-          continue;
-        }
+        if (!(error instanceof BrokerError) || !error.retryable) throw error;
         const wait = Math.min(30_000, RETRY.baseMs * 2 ** Math.min(attempt, 4));
         host.event('result', 'Luna did not answer (' + error.message + '). Trying again in ' + Math.round(wait / 1000) + ' s; nothing was sent to the desktop.');
         await delay(wait, undefined, { signal });

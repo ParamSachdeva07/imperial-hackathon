@@ -20,8 +20,12 @@ export type Effect = {
   readback?: { expected?: string; observed?: string };
   delta: { added: string[]; removed: string[]; scopeChanged: boolean };
   note: string;
-  /** What settled the outcome: the navigator citing the screen, or the controller's own observation. */
-  settledBy?: 'navigator' | 'readback' | 'postcondition' | 'observed_change';
+  /** The screen differed after the action. That it changed is a fact; that it did what was meant is not. */
+  changed?: boolean;
+  /** The observation the action ended on. A later one means the screen has been looked at since. */
+  seenIn?: string;
+  /** What settled the outcome: the navigator citing the screen, or the adapter checking the control itself. */
+  settledBy?: 'navigator' | 'readback' | 'postcondition';
 };
 
 /** Changing what is shown, not what is stored. Their outcome is never an open question. */
@@ -44,7 +48,7 @@ export class Ledger {
     const effect = this.effects.find(e => e.id === effectId);
     if (!effect) return 'Unknown effect ' + effectId + '.';
     if (effect.delivery === 'proposed' || effect.delivery === 'not_delivered') return 'Effect ' + effectId + ' was never delivered; there is nothing to reconcile.';
-    // The controller's own observation outranks a model's opinion of the same action.
+    // The adapter read the control itself; that outranks a model's opinion of the same action.
     if (by === 'navigator' && effect.settledBy && effect.settledBy !== 'navigator') return;
     if (by === 'navigator' && !cited) return 'Reconciling ' + effectId + ' needs at least one cited element from the current observation.';
     effect.outcome = outcome;
@@ -58,13 +62,18 @@ export class Ledger {
   }
   /** May or may not have reached the application. */
   uncertain(): Effect[] { return this.unknown().filter(e => e.delivery === 'uncertain'); }
+  /** Nothing yet says these did anything: delivery in doubt, or delivered with no change on screen. */
+  unresolved(sinceStep = 0): Effect[] {
+    return this.unknown().filter(e => e.delivery === 'uncertain' || (!e.changed && e.step > sinceStep));
+  }
 
   /**
-   * The one rule about repeating an action: the same action is not sent again while the earlier
-   * one may or may not have arrived, or straight after it was sent and nothing changed. Either
-   * way the screen is looked at first.
+   * The one rule about repeating an action. The same action is not sent again while the earlier
+   * one may or may not have arrived: someone has to settle that first. And it is not sent again
+   * after it was delivered with no change on screen until the screen has been read afresh, since
+   * a slow result looks exactly like no result.
    */
-  retryBlock(step: number, operation: string, args: Effect['args'], target?: ElementIdentity, recipient?: ElementIdentity): Effect | undefined {
+  retryBlock(observationId: string, operation: string, args: Effect['args'], target?: ElementIdentity, recipient?: ElementIdentity): Effect | undefined {
     const same = (a?: ElementIdentity, b?: ElementIdentity) => {
       if (!a || !b) return !a && !b;
       const match = matchIdentity(a, b);
@@ -74,24 +83,25 @@ export class Ledger {
     return this.unknown().find(e => e.operation === operation && (e.args.text ?? '') === (args.text ?? '') &&
       (e.args.key ?? '') === (args.key ?? '') && (e.args.direction ?? '') === (args.direction ?? '') &&
       same(e.target, target) && (!!e.target || same(e.recipient, recipient)) &&
-      (e.delivery === 'uncertain' || e.step >= step - 1));
+      (e.delivery === 'uncertain' || (!e.changed && e.seenIn === observationId)));
   }
 
   describe(effect: Effect): string {
     return clip(effect.operation + ' ' + (effect.targetLabel || effect.args.key || '') +
       (effect.args.text ? ' ' + JSON.stringify(clip(effect.args.text, 120)) : '') + ': ' +
-      (effect.delivery === 'uncertain' ? 'may or may not have been delivered' : 'delivered, no result observed') +
+      (effect.delivery === 'uncertain' ? 'may or may not have been delivered' : 'delivered, nothing changed on screen') +
       (effect.note ? '. ' + effect.note : ''), 600);
   }
 
   /** Open questions first, then the most recent history. */
   view(limit = 16): EffectView[] {
-    const pending = this.unknown().slice(-10);
+    const pending = this.unresolved().slice(-10);
     const rest = this.effects.filter(e => !pending.includes(e) && e.delivery !== 'proposed');
     return [...pending, ...rest.slice(-(limit - pending.length))].sort((a, b) => a.step - b.step).map(e => ({
       id: e.id, operation: e.operation, target: clip(e.targetLabel, 400),
       text: e.args.text === undefined ? undefined : clip(e.args.text, 600), key: e.args.key, direction: e.args.direction,
-      delivery: e.delivery, outcome: VIEW_OPERATIONS.has(e.operation) && e.outcome === 'unknown' ? 'view_change' : e.outcome,
+      delivery: e.delivery, outcome: e.outcome !== 'unknown' ? e.outcome : VIEW_OPERATIONS.has(e.operation) ? 'view_change'
+        : e.changed && e.delivery === 'delivered' ? 'screen_changed' : 'unknown',
       expect: clip(e.expect, 500), readback: e.readback?.observed === undefined ? undefined : clip(e.readback.observed, 600),
       added: e.delta.added, removed: e.delta.removed, scopeChanged: e.delta.scopeChanged, note: clip(e.note, 500),
     }));

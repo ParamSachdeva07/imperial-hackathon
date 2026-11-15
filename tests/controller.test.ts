@@ -28,6 +28,7 @@ class Desk implements WorkspaceBridge {
   report?: ActionReport;
   searchable = true;
   frontmost = true;
+  focusWorks = true;
   fronted = 0;
   applications = async () => [{ name: 'Example', id: 'example', running: true }];
   private tree() {
@@ -72,7 +73,7 @@ class Desk implements WorkspaceBridge {
     }
     if (candidate.operation === 'CLICK' && candidate.name === 'Apply') this.model.size = this.model.boxValue;
     if (candidate.operation === 'CLICK' && candidate.name === 'Send') this.model.sent++;
-    if (candidate.operation === 'FOCUS') this.model.focused = candidate.name;
+    if (candidate.operation === 'FOCUS' && this.focusWorks) this.model.focused = candidate.name;
     return observation.context;
   }
   async openUrl(url: string) { this.opened.push(url); return { app: 'Example' }; }
@@ -120,27 +121,37 @@ function session(desk: Desk, provider: DecisionProvider, host: Host, assignment 
 const signal = () => new AbortController().signal;
 
 describe('the ledger: one rule about sending an action again', () => {
-  const effect = (ledger: Ledger, step: number, delivery: 'delivered' | 'uncertain') => Object.assign(
-    ledger.propose({ step, operation: 'PRESS', args: { key: 'return' }, targetLabel: 'return', expect: '' }), { delivery });
-  it('holds back an identical action straight after it was sent with no result, and lets it through once the screen was looked at', () => {
+  const effect = (ledger: Ledger, delivery: 'delivered' | 'uncertain', over: Record<string, unknown> = {}) => Object.assign(
+    ledger.propose({ step: 1, operation: 'PRESS', args: { key: 'return' }, targetLabel: 'return', expect: '' }), { delivery, seenIn: 'o1', ...over });
+  it('holds back an identical action that changed nothing until the screen has been read afresh, however many decisions pass', () => {
     const ledger = new Ledger();
-    effect(ledger, 4, 'delivered');
-    expect(ledger.retryBlock(5, 'PRESS', { key: 'return' })?.id).toBe('fx1');
-    expect(ledger.retryBlock(6, 'PRESS', { key: 'return' })).toBeUndefined();
-    expect(ledger.retryBlock(5, 'PRESS', { key: 'escape' })).toBeUndefined();
+    effect(ledger, 'delivered');
+    expect(ledger.retryBlock('o1', 'PRESS', { key: 'return' })?.id).toBe('fx1');
+    expect(ledger.retryBlock('o1', 'PRESS', { key: 'return' })?.id).toBe('fx1');
+    expect(ledger.retryBlock('o2', 'PRESS', { key: 'return' })).toBeUndefined();
+    expect(ledger.retryBlock('o1', 'PRESS', { key: 'escape' })).toBeUndefined();
   });
   it('holds back an action that may or may not have arrived until someone settles it', () => {
     const ledger = new Ledger();
-    effect(ledger, 1, 'uncertain');
-    expect(ledger.retryBlock(9, 'PRESS', { key: 'return' })?.id).toBe('fx1');
+    effect(ledger, 'uncertain');
+    expect(ledger.retryBlock('o9', 'PRESS', { key: 'return' })?.id).toBe('fx1');
     expect(ledger.settle('fx1', 'refuted', 'navigator', 0)).toMatch(/cited element/);
     expect(ledger.settle('fx1', 'refuted', 'navigator', 1)).toBeUndefined();
-    expect(ledger.retryBlock(9, 'PRESS', { key: 'return' })).toBeUndefined();
+    expect(ledger.retryBlock('o9', 'PRESS', { key: 'return' })).toBeUndefined();
   });
-  it('never lets a model overrule what the controller itself observed', () => {
+  it('treats a changed screen as a fact, not as proof: the action may be repeated, and the navigator may still refute it', () => {
     const ledger = new Ledger();
-    effect(ledger, 1, 'delivered');
-    ledger.settle('fx1', 'confirmed', 'observed_change');
+    effect(ledger, 'delivered', { changed: true });
+    expect(ledger.retryBlock('o1', 'PRESS', { key: 'return' })).toBeUndefined();
+    expect(ledger.view()[0].outcome).toBe('screen_changed');
+    expect(ledger.unresolved()).toEqual([]);
+    ledger.settle('fx1', 'refuted', 'navigator', 1);
+    expect(ledger.effects[0].outcome).toBe('refuted');
+  });
+  it('never lets a model overrule what the adapter read from the control itself', () => {
+    const ledger = new Ledger();
+    effect(ledger, 'delivered');
+    ledger.settle('fx1', 'confirmed', 'readback');
     ledger.settle('fx1', 'refuted', 'navigator', 1);
     expect(ledger.effects[0].outcome).toBe('confirmed');
   });
@@ -164,8 +175,8 @@ describe('a navigator session', () => {
     expect(result).toMatchObject({ status: 'done', steps: 3, unresolved: [], location: { app: 'Example', window: 'Document', address: '' } });
     expect(result!.facts).toEqual(['statictext "Applied size" = "24 pt"']);
     expect(requests[0].mission.objective).toBe('Make the text 24 pt');
-    // The write was confirmed by its read-back and the click by the screen changing; nobody had to be asked.
-    expect(requests[2].effects.map(e => [e.operation, e.outcome])).toEqual([['SET_VALUE', 'confirmed'], ['CLICK', 'confirmed']]);
+    // The write was confirmed by its read-back. The click only changed the screen, which is recorded as just that.
+    expect(requests[2].effects.map(e => [e.operation, e.outcome])).toEqual([['SET_VALUE', 'confirmed'], ['CLICK', 'screen_changed']]);
   });
 
   it('treats prose in place of an element id as a refused citation, and a malformed step as a model slip', async () => {
@@ -235,6 +246,16 @@ describe('a navigator session', () => {
     expect(requests[1].issues.join(' ')).toMatch(/was focused for you/);
     expect(requests[0].observation.windowTitle).toBe('Document');
     expect(result!.location.window).toBe('Document');
+  });
+
+  it('hands the session back when focusing a named field does not take, instead of focusing for ever', async () => {
+    const desk = new Desk();
+    desk.focusWorks = false;
+    const { provider, requests } = models((request) => ({ kind: 'act', operation: 'PRESS', key: 'return', target: id(request, 'Font Size') }));
+    const result = await session(desk, provider, makeHost().host).result;
+    expect(requests).toHaveLength(2);
+    expect(desk.acts.map(a => a.operation)).toEqual(['FOCUS']);
+    expect(result!.summary).toMatch(/did not give it keyboard focus/);
   });
 
   it('opens a site by its front page and refuses an inner address nobody supplied', async () => {
@@ -359,8 +380,7 @@ describe('Luna and the sessions she runs', () => {
     await expect(new Orchestrator(new Desk(), broken).advance(makeHost().host, signal())).rejects.toThrow('rejected');
   });
 
-  it('waits out a Luna outage, and retries a rejected request once with less history', async () => {
-    const desk = new Desk();
+  it('waits out a Luna outage, and fails the task on a rejected request without cutting her memory', async () => {
     const seen: number[] = [];
     let failures = 0;
     const scripted = models((request) => yielded(request), (_request, call) => call <= 2 ? { next: 'continue' } : { next: 'finish', message: 'Done.' });
@@ -370,10 +390,16 @@ describe('Luna and the sessions she runs', () => {
       if (request.history.length === 2) throw new BrokerError('HTTP 400 (invalid_prompt)', false);
       return scripted.provider.orchestrate(request, s);
     } };
+    await expect(new Orchestrator(new Desk(), provider).advance(makeHost().host, signal())).rejects.toThrow('invalid_prompt');
+    expect(seen).toEqual([0, 0, 0, 1, 2]);
+  });
+
+  it('labels a finish as unverified while the last session still reports an action with no visible result', async () => {
+    const { provider } = models((request, call) => call === 1 ? { kind: 'act', operation: 'CLICK', target: id(request, 'Decoration') } : yielded(request, 'done'),
+      (_request, call) => call === 1 ? { next: 'continue' } : { next: 'finish', message: 'Done.' });
     const { host, state } = makeHost();
-    await new Orchestrator(desk, provider).advance(host, signal());
-    expect(state.status).toBe('completed');
-    expect(seen).toEqual([0, 0, 0, 1, 2, 1]);
+    await new Orchestrator(new Desk(), provider).advance(host, signal());
+    expect(state.status).toBe('completed_unverified');
   });
 });
 
