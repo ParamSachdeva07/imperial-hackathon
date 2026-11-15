@@ -173,7 +173,9 @@ ipcMain.handle('anam:mode', async (event) => {
   if (!agentMode) return { speakOnly };
   // The tool names come from the main app, so the two never drift apart.
   const tools = await toolBridge('/tools').then((r) => (r as { tools?: unknown }).tools, () => []);
-  return { speakOnly: false, agent: true, tools: Array.isArray(tools) ? tools.filter((t): t is string => typeof t === 'string') : [] };
+  const names = Array.isArray(tools) ? tools.filter((t): t is string => typeof t === 'string') : [];
+  if (!names.length) console.warn('agent mode: the assistant app gave no tool list yet; tools will not answer until the next call');
+  return { speakOnly: false, agent: true, tools: names };
 });
 ipcMain.handle('anam:tool-call', async (event, name: unknown, args: unknown): Promise<string> => {
   if (!trusted(event) || !agentMode || typeof name !== 'string') return JSON.stringify({ ok: false, error: 'not available' });

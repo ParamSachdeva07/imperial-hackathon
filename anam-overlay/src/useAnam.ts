@@ -69,6 +69,12 @@ export function useAnam() {
     const attempt = ++generation.current;
     const speakOnly = await modeRef.current!;
     speakOnlyRef.current = speakOnly;
+    // Agent mode: ask for the tool list at the start of every call. The main app may have started after this
+    // window loaded, and a call that registers no handlers leaves every tool the agent calls unanswered.
+    if (agentTools.current) {
+      const mode = await window.overlay.getMode().catch(() => null);
+      if (mode?.agent && mode.tools?.length) agentTools.current = mode.tools;
+    }
     const useMicrophone = wantMicrophone && !speakOnly; // speak-only never touches the microphone
     if (generation.current !== attempt) { busy.current = false; return; }
     const current = () => mounted.current && generation.current === attempt;
