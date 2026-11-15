@@ -12,6 +12,7 @@
  *   GET  /events   Server-Sent Events: { at, event: OverlayEvent }
  *   GET  /state    debug snapshot     GET /displays     GET /elements     GET /element-rects
  *   GET  /debug/anatomy?id=…  an anatomy card's captured image (verify capture exclusion)
+ *   GET  /debug/selection     latest gesture SelectionSnapshot (full JSON incl. image data URLs) or {snapshot:null}
  *   POST <route>   extra routes supplied by the dev harness (e.g. /fixture)
  */
 import { randomBytes } from "node:crypto";
@@ -22,6 +23,7 @@ import { z } from "zod";
 import type { DisplayInfo, ElementRect, OverlayControl, OverlayEvent } from "@pointy/shared/overlay";
 import { DEFAULT_DEV_PORT, DEV_TOKEN_HEADER, devServerFile } from "@pointy/shared/node/devServerFile";
 import { isJsonRequest, isLocalHostHeader, readJsonBody, sendJson as send } from "@pointy/shared/node/http";
+import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import type { OverlayDebug } from "../main/overlay/ports";
 
 const MAX_BODY = 256 * 1024;
@@ -38,6 +40,8 @@ export interface DevServerDeps {
   };
   getDisplays: () => DisplayInfo[];
   getPrimaryDisplayId: () => string;
+  /** Latest gesture selection snapshot (GET /debug/selection). */
+  getSelection?: () => SelectionSnapshot | null;
   /** Extra POST routes from the dev harness (e.g. /fixture). */
   routes?: Record<string, (body: unknown) => Promise<unknown>>;
 }
@@ -57,6 +61,8 @@ const SimBody = z.discriminatedUnion("op", [
 
 export interface DevServer {
   port: number;
+  /** Push a custom event to every /events (SSE) client, as `{at, event}`. */
+  publish(event: { type: string } & Record<string, unknown>): void;
   close(): Promise<void>;
 }
 
@@ -64,10 +70,11 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
   const file = devServerFile();
   const token = randomBytes(24).toString("hex");
   const sseClients = new Set<ServerResponse>();
-  const off = deps.control.onEvent((event: OverlayEvent) => {
+  const broadcast = (event: OverlayEvent | ({ type: string } & Record<string, unknown>)): void => {
     const line = `data: ${JSON.stringify({ at: Date.now(), event })}\n\n`;
     for (const res of sseClients) res.write(line);
-  });
+  };
+  const off = deps.control.onEvent((event: OverlayEvent) => broadcast(event));
 
   const server: Server = createServer((req, res) => {
     void handle(req, res).catch((err: unknown) =>
@@ -100,6 +107,8 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
           return send(res, 200, deps.sim.listElementRects());
         case "/debug/anatomy":
           return send(res, 200, { src: deps.debug?.anatomyImage(url.searchParams.get("id") ?? "") ?? null });
+        case "/debug/selection":
+          return send(res, 200, { snapshot: deps.getSelection?.() ?? null });
       }
       return send(res, 404, { error: "not found" });
     }
@@ -145,6 +154,7 @@ export async function startDevServer(deps: DevServerDeps, port = Number(process.
 
   return {
     port: actualPort,
+    publish: broadcast,
     close: () =>
       new Promise<void>((resolve) => {
         off();

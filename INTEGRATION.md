@@ -274,3 +274,73 @@ Found by review. The fixes belong in his package, so we did not work around them
 4. **Mouse-mode feedback is missing.** `feedbackRenderer` draws no cursor for `mouse` events (only the click ring) and nothing for `scroll`, so one-finger / fist look dead whenever the real mouse is not attached (the default). Fix: draw a small cursor dot at `mouse` x/y and a scroll glyph, independent of `attachSystemMouse`; ideally also let the host learn whether a consumer is attached.
 5. **One-finger pose has no hysteresis and the recogniser label can veto the rules.** Two-finger has sticky hysteresis; pointing does not. `RECOGNIZER_MAP` sends Thumb_Up / ILoveYou / Victory / Thumb_Down to `other`, which beats the rule result, so a thumb-out point or a slightly parted second finger emits no `mouse`. The 3D wrist-to-tip ratio (1.15) also degrades when the finger points at the camera. Suggested: sticky pointing, prefer the rules over an `other` label when they say pointing/fist, an angle-based curl test.
 6. **Expose a debug event** (raw pose, label, score) so a host can render a "why is nothing happening" HUD; and consider scrolling the focused/last-mouse window when the pointer was never moved.
+
+
+## 9. Selection -> AI (gesture selections as screenshots)
+
+When the user selects with a gesture (circle = `region_selected`, held finger = `point_selected`; display-relative
+DIP on the primary display), the app captures the screen instantly and hands the AI two images.
+
+### 9.1 Flow
+
+`gestures.sim.onAny` (real + simulated events merged; the camera-free sim in `devHarness` `ensureSim` is attached
+the same way) -> `attachSelectionCapture` (`apps/desktop/src/main/capture/SelectionCapture.ts`) -> `SelectionStore`
+-> consumers (`store.onSnapshot`): the voice window (`POINTY_VOICE=1`, IPC `voice:selection`, never sent to other
+windows) and the dev SSE stream. Composition is in `main/index.ts`; it is wrapped in try/catch so a capture problem
+never stops the app. The feedback selection fades by itself; capture does not clear it. The store is cleared when the
+gesture session closes.
+
+### 9.2 The two images (`SelectionSnapshot`)
+
+| | `full` | `focus` |
+|---|---|---|
+| Content | whole display, downscaled to <= 1280 px wide, selection outlined, rest dimmed (brightness 0.65) | close-up of the selection, unmarked |
+| Region | polygon outlined | bbox padded 15% (min 120x80 DIP) |
+| Point | ring + dot; only the focus box left undimmed | ~480x320 DIP box around the point |
+| Size / quality | JPEG q70 | <= 768 px, JPEG q80 |
+
+`full.markedRegion` is the selection bbox as 0..1 fractions of the full image. All geometry is global DIP.
+
+### 9.3 Budget
+
+Total decoded JPEG bytes <= 180,000 (`DEFAULT_BUDGET_BYTES`), so the base64 payload (~240 KB) fits one 256 KB data-channel message. Steps: quality 70/80, 55/65, 40/50, then image scale
+0.8, 0.64, 0.5, until it fits; if nothing fits the smallest attempt is kept and a warning is logged. The voice
+renderer additionally fits the data-channel message limit (`selectionItems`: text+both images, else focus then full
+as two messages, else focus only, else geometry text only; it logs `selection sent: ...`).
+
+### 9.4 Hiding
+
+Content protection is unreliable on macOS 26 / Electron 45, so every capture runs inside
+`combineCaptureHiding(overlay {getOverlayWindowIds, withOverlayHidden}, feedbackCaptureHiding)`: AI overlay and the
+gesture feedback windows are hidden for the capture, so neither the user's drawing nor the AI's drawings appear.
+
+### 9.5 Screen Recording permission (macOS)
+
+`DesktopCapturerProvider` throws `ScreenPermissionError` when screen access is not "granted" (and on missing source
+or empty thumbnail) instead of returning a grey placeholder. `SelectionCapture` logs it once per session
+(`[selection] ...`) and produces no snapshot. Grant Screen Recording to the app that runs Electron (Terminal /
+iTerm / the Electron binary) in System Settings -> Privacy & Security, then restart it.
+
+### 9.6 Dev route and CLI
+
+- `GET /debug/selection` (dev server, same token + host checks): latest `SelectionSnapshot` as full JSON including
+  data URLs, or `{"snapshot":null}`.
+- SSE `/events` carries `{type:"selection.captured", selection: SelectionSnapshotMeta}` (no base64).
+- `pointy-draw selection [--out DIR]` (default `artifacts/selection`, gitignored) writes `full.jpg`, `focus.jpg`,
+  `selection.json` (meta) and prints the meta. Camera-free: `pointy-draw gesture session on`, then
+  `pointy-draw gesture circle --center 700,450 --radius 150` or `pointy-draw gesture point 700,450`, then
+  `pointy-draw selection`.
+- Offline model check: `npx tsx scripts/eval-voice-tools.ts --selection DIR --ask "Is this safe?"`.
+
+### 9.7 Voice wiring
+
+`openVoiceWindow({ selectionSource: store })`. The renderer adds the images as a conversation item on the `oai-events`
+data channel (queued until the channel opens) and never sends `response.create`; the instructions tell the model to
+use the selection when the user says "this/here". `OPENAI_API_KEY` / `OPENAI_REALTIME_MODEL` in `.env`.
+
+### 9.8 Seam for the brain
+
+Import `SelectionSnapshot`, `snapshotMeta`, `dataUrlBytes` from `@pointy/shared/context/selection`. In main, hold the
+`SelectionStore` from `main/index.ts` and use `store.latest()` (peek), `store.consume()` (take once) or
+`store.onSnapshot(cb)`; `store.onClear(cb)` fires when the session closes. Log with `snapshotMeta()`, never the raw
+snapshot.

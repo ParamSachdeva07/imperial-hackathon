@@ -38,6 +38,7 @@ Coordinates are global points; displays:
 ${displays}
 move_avatar moves the avatar bubble out of the way if it covers something you need to show; it also dodges by itself, so rarely call it.
 When a tool result says visible:false, tell the user you can't see that right now. Call clear with "all" when the user says "got it", "okay" or changes topic.
+Selections: when a "[selection]" message arrives with two images, the user just selected something on screen with a gesture. Image 1 is the whole screen with the selection outlined and everything else dimmed (context only); image 2 is a sharp close-up of the selection. Focus your answer on the marked part and answer the user's next spoken question about it. To show it, use highlight or show_explainer with a region target built from the global-point bbox or polygon given in the message. Only describe what is really visible in those images; if they are unclear or missing, say so instead of guessing.
 This is a developer test session: if the developer asks you to draw something specific, do exactly that.`;
 }
 

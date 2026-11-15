@@ -18,6 +18,9 @@
  *   POINTY_PROBE=1          overlay windows draw a fixed ring only (canvas check)
  *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
  *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
+ *                           Gesture selections (circle / held point) are captured instantly as two JPEGs
+ *                           (full display marked + focus close-up) for the AI (INTEGRATION.md §9); needs
+ *                           macOS Screen Recording permission, otherwise it logs an error and skips.
  *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
  *   POINTY_GESTURES_MOUSE=1 one finger/fist drive the real OS mouse/clicks/scroll, only while the session is open (`npm run app:gestures:mouse`)
  *   POINTY_GESTURES_IDLE_MS gesture session idle timeout (default 20000)
@@ -40,7 +43,11 @@ import { MockScreenCaptureProvider } from "./overlay/mocks/MockScreenCaptureProv
 import { ElectronScreen, OverlayWindowManager } from "./overlay/OverlayWindowManager";
 import { getOverlayPlatform } from "./overlay/platform";
 import type { ScreenCaptureProvider } from "@pointy/shared/overlay";
-import { hideFeedbackDuringCapture } from "./gestures/captureHiding";
+import { combineCaptureHiding, hideFeedbackDuringCapture } from "./gestures/captureHiding";
+import { attachSelectionCapture, type SelectionSource } from "./capture/SelectionCapture";
+import { bgraCapture, nativeImageOps } from "./capture/nativeImageOps";
+import { DesktopCapturerProvider } from "./capture/DesktopCapturerProvider";
+import { clearOnSessionClose, SelectionStore } from "./capture/SelectionStore";
 import { feedbackCaptureHiding } from "./gestures/feedbackHost";
 import { registerGestureAssetScheme, startGestures, type GesturesHandle } from "./gestures/startGestures";
 import { PRELOAD_DIR } from "./rendererPages";
@@ -111,7 +118,40 @@ async function main(): Promise<void> {
     },
   });
   gestures = await startGestures({ repoRoot });
+
+  // Selection capture: gesture selection -> screenshots for the AI. Must never break app start.
+  const selectionStore = new SelectionStore();
+  const stopSelection: (() => void)[] = [];
+  let attachSelection: ((source: SelectionSource & { onSession(cb: (active: boolean) => void): () => void }) => () => void) | null = null;
+  try {
+    const provider = new DesktopCapturerProvider(() => displays.getDisplays());
+    const hiding = combineCaptureHiding(
+      { getWindowIds: () => overlay.control.getOverlayWindowIds(), withHidden: (fn) => overlay.control.withOverlayHidden(fn) },
+      feedbackCaptureHiding,
+    );
+    const clog = (level: "info" | "warn" | "error") => (msg: string) => console[level](`[selection] ${msg}`);
+    attachSelection = (source) => {
+      const cap = attachSelectionCapture(source, {
+        screen: { getDisplays: () => displays.getDisplays() },
+        capture: bgraCapture(provider),
+        hiding,
+        ops: nativeImageOps,
+        now: Date.now,
+        log: { info: clog("info"), warn: clog("warn"), error: clog("error") },
+        store: selectionStore,
+      });
+      const offClear = clearOnSessionClose(selectionStore, source);
+      return () => {
+        cap.dispose();
+        offClear();
+      };
+    };
+    if (gestures) stopSelection.push(attachSelection(gestures.sim));
+  } catch (err) {
+    console.error(`[selection] capture not available: ${String(err)}`);
+  }
   app.on("before-quit", () => {
+    for (const d of stopSelection.splice(0)) d();
     gestures?.dispose(); // feedback window first, then the gesture service (see startGestures)
     anam?.dispose();
     overlay.dispose();
@@ -125,6 +165,7 @@ async function main(): Promise<void> {
       assetsDir,
       openFixture: env("POINTY_NO_FIXTURE") !== "1",
       openVoice: env("POINTY_VOICE") === "1",
+      selection: attachSelection ? { store: selectionStore, attach: attachSelection } : null,
       gestures: gestures ? { sim: gestures.sim, session: gestures.session } : null,
     });
   }

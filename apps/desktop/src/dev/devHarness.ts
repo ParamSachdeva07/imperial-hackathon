@@ -8,6 +8,8 @@ import { delay } from "@pointy/shared/node/env";
 import { readManifestPrompts } from "../main/overlay/explainer/manifest";
 import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
 import type { OverlayHandle, ScreenSource } from "../main/overlay";
+import type { SelectionSnapshot } from "@pointy/shared/context/selection";
+import { snapshotMeta } from "@pointy/shared/context/selection";
 import { launchGestureFeedback, primaryDisplayInfo } from "../main/gestures/feedbackHost";
 import { SimGestureService } from "../main/gestures/SimGestureService";
 import { loadRendererPage, PRELOAD_DIR } from "../main/rendererPages";
@@ -28,6 +30,18 @@ export interface DevHarnessOptions {
    * feedback window and session controller. Null: the feedback window is started lazily on the first
    * /gesture or /gesture/session call, driven by a standalone simulation.
    */
+  /**
+   * Selection capture (gesture selection -> screenshots for the AI). `store` is the shared latest
+   * snapshot; `attach` hooks the capture onto a gesture source (used for the lazy camera-free sim)
+   * and returns its dispose function. Null/absent: capture unavailable.
+   */
+  selection?: {
+    store: {
+      latest(): SelectionSnapshot | null;
+      onSnapshot(cb: (s: SelectionSnapshot) => void): () => void;
+    };
+    attach(source: SimGestureService): () => void;
+  } | null;
   gestures?: { sim: SimGestureService; session: { open(): void; close(): void } } | null;
 }
 
@@ -77,6 +91,7 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
       preloadDir: PRELOAD_DIR,
       loadPage: (win) => loadRendererPage(win, "voice"),
       ensureFixture,
+      ...(opts.selection ? { selectionSource: opts.selection.store } : {}),
       ctx: {
         listElements: () => boundsProvider.listElementRects(),
         getDisplays: () => screen.getDisplays(),
@@ -103,6 +118,13 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
     lazySim ??= (async () => {
       const svc = new SimGestureService({ display: primaryDisplayInfo });
       lazyStop.push(() => svc.dispose());
+      if (opts.selection) {
+        try {
+          lazyStop.push(opts.selection.attach(svc));
+        } catch (err) {
+          console.error(`[pointy] selection capture not attached to the simulation: ${String(err)}`);
+        }
+      }
       const feedback = await launchGestureFeedback(svc, process.env, (m) => console.log(`[gestures] ${m}`));
       if (feedback) lazyStop.unshift(() => feedback.dispose());
       return svc;
@@ -120,6 +142,7 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
     sim: boundsProvider,
     getDisplays: () => screen.getDisplays(),
     getPrimaryDisplayId: () => screen.getPrimaryDisplayId(),
+    ...(opts.selection ? { getSelection: () => opts.selection!.store.latest() } : {}),
     routes: {
       "/fixture": async () => {
         await ensureFixture();
@@ -149,6 +172,10 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
   });
   if (server) {
     console.log(`[pointy] dev server on 127.0.0.1:${server.port}`);
+    if (opts.selection) {
+      const offSel = opts.selection.store.onSnapshot((s) => server.publish({ type: "selection.captured", selection: snapshotMeta(s) }));
+      app.on("before-quit", offSel);
+    }
     app.on("before-quit", () => void server.close());
   }
 }

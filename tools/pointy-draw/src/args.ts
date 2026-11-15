@@ -9,6 +9,7 @@ export type Request =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "control"; body: { op: string; arg?: string } }
   | { kind: "sim"; body: Record<string, unknown> }
+  | { kind: "selection"; outDir: string }
   | { kind: "get"; path: "/events" | "/state" | "/displays" | "/elements" }
   | { kind: "post"; path: "/fixture"; body: Record<string, unknown> }
   | { kind: "post"; path: "/gesture"; body: { events: unknown[]; intervalMs: number } }
@@ -18,6 +19,8 @@ export interface ParseContext {
   primaryDisplayId: string;
   readJsonFile: (path: string) => unknown;
 }
+
+export const DEFAULT_SELECTION_DIR = "artifacts/selection";
 
 export class UsageError extends Error {}
 
@@ -40,6 +43,7 @@ export const USAGE = `pointy-draw — drive the Pointy overlay through the dev s
   pointy-draw gesture mouse x,y | gesture click x,y [--ms 800] | gesture scroll [--dy 300]   one finger / dwell click / fist drag (dy>0 scrolls up).
                                               These reach the REAL OS mouse only if the app runs with POINTY_GESTURES_MOUSE=1 and the session is on
   pointy-draw gesture session on|off          open/close the gesture session (feedback only shows while on)
+  pointy-draw selection [--out DIR]           fetch the latest gesture selection (default DIR artifacts/selection): writes full.jpg, focus.jpg, selection.json
   pointy-draw fixture                         open (or bring back) the fake mail test app
 
   gesture coordinates are display-relative DIP on the primary display (or --display ID, numeric).
@@ -127,6 +131,7 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       radius: { type: "string" },
       ms: { type: "string" },
       dy: { type: "string" },
+      out: { type: "string" },
       "wait-shown": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -213,6 +218,8 @@ export function parseCommand(argv: string[], ctx: ParseContext): Request {
       return { kind: "control", body: { op: "cue", arg: rest[0] } };
     case "gesture":
       return gestureCommand(rest, v, ctx);
+    case "selection":
+      return { kind: "selection", outDir: (v.out as string | undefined) ?? DEFAULT_SELECTION_DIR };
     case "fixture":
       return { kind: "post", path: "/fixture", body: {} };
     case "events":
