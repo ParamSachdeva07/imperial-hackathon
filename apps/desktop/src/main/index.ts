@@ -20,7 +20,7 @@
  *   POINTY_GESTURES=1       start the hand-gesture layer (hidden camera window + MediaPipe); needs
  *                           `npm run gestures:assets` once. `npm run app:gestures` builds and runs it.
  *                           Gesture selections (circle / held point) are captured instantly as two JPEGs
- *                           (full display marked + focus close-up) for the AI (INTEGRATION.md §9); needs
+ *                           (full display marked + focus close-up) for the AI; needs
  *                           macOS Screen Recording permission, otherwise it logs an error and skips.
  *   POINTY_GESTURES_SHOW=1  show the gesture vision window (camera preview, debug)
  *   POINTY_GESTURES_MOUSE=1 one finger/fist drive the real OS mouse/clicks/scroll, only while the session is open (`npm run app:gestures:mouse`)

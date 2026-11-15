@@ -1,5 +1,5 @@
 /**
- * Pointy overlay tools: shared contract (POINTY_OVERLAY_SPEC.md §4).
+ * Pointy overlay tools: shared contract.
  *
  * THIS FILE IS THE TEAM CONTRACT. Ask before changing a field another teammate depends on.
  *

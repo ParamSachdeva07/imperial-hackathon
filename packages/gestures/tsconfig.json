@@ -12,10 +12,8 @@
   },
   "include": [
     "src",
-    "playground",
     "test",
     "electron",
-    "electron.vite.config.ts",
-    "vite.config.ts"
+    "electron.vite.config.ts"
   ]
 }

@@ -20,12 +20,9 @@ From the repo root (this package is an npm workspace, like `@pointy/shared`):
 ```bash
 npm install                                   # once, at the root
 npm run fetch-model -w @pointy/gestures       # optional: bundle gesture_recognizer.task locally
-npm run dev -w @pointy/gestures               # playground at http://localhost:5173 (allow the camera)
-npm run mouse-bridge -w @pointy/gestures      # optional, 2nd terminal: lets the playground move/click the real mouse
+npm run electron -w @pointy/gestures          # standalone launcher with your camera
 npx vitest run --project gestures             # gesture tests (also part of `npm test`)
 ```
-
-The playground shows the camera with landmarks, a simulated page with the cursor, hold rings, strokes and selections drawn over the whole window, an event log, a calibration flow, and live threshold inputs. Tick "Show active zone" to see the camera area mapped to the screen.
 
 ## Gestures
 
@@ -36,7 +33,7 @@ The playground shows the camera with landmarks, a simulated page with the cursor
 | Draw pose, fingers still for `dwellMs` (800 ms) | `dwell_progress` (0→1), then `point_selected` | Selects once, then re-arms when the finger moves again. |
 | Drag with the draw pose, then let go (change pose or lower the hand) | `region_selected` | The rectangle between where the drag began and where the fingers let go, like a mouse drag (four-corner polygon and bbox). `cursor_moved.anchor` carries the start corner so the rectangle can be drawn live. |
 | Pointing hand gone (`lostMs`) or pose changed | `hand_lost` | UI hides the cursor. |
-| **One finger** (index) — `mousePose` | `mouse` (`start` / `move` / `end`, `x`, `y`) | Drives the **real system mouse**: the controller moves the OS cursor to (x, y). No drawing, no selection. In the playground, `npm run mouse-bridge` does the moving (browsers can't). |
+| **One finger** (index) — `mousePose` | `mouse` (`start` / `move` / `end`, `x`, `y`) | Drives the **real system mouse**: the controller moves the OS cursor to (x, y). No drawing, no selection. |
 | One finger, still for `clickDwellMs` (1 s) | `click_progress` (0→1), then `click` (`button: "left"`, `x`, `y`) | **Dwell click** where the mouse is. Arms only after the mouse has moved `clickArmDist` (40 pt) since it appeared or last clicked, so raising a still finger or resting the hand never clicks, and one hold = one click. `clickEnabled: false` turns it off. |
 | Two fingers spread (V sign) | nothing | Deliberately unused, to avoid accidental triggers. |
 
@@ -122,15 +119,11 @@ Notes:
 
 ## Moving the real mouse
 
-`npm run mouse-bridge` (second terminal) starts `scripts/mouse-bridge.mjs`: a WebSocket server on `127.0.0.1:8765` that only accepts the dev page's origin and moves the OS cursor with `@nut-tree-fork/nut-js`. The playground connects automatically and sends normalized positions.
-
-The bridge also performs `click` events (`mouse.leftClick()` at the given position); clicks are queued and never dropped, moves keep only the latest.
-
-In Electron, skip the bridge: on a `mouse` event the main process converts (x, y) DIP + `displayId` to the screen position and calls `mouse.setPosition` (nut-js) or the agent-desktop equivalent. macOS needs the Accessibility permission for this.
+On a `mouse` event the main process converts (x, y) DIP + `displayId` to the screen position and moves the OS cursor (`src/electron/mouse.ts`). macOS needs the Accessibility permission.
 
 ## Calibration
 
-`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners (the playground's "Calibrate" button does this with holds). Without calibration, the default zone is x 15–85 %, y 20–65 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
+`computeActiveZone(samples, mirror)` builds the active zone from raw fingertip positions recorded while the user points at the 4 screen corners. Without calibration, the default zone is x 15–85 %, y 20–65 % of the camera frame (the top edge is lowered so the top of the screen, e.g. browser tabs, is reachable at face height). In the Electron launcher, override it with `POINTY_GESTURES_ZONE=x0,y0,x1,y1`.
 
 ## Tuning
 
@@ -147,6 +140,6 @@ src/oneEuro.ts      One Euro filter
 src/geometry.ts     distance, bbox
 src/calibration.ts  active zone from 4 corners
 src/detector.ts     MediaPipe GestureRecognizer wrapper → FrameObservation
-playground/         webcam test page (Vite)
+electron/dev/       standalone launcher and self-test
 test/               vitest suite on synthetic trajectories
 ```

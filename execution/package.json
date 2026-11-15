@@ -3,19 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "apps/desktop/dist-electron/main.cjs",
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
     "setup": "node scripts/launch.mjs setup",
-    "dev": "node scripts/launch.mjs dev",
-    "build": "node scripts/launch.mjs build",
     "test": "node scripts/launch.mjs test",
     "test:extension": "node scripts/launch.mjs extension",
     "typecheck": "tsc --noEmit",
-    "package:mac": "node scripts/launch.mjs package",
-    "fixture:wordle": "node scripts/wordle-fixture.mjs",
     "serve": "node scripts/launch.mjs serve"
   },
   "dependencies": {

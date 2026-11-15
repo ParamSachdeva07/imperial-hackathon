@@ -1,6 +1,6 @@
 /**
  * Starts the gesture package's own feedback window (cursor, trail, rings, wake ring, selection of
- * the USER's hand; see packages/gestures/GESTURES_HANDOFF.md). The AI overlay draws none of this.
+ * the USER's hand). The AI overlay draws none of this.
  * Shared by the real gesture layer (startGestures.ts) and the camera-free dev simulation (devHarness.ts).
  */
 import { join } from "node:path";

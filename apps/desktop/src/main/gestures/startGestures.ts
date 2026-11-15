@@ -1,5 +1,5 @@
 /**
- * Composition of the gesture layer for the Electron main process (see packages/gestures/GESTURES_HANDOFF.md).
+ * Composition of the gesture layer for the Electron main process.
  * Opt-in: nothing starts unless POINTY_GESTURES=1. Never throws to the caller.
  */
 import { createReadStream } from "node:fs";

@@ -18,12 +18,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "predev": "node scripts/copy-wasm.mjs",
-    "dev": "vite",
-    "prebuild": "node scripts/copy-wasm.mjs",
-    "build": "vite build",
     "fetch-model": "node scripts/fetch-model.mjs",
-    "mouse-bridge": "node scripts/mouse-bridge.mjs",
     "preelectron": "node scripts/copy-wasm.mjs",
     "electron": "electron-vite dev",
     "electron:selftest": "node scripts/copy-wasm.mjs && electron-vite build && node scripts/run-selftest.mjs"

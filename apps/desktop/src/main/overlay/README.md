@@ -1,12 +1,10 @@
 # Pointy overlay
 
-The drawing layer from `POINTY_OVERLAY_SPEC.md`: pointers, highlights, step guides and explainer
+The drawing layer: pointers, highlights, step guides and explainer
 cards drawn over the real desktop. The team contract is `packages/shared/src/overlay/schemas.ts`
 (ask before changing it); the interfaces you implement or call are in `interfaces.ts` next to it.
 
 ## Wire it in
-
-Full guide, written so another AI agent can follow it: [`POINTY_OVERLAY_INTEGRATION.md`](../../../../../POINTY_OVERLAY_INTEGRATION.md).
 
 ```ts
 import { createOverlayControl, exportToolDefinitions } from "./overlay";
@@ -87,8 +85,7 @@ async loading): see `measureCard` for its size and `renderer/overlay/explainer/V
 
 This overlay draws only what the AI shows. What the user does with their hand (cursor, trail, rings,
 wake ring, selection) is drawn by the gestures package's own feedback window, started from
-`../gestures/`. Neither draws the other's content (split recorded in
-`packages/gestures/GESTURES_HANDOFF.md`). No camera needed to test: `npx pointy-draw gesture ...`.
+`../gestures/`. Neither draws the other's content. No camera needed to test: `npx pointy-draw gesture ...`.
 
 ## Dev only
 

@@ -2,7 +2,7 @@
  * Production composition (POINTY_MODE=production, see mode.ts): the real desktop instead of the fake mail
  * app. Accessibility elements (AxBoundsProvider) + screenshots feed GPT Realtime (text out); the answer is
  * spoken by the Anam avatar and drawn with the overlay tools. A menu-bar app: tray, Cmd+Alt+P, no Dock icon.
- * The dev composition lives in index.ts and is untouched by this file. See INTEGRATION.md section 10.
+ * The dev composition lives in index.ts and is untouched by this file.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
