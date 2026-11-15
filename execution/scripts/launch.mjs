@@ -103,6 +103,12 @@ async function main() {
     await node('node_modules/tsx/dist/cli.mjs', ['scripts/page-bridge-e2e.ts']);
     return;
   }
+  if (mode === 'serve') {
+    // Headless: no window. Another program on this machine starts and watches tasks.
+    await ensureNative(root);
+    await node('node_modules/tsx/dist/cli.mjs', ['scripts/serve.ts']);
+    return;
+  }
   if (mode === 'build' || mode === 'package') {
     const nativeDir = await ensureNative(root);
     await node('node_modules/typescript/bin/tsc', ['--noEmit']);
