@@ -49,8 +49,8 @@ with the same elements, so there is one screen read per session boundary.
 ## Memory
 
 Memory belongs to one task. It is the ordered list of `{ assignment, result }` pairs, sent to Luna as a
-stable prefix with the current screen last. When the list passes about 48,000 characters the oldest pairs are
-dropped. Refused steps and retries are not stored.
+stable prefix with the current screen last. Nothing is dropped while the task runs. Refused steps and retries
+are not stored.
 
 One request is linked to the next by the caller: a task accepts a short `context`, and its final state
 carries `completion` (summary, facts, location) to pass back. Nothing is written to disk except traces.

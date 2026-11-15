@@ -300,15 +300,15 @@ describe('Luna and the sessions she runs', () => {
     expect(traces.filter(t => t.kind === 'session_end')).toHaveLength(1);
   });
 
-  it('keeps going for as many sessions as Luna asks for', async () => {
+  it('keeps going for as many sessions as Luna asks for, and never drops one from her memory', async () => {
     const desk = new Desk();
     const { provider, lunaRequests } = models(act, (_request, call) => call <= 40 ? { next: 'continue' } : { next: 'finish', message: 'Done.' });
     const { host, state } = makeHost();
     await new Orchestrator(desk, provider).advance(host, signal());
     expect(state.status).toBe('completed');
     expect(desk.model.sent).toBe(40);
-    expect(lunaRequests.at(-1)!.history.length).toBeGreaterThan(0);
-    expect(JSON.stringify(lunaRequests.at(-1)!.history).length).toBeLessThanOrEqual(48_000);
+    // Luna keeps every session of the task in view.
+    expect(lunaRequests.at(-1)!.history).toHaveLength(40);
   });
 
   it('takes "blocked" as Luna\'s decision and says so without asking anyone', async () => {

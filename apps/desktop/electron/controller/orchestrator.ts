@@ -7,8 +7,6 @@ import { NativeError } from '../desktop/native-client';
 import { BrokerError, type DecisionProvider } from '../services/decision-client';
 import { Navigator, type Host } from './navigator';
 
-/** Roughly what Luna is shown of earlier sessions. Beyond it the oldest are dropped. */
-const HISTORY_CHARS = 48_000;
 /** The first wait after Luna fails to answer; it doubles up to 30 s. Tests shorten it. */
 export const RETRY = { baseMs: 2000 };
 
@@ -20,7 +18,7 @@ export const RETRY = { baseMs: 2000 };
 export class Orchestrator {
   private taskId?: string;
   private navigator: Navigator;
-  /** Memory of this task: what each session was asked and what it reported. */
+  /** Memory of this task: what every session was asked and what it reported. Nothing is dropped while the task runs. */
   private history: OrchestratorRequest['history'] = [];
   private plan: PlanItem[] = [];
   private mission?: Mission;
@@ -69,7 +67,6 @@ export class Orchestrator {
       if (!result) return;
       host.trace?.('session_end', { assignment: this.mission, result });
       this.history.push({ assignment: this.mission, result });
-      while (this.history.length > 1 && JSON.stringify(this.history).length > HISTORY_CHARS) this.history.shift();
       this.mission = undefined;
     }
   }
