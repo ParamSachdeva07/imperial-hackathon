@@ -51,13 +51,51 @@ export function agentDefinition(toolIds: string[] = []) {
   };
 }
 
+type Json = Record<string, unknown>;
+
+/**
+ * ElevenLabs accepts a small subset of JSON Schema for tool parameters: every property has a plain `type` and a
+ * description, with no unions or constants. This folds our schemas into that subset: a union of objects becomes one
+ * object holding every variant's fields, and a constant becomes a one-value enum. Our own validators still check
+ * the real shape when the tool runs.
+ */
+export function elevenSchema(schema: unknown, name = "value"): Json {
+  const s = (schema ?? {}) as Json;
+  const describe = (extra = ""): string => [typeof s.description === "string" ? s.description : name, extra].filter(Boolean).join(" ");
+  const variants = (s.anyOf ?? s.oneOf) as unknown[] | undefined;
+  if (Array.isArray(variants)) {
+    const real = variants.filter((v) => (v as Json).type !== "null").map((v) => elevenSchema(v, name));
+    if (real.length === 1) return { ...real[0], description: describe() };
+    if (real.every((v) => v.type === "object")) {
+      const properties: Record<string, Json> = {};
+      for (const v of real)
+        for (const [key, prop] of Object.entries((v.properties ?? {}) as Record<string, Json>)) {
+          const seen = properties[key];
+          if (!seen) properties[key] = { ...prop };
+          else if (Array.isArray(seen.enum) && Array.isArray(prop.enum)) seen.enum = [...new Set([...seen.enum, ...prop.enum])];
+        }
+      const required = real.map((v) => (v.required ?? []) as string[]).reduce((a, b) => a.filter((k) => b.includes(k)));
+      return { type: "object", description: describe("Give the fields of one of its forms."), properties, required };
+    }
+    return { ...real[0], description: describe() };
+  }
+  if ("const" in s) return { type: typeof s.const === "number" ? "number" : typeof s.const === "boolean" ? "boolean" : "string", description: describe(), enum: [s.const] };
+  const type = Array.isArray(s.type) ? (s.type as string[]).find((t) => t !== "null") : (s.type as string | undefined);
+  if (type === "object" || s.properties) {
+    const properties = Object.fromEntries(Object.entries((s.properties ?? {}) as Json).map(([key, prop]) => [key, elevenSchema(prop, key)]));
+    return { type: "object", description: describe(), properties, required: ((s.required ?? []) as string[]).filter((k) => k in properties) };
+  }
+  if (type === "array") return { type: "array", description: describe(), items: elevenSchema(s.items, name + " item") };
+  return { type: type ?? "string", description: describe(), ...(Array.isArray(s.enum) ? { enum: s.enum } : {}) };
+}
+
 export function toolConfigs() {
   return [...exportToolDefinitions({}), ...EXECUTION_TOOLS, LOOK_AT_SCREEN].map((t) => ({
     type: "client",
     name: t.name,
     description: t.description,
     expects_response: true,
-    parameters: t.parameters,
+    parameters: elevenSchema(t.parameters, t.name),
   }));
 }
 
