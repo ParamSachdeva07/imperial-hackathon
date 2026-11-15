@@ -7,8 +7,6 @@ import { WorkspaceDesktopBridge } from '../apps/desktop/electron/desktop/workspa
 import type { DesktopCandidate, DesktopObservation } from '../packages/contracts/src/index';
 import { rankApplicationPaths } from '../apps/desktop/electron/desktop/app-discovery';
 import { NativeError } from '../apps/desktop/electron/desktop/native-client';
-import { desktopCandidates } from '../apps/desktop/electron/controller/desktop-candidates';
-import { TaskInputSchema } from '../packages/contracts/src/index';
 const dirs: string[] = [];
 class StubNative extends WorkspaceDesktopBridge {
   calls: { args: string[]; input?: string }[] = [];
@@ -175,18 +173,6 @@ describe('General native dispatch', () => {
     expect(context).toEqual({ app: 'Example', windowId: 'suggestion-popup', surface: 'window' });
     expect(bridge.calls.some((c) => c.args[0] === 'focus-window' || c.args[0] === 'press')).toBe(false);
   });
-  it('reads an observed window without sending desktop input', async () => {
-    const bridge = new StubNative();
-    const context = await bridge.act(
-      { ...candidate, operation: 'READ_WINDOW' },
-      observation,
-      undefined,
-      false,
-      new AbortController().signal,
-    );
-    expect(context.windowId).toBe('w1');
-    expect(bridge.calls).toHaveLength(0);
-  });
   it('keeps the selected window when an autocomplete popup appears', async () => {
     const bridge = new StubNative();
     bridge.popup = true;
@@ -280,19 +266,7 @@ describe('On-demand native scopes', () => {
     expect(args[args.indexOf('--max-depth') + 1]).toBe('3');
     expect(args).toContain('--skeleton');
     expect(o.snapshots[0].elements[0].childrenCount).toBe(NATIVE_READ_NODE_BUDGET + 1);
-    const candidates = desktopCandidates(
-      o,
-      TaskInputSchema.parse({ goal: 'Compose a draft', provider: 'jev' }),
-    );
-    expect(candidates.some((c) => c.operation === 'INSPECT_REGION' && c.name === 'Composer')).toBe(true);
-    const context = await bridge.act(
-      candidates.find((c) => c.operation === 'INSPECT_REGION')!,
-      o,
-      undefined,
-      false,
-      new AbortController().signal,
-    );
-    expect(context.scopePath).toEqual([{ ref: '@s1:e1', name: 'Composer' }]);
+    const context = { ...o.context, rootRef: '@s1:e1', scopePath: [{ ref: '@s1:e1', name: 'Composer' }] };
     await bridge.observe(context);
     const drill = bridge.calls.filter((c) => c.args[0] === 'snapshot').at(-1)!.args;
     expect(drill).toContain('--root');

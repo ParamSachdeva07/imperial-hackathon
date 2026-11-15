@@ -7,10 +7,6 @@ export function useDesktopSession() {
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const [maxSteps, setMaxSteps] = useState(160);
-  const [supervisorEvery, setSupervisorEvery] = useState(12);
-  const [controller, setController] = useState<'v1' | 'v2'>('v2');
-  const [grounding, setGrounding] = useState<'planner' | 'jev'>('planner');
 
   async function refreshHealth() {
     try {
@@ -27,14 +23,11 @@ export function useDesktopSession() {
       return;
     }
     const unsubscribe = window.desktop.onState(setState);
-    void window.desktop
-      .state()
-      .then((current) => {
-        if (!current.ok) throw new Error(current.error);
-        setState(current.data);
-        setReady(true);
-      })
-      .catch((error) => setError(error.message));
+    void window.desktop.state().then((current) => {
+      if (!current.ok) throw new Error(current.error);
+      setState(current.data);
+      setReady(true);
+    }).catch((error) => setError(error.message));
     void refreshHealth();
     return unsubscribe;
   }, []);
@@ -52,12 +45,9 @@ export function useDesktopSession() {
       setPending(false);
     }
   }
-  const busy = !!state?.busy || pending;
-  const connected =
-    !!health?.native.available &&
-    health.native.accessibility === 'granted' &&
-    !!health.backend.available &&
-    health.backend.keyConfigured && !!health.backend.supervisorConfigured;
+  const backend = health?.backend;
+  const modelsConfigured = !!backend?.navigatorConfigured && !!backend.orchestratorConfigured;
+  const connected = !!health?.native.available && health.native.accessibility === 'granted' && !!backend?.available && modelsConfigured;
   // Permissions and keys are changed outside the app. Notice the change without a manual check.
   useEffect(() => {
     if (connected || !window.desktop) return;
@@ -70,41 +60,11 @@ export function useDesktopSession() {
     };
   }, [connected]);
   const waiting = state?.status === 'needs_user' && !state.busy;
-  const run = (goal: string) =>
-    command(() => waiting ? window.desktop.answer(goal) :
-      (state?.busy || state?.status === 'paused' ? window.desktop.replace : window.desktop.start)(
-            {
-              goal,
-              mode: 'desktop',
-              provider: 'jev',
-              text: '',
-              app: '',
-              allowPhysical: false,
-              // Applies to standalone controllers; orchestration renews its bounded sessions.
-              maxSteps,
-              supervisorEnabled: true,
-              supervisorEvery,
-              inputs: [],
-              // Only sent for the new controller, so the default request is unchanged.
-              ...(controller === 'v2' ? { controller, grounding, orchestration: true, confirmIrreversible: true } : {}),
-            },
-            false,
-          ),
-    );
   return {
-    state,
-    health,
-    ready,
-    busy,
-    pending,
-    connected,
-    error,
-    run,
-    maxSteps, setMaxSteps,
-    supervisorEvery, setSupervisorEvery,
-    controller, setController,
-    grounding, setGrounding,
-    waiting,
+    state, health, ready, pending, connected, modelsConfigured, error, waiting,
+    busy: !!state?.busy || pending,
+    /** A new instruction replaces whatever is running. */
+    run: (goal: string) => command(() => (state?.busy || waiting ? window.desktop.replace : window.desktop.start)({ goal })),
     answer: (text: string) => command(() => window.desktop.answer(text)),
     refreshHealth,
     stop: () => command(() => window.desktop.cancel()),

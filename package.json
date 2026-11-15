@@ -12,15 +12,12 @@
     "dev": "node scripts/launch.mjs dev",
     "build": "node scripts/launch.mjs build",
     "test": "node scripts/launch.mjs test",
-    "test:native": "node scripts/launch.mjs native",
     "test:extension": "node scripts/launch.mjs extension",
-    "eval": "node scripts/launch.mjs eval",
-    "eval:replay": "node scripts/launch.mjs replay",
     "typecheck": "tsc --noEmit",
-    "package:mac": "node scripts/launch.mjs package"
+    "package:mac": "node scripts/launch.mjs package",
+    "fixture:wordle": "node scripts/wordle-fixture.mjs"
   },
   "dependencies": {
-    "agent-browser": "0.43.0",
     "agent-desktop": "1.3.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",

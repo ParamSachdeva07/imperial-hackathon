@@ -6,12 +6,10 @@ import { PageBridgeServer } from '../apps/desktop/electron/page/page-bridge-serv
 import { PageUnavailable, PageWorkspace } from '../apps/desktop/electron/page/page-workspace';
 import { PageAwareBridge } from '../apps/desktop/electron/page/page-aware-bridge';
 import { validatedUrl, type WorkspaceBridge } from '../apps/desktop/electron/desktop/workspace';
-import { ObservationIndex } from '../apps/desktop/electron/controller/v2/observation-index';
-import { PlannerLoop, V2_LIMITS, type PlannerHost } from '../apps/desktop/electron/controller/v2/planner-loop';
+import { ObservationIndex } from '../apps/desktop/electron/controller/observation-index';
 import type { DecisionProvider } from '../apps/desktop/electron/services/decision-client';
-import { TaskInputSchema, type ControllerState, type DesktopContext, type DesktopObservation, type PlanRequest, type PlanStep } from '../packages/contracts/src/index';
+import { type ControllerState, type DesktopContext, type DesktopObservation, type PlanRequest, type PlanStep } from '../packages/contracts/src/index';
 
-beforeAll(() => { V2_LIMITS.settleIntervalMs = 1; V2_LIMITS.settleCapMs = 30; });
 const ORIGIN = 'chrome-extension://' + PAGE_BRIDGE_EXTENSION_ID;
 const servers: PageBridgeServer[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.stop(); });
@@ -213,78 +211,19 @@ describe('routing between the page and accessibility', () => {
     expect(native.opened).toEqual(['https://example.test/']);
     await bridge.stop();
   });
+  it('runs a web search through the extension, and offers it only while the extension is connected', async () => {
+    const bridge = await start(command => command.type === 'search' ? { tab: { id: 9, url: 'https://search.test/?q=x', title: 'Results' } } : pageReply());
+    const activated: string[] = [];
+    const chrome = new PageAwareBridge(new Native(), new PageWorkspace(bridge.server), async () => 'com.apple.Safari', async bundle => activated.push(bundle));
+    expect(chrome.canSearchWeb()).toBe(true);
+    expect(await chrome.searchWeb('UKVI view immigration status', new AbortController().signal)).toEqual({ driver: 'browser', app: 'Google Chrome' });
+    expect(bridge.commands.at(-1)).toMatchObject({ type: 'search', text: 'UKVI view immigration status' });
+    expect(activated).toEqual(['com.google.chrome']);
+    await bridge.stop();
+    expect(new PageAwareBridge(new Native(), new PageWorkspace(new PageBridgeServer(0))).canSearchWeb()).toBe(false);
+  });
 });
 
-describe('opening an address', () => {
-  it('refuses invented homepages and deep links but allows the exact user-supplied URL', async () => {
-    const native = new Native();
-    const opened: string[] = [];
-    native.openUrl = async (url: string) => { opened.push(url); return { app: 'Google Chrome' }; };
-    const requests: PlanRequest[] = [];
-    const provider: DecisionProvider = { decide: async () => { throw new Error('unused'); }, plan: async request => {
-      requests.push(request);
-      const base = { taskId: request.taskId, observationId: request.observationId, model: 'scripted',
-        requirements: [{ id: 'r1', text: 'Offers are shown', irreversible: false, kind: 'outcome' as const }], reconciliations: [], statuses: [],
-        requirementId: 'r1', operation: 'OPEN_URL', target: '', targetDescription: '', text: '', textIsLiteral: false, key: '', direction: '',
-        risk: 'reversible', repeat: false, expect: '', query: '', scope: '', waitMs: 0, message: '' };
-      const urls = ['https://shop.test/offers/chicken', 'https://shop.test/', 'https://given.test/a/b'];
-      return (requests.length <= 3 ? { ...base, kind: 'act', text: urls[requests.length - 1] } : { ...base, kind: 'blocked', operation: '', message: 'stop' }) as PlanStep;
-    } };
-    const state: ControllerState = { taskId: '9e5a4f61-a2c8-4e55-b80c-c1e3e094f5fe', status: 'idle', busy: true, document: null, snapshot: null,
-      decision: null, step: 0, verifiedText: null, events: [], input: TaskInputSchema.parse({ provider: 'jev', goal: 'See offers, also check https://given.test/a/b', controller: 'v2', maxSteps: 10 }) };
-    await new PlannerLoop(native, provider).advance({ state, status: () => {}, event: () => {} }, false, new AbortController().signal);
-    expect(requests[1].issues.join(' ')).toContain('neither supplied by the user nor observed');
-    expect(opened).toEqual(['https://given.test/a/b']);
-  });
-  it('accepts only ordinary web addresses', () => {
-    expect(validatedUrl(' https://en.wikipedia.org ')).toBe('https://en.wikipedia.org/');
-    for (const bad of ['wikipedia.org', 'file:///etc/passwd', 'javascript:alert(1)', 'https://user:secret@example.test/', 'x-apple.systempreferences:com.apple.preference'])
-      expect(() => validatedUrl(bad), bad).toThrow();
-  });
-  it('runs a whole task on a page: open the address, fill the field, click, cite the result', async () => {
-    let query = '', submitted = false;
-    const reply = () => { const base = pageReply(); const field: any = base.page.nodes.children[0].children![0];
-      field.value = query;
-      base.page.nodes.children[2].name = submitted ? '3 results for ' + query : 'Type a search';
-      if (submitted) { base.page.title = query + ' - Example'; base.page.nodes.name = query + ' - Example'; base.tab.title = query + ' - Example'; }
-      return base; };
-    const bridge = await start(command => {
-      if (command.type === 'snapshot') return reply();
-      if (command.type === 'open_url') return { tab: { id: 7, url: command.url, title: 'Search - Example' } };
-      if (command.operation === 'setValue') { query = command.argument; return { dispatched: true, observedValue: query }; }
-      if (command.operation === 'click') { submitted = true; return { dispatched: true }; }
-      return { dispatched: false, message: 'unexpected' };
-    });
-    const native = new Native();
-    const aware = new PageAwareBridge(native, new PageWorkspace(bridge.server), async () => 'com.google.chrome', async () => undefined);
-    const requests: PlanRequest[] = [];
-    const find = (request: PlanRequest, label: string) => request.elements.find(e => e.label.includes(label))!.id;
-    const provider: DecisionProvider = { decide: async () => { throw new Error('unused'); }, plan: async request => {
-      requests.push(structuredClone(request));
-      const base = { taskId: request.taskId, observationId: request.observationId, model: 'scripted',
-        requirements: [{ id: 'r1', text: 'Search results for desks are shown', irreversible: false, kind: 'outcome' as const }], reconciliations: [], statuses: [],
-        requirementId: 'r1', operation: '', target: '', targetDescription: '', text: '', textIsLiteral: false, key: '', direction: '',
-        risk: 'reversible', repeat: false, expect: '', query: '', scope: '', waitMs: 0, message: '' };
-      const n = requests.length;
-      return (n === 1 ? { ...base, kind: 'act', operation: 'OPEN_URL', text: 'https://example.test/' }
-        : n === 2 ? { ...base, kind: 'act', operation: 'SET_VALUE', target: find(request, 'Search the site'), text: 'desks', textIsLiteral: true, reconciliations: [{ effectId: 'fx1', outcome: 'confirmed', evidence: [find(request, 'Search the site')] }] }
-        : n === 3 ? { ...base, kind: 'act', operation: 'CLICK', target: request.elements.find(e => e.label === 'Search')!.id }
-        : { ...base, kind: 'finish', statuses: [{ requirementId: 'r1', status: 'evidenced', evidence: [find(request, '3 results for desks')], checks: [] }] }) as PlanStep;
-    } };
-    const state: ControllerState = { taskId: '9e5a4f61-a2c8-4e55-b80c-c1e3e094f5fe', status: 'idle', busy: true, document: null, snapshot: null,
-      decision: null, step: 0, verifiedText: null, events: [], input: TaskInputSchema.parse({ provider: 'jev', goal: 'Search https://example.test/ for desks', controller: 'v2', maxSteps: 12 }) };
-    const host: PlannerHost = { state, status: status => { state.status = status; }, event: () => {} };
-    await new PlannerLoop(aware, provider).advance(host, false, new AbortController().signal);
-    expect(state.status).toBe('completed');
-    expect(bridge.commands.filter(c => c.type !== 'snapshot').map(c => c.operation || c.type)).toEqual(['open_url', 'setValue', 'click']);
-    expect(native.acts).toEqual([]);
-    expect(requests[1].observation.surface).toBe('page');
-    expect(requests[1].allowedKeys).toEqual(['return', 'escape']);
-    // The field it typed into is tagged as changed but was not what proved the result.
-    expect(state.requirements?.[0].status).toBe('evidenced');
-    await bridge.stop();
-  });
-});
 
 describe('what a failure proves', () => {
   it('treats a lost reply as unknown, never as nothing sent', async () => {

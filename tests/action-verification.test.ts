@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ActionVerifier, type NativeRunner } from '../apps/desktop/electron/desktop/action-verification';
 import { NativeError } from '../apps/desktop/electron/desktop/native-client';
-import { WriteHistory } from '../apps/desktop/electron/controller/write-history';
 import type { DesktopCandidate, Element } from '../packages/contracts/src/index';
 
 const target: Element = {
@@ -240,34 +239,5 @@ describe('Action reconciliation without replay', () => {
     );
     expect(result.report.verification).toBe('reconciled');
     expect(calls).toBe(1);
-  });
-});
-describe('Write history', () => {
-  it('suppresses a verified insertion only while the same target still has the verified value', () => {
-    const history = new WriteHistory();
-    const candidate = { ...action, operation: 'TYPE' as const };
-    history.record(0, candidate, target, 'hello', 'hello');
-    expect(history.alreadyApplied(0, candidate, { ...target, ref: '@s2:e8', value: 'hello' }, 'hello')).toBe(
-      true,
-    );
-    expect(
-      history.alreadyApplied(
-        0,
-        { ...candidate, operation: 'SET_VALUE' },
-        { ...target, value: '\ufffc', path: 'new root' },
-        'hello',
-      ),
-    ).toBe(false);
-    expect(history.alreadyApplied(1, candidate, { ...target, value: 'hello' }, 'hello')).toBe(false);
-    expect(history.alreadyApplied(0, candidate, { ...target, value: '' }, 'hello')).toBe(false);
-    expect(history.alreadyApplied(0, candidate, { ...target, value: 'a later edit' }, 'hello')).toBe(false);
-    expect(
-      history.alreadyApplied(
-        0,
-        { ...candidate, windowId: 'different' },
-        { ...target, value: 'hello' },
-        'hello',
-      ),
-    ).toBe(false);
   });
 });

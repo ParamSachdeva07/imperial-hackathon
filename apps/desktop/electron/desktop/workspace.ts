@@ -1,4 +1,3 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -28,6 +27,9 @@ export interface WorkspaceBridge {
   observe(context: DesktopContext, signal?: AbortSignal, options?: ObserveOptions): Promise<DesktopObservation>;
   /** Hand a web address to the system, which opens it in the user's own browser. */
   openUrl?(url: string, signal: AbortSignal): Promise<DesktopContext>;
+  /** Run a query in the browser's own search engine, in a new tab. */
+  searchWeb?(text: string, signal: AbortSignal): Promise<DesktopContext>;
+  canSearchWeb?(): boolean;
   /** Read one live property of an observed element without acting on it. */
   probe?(ref: string, property: 'states' | 'bounds', signal?: AbortSignal): Promise<unknown>;
   act(
@@ -189,7 +191,7 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
           JSON.stringify(context.appSearch) +
           ': ' +
           results.length +
-          ' verified installed app(s). Select the matching OPEN_APP; do not assume it has opened yet.',
+          ' installed app(s) found. Open the matching one; it is not open yet.',
       );
       return observation;
     }
@@ -199,7 +201,7 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
       nativeWindows = await this.run(['list-windows', '--app', context.app], undefined, signal);
     } catch (error) {
       if (error instanceof NativeError && error.code === 'APP_NOT_FOUND') {
-        notices.push('App is not running. Choose OPEN_APP to launch it.');
+        notices.push('This app is not running. Open it first.');
         return observation;
       }
       throw error;
@@ -374,12 +376,12 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
       );
     if (main?.elements.some((e) => e.childrenCount))
       notices.push(
-        'Only this shallow hierarchy chunk was fetched. INSPECT_REGION fetches children of a selected branch; unexpanded children are not absent. GO_PARENT and GO_ROOT can read previous scopes.',
+        'Only part of this window was read. Regions marked unread hold more controls; read a region scope to load them. Not listed does not mean absent.',
       );
     // Never target a window behind an open overlay. Menus are an explicit read choice.
     if (main && !main.complete)
       notices.push(
-        'Native tree is incomplete. Inspect a region or change surface; mutation choices are disabled for this tree.',
+        'This read is incomplete, so nothing can be acted on from it. Read a region or another surface.',
       );
     return observation;
   }
@@ -411,24 +413,11 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
       return { app: app.name, windowId: result.window?.id };
     }
     if (candidate.app !== context.app) throw new Error('Action app does not match the observed app.');
-    if (candidate.operation === 'WAIT') {
-      await delay(750, undefined, { signal });
-      return context;
-    }
-    if (candidate.operation === 'READ_WINDOW') {
-      if (!observation.windows.some((window) => window.id === candidate.windowId))
-        throw new Error('Window was not observed.');
-      return { app: candidate.app, windowId: candidate.windowId, surface: 'window' };
-    }
     if (candidate.operation === 'FOCUS_WINDOW') {
       if (!observation.windows.some((w) => w.id === candidate.windowId))
         throw new Error('Window was not observed.');
       await this.run(['focus-window', '--app', candidate.app, '--window-id', candidate.windowId!]);
       return { app: candidate.app, windowId: candidate.windowId, surface: 'window' };
-    }
-    if (candidate.operation === 'READ_SURFACE') {
-      if (!surfaces.includes(candidate.surface || '')) throw new Error('Unsupported surface.');
-      return { app: candidate.app, windowId: context.windowId, surface: candidate.surface };
     }
     const snapshot = observation.snapshots.find((s) => s.id === candidate.snapshotId);
     if (!snapshot) throw new Error('Action snapshot was not observed.');
@@ -473,18 +462,6 @@ export class WorkspaceDesktopBridge extends NativeClient implements WorkspaceBri
     }
     const expected = snapshot.elements.find((e) => e.ref === candidate.targetRef);
     if (!expected) throw new Error('Action target is outside its snapshot.');
-    if (candidate.operation === 'INSPECT_REGION') {
-      if (expected.ref === context.rootRef) throw new Error('This region is already the current root.');
-      const scopePath = [
-        ...(context.scopePath || []),
-        {
-          ref: expected.ref,
-          name: expected.name || expected.description || expected.nativeId || expected.role,
-        },
-      ];
-      if (scopePath.length > 50) throw new Error('Hierarchy depth limit reached.');
-      return { ...context, rootRef: expected.ref, scopePath };
-    }
     if (!snapshot.complete) throw new Error('No mutations from incomplete trees.');
     if (candidate.operation === 'FOCUS_AND_PASTE') {
       if (

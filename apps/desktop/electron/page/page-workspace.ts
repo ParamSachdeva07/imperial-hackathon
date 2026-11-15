@@ -120,4 +120,10 @@ export class PageWorkspace {
     await this.command('open_url', { url, newTab: true, waitMs: 6000 }, 9000, signal);
     return { driver: 'browser', app };
   }
+
+  /** The browser's default search engine, so no results address is ever constructed. */
+  async searchWeb(text: string, app: string, signal: AbortSignal): Promise<DesktopContext> {
+    await this.command('search', { text: text.slice(0, 500), waitMs: 6000 }, 9000, signal);
+    return { driver: 'browser', app };
+  }
 }

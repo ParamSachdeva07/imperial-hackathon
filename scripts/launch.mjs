@@ -103,17 +103,6 @@ async function main() {
     await node('node_modules/tsx/dist/cli.mjs', ['scripts/page-bridge-e2e.ts']);
     return;
   }
-  if (mode === 'eval' || mode === 'replay') {
-    // Live evaluation drives real applications; see scripts/eval/README.md before running it.
-    if (mode === 'eval') await ensureNative(root);
-    await node('node_modules/tsx/dist/cli.mjs', ['scripts/eval/' + (mode === 'eval' ? 'run.ts' : 'replay.ts'), ...process.argv.slice(3)]);
-    return;
-  }
-  if (mode === 'native') {
-    await ensureNative(root);
-    await node('node_modules/tsx/dist/cli.mjs', ['scripts/native-smoke.ts']);
-    return;
-  }
   if (mode === 'build' || mode === 'package') {
     const nativeDir = await ensureNative(root);
     await node('node_modules/typescript/bin/tsc', ['--noEmit']);
@@ -140,12 +129,7 @@ async function main() {
           /^\/docs/,
           /^\/scripts/,
           /^\/node_modules\/agent-desktop/,
-          /^\/node_modules\/agent-browser/,
         ],
-        extendInfo: {
-          NSAppleEventsUsageDescription:
-            'Create and inspect TextEdit test documents for accessibility navigation.',
-        },
       });
       console.log(apps.join('\n'));
     }
@@ -222,7 +206,6 @@ async function main() {
       DECISION_API_URL: apiUrl,
       DECISION_API_TOKEN: token,
     };
-    delete electronEnv.TYPESAFE_API_KEY;
     delete electronEnv.OPENAI_API_KEY;
     delete electronEnv.CEREBRAS_API_KEY;
     delete electronEnv.ELECTRON_RUN_AS_NODE;
@@ -232,7 +215,7 @@ async function main() {
       JSON.stringify({ uiUrl, apiUrl, pid: desktop.pid }, null, 2),
     );
     desktop.on('exit', (code) => clean(code ?? 0));
-    console.log('Navigation lab is running. Closing the window stops its local services.');
+    console.log('Desktop Assistant is running. Closing the window stops its local services.');
   } catch (error) {
     console.error(error.message);
     clean(1);

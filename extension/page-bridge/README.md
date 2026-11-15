@@ -17,7 +17,7 @@ After the files in this folder change, press the reload arrow on the extension's
 
 - It can read and change every page you have open in this Chrome profile, including sites you are signed in to. That is what makes it useful and it is also the risk. Remove it from `chrome://extensions` at any time.
 - It talks only to `http://127.0.0.1:8767`, the app on this Mac. It sends nothing anywhere else and stores nothing.
-- It does nothing by itself. It asks the app for one command at a time and runs only: read the active tab, perform one operation on one element, open an address, switch tab.
+- It does nothing by itself. It asks the app for one command at a time and runs only: read the active tab, perform one operation on one element, open an address, run a search in your default search engine, switch tab.
 - It never reads the value of a password field and never types into one.
 - The app refuses requests that do not come from this extension's origin, which a web page cannot forge. Another program running on this Mac under your account could pretend to be the extension; such a program already has your account's access.
 

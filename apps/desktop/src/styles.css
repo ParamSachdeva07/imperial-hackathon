@@ -285,9 +285,6 @@ pre {
 .compact .current-message { display: none; }
 .compact .error-message { margin: 5px 0 0; padding: 6px; }
 
-.run-settings { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
-.run-settings label { display: flex; flex-direction: column; gap: .4rem; font-size: 1rem; }
-.run-settings input { width: 9rem; padding: .5rem; color: #111827; background: #fff; border: 1px solid #64748b; border-radius: .4rem; font: inherit; }
 
 .question {
   margin: 0 0 6px;
@@ -297,8 +294,4 @@ pre {
   color: #3d2a00;
   font-size: 12px;
   line-height: 1.35;
-}
-.run-settings select {
-  font: inherit;
-  max-width: 190px;
 }

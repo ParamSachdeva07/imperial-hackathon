@@ -55,4 +55,12 @@ export class PageAwareBridge implements WorkspaceBridge {
     if (!this.native.openUrl) throw new Error('Opening an address directly is not available.');
     return this.native.openUrl(url, signal);
   }
+
+  canSearchWeb() { return this.page.connected; }
+  async searchWeb(text: string, signal: AbortSignal): Promise<DesktopContext> {
+    this.pageWasLast = true;
+    const context = await this.page.searchWeb(text, CHROME.name, signal);
+    await this.activate(CHROME.bundle).catch(() => undefined);
+    return context;
+  }
 }

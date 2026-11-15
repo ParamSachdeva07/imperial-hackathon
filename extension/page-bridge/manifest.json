@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Desktop Assistant Page Bridge",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Lets the Desktop Assistant app on this Mac read and act on the page in the active tab. It talks only to the app on 127.0.0.1.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxsMN9Thqjjrmjp0WyPrS3d8VVL2ShM8gEZq5bBbbJtYZbx2QYKSukHDEy/V6YFxCWKdjUrCkrSV4KDr0QcWHFi2M5asHak6j52rRpbWE3dDJW6f8+Vh0BApruoT5KNxziTJ04iSot1NMXK6t5fTe/3DTdraPu2vaxA/sTkTrjoa5uC5lQEEg2C5TfZts337Aq6QUsQlzNF1sSgNaIWGFvYMvpOBIUiy4++Rmdj3pDtF94JSj9+c3G5WbAqWmMyCY3w3oZVrXw/vBh0PdFGKnb82uNS5BDCKI0X8puXw3Z0AyhEcm+S02+2zTAHLpxPX+6VQBScPQJh9sGOPIXfeU7wIDAQAB",
   "permissions": [
     "tabs",
     "scripting",
-    "alarms"
+    "alarms",
+    "search"
   ],
   "host_permissions": [
     "<all_urls>"

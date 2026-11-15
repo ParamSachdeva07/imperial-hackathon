@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canFocusAndPaste, focusAndPaste } from '../apps/desktop/electron/desktop/focus-and-paste';
-import { desktopCandidates } from '../apps/desktop/electron/controller/desktop-candidates';
-import { WriteHistory } from '../apps/desktop/electron/controller/write-history';
 import {
-  TaskInputSchema,
   type DesktopCandidate,
   type DesktopObservation,
   type Element,
@@ -112,68 +109,8 @@ describe('Focus and paste', () => {
     expect(canFocusAndPaste({ ...target, bounds: undefined })).toBe(false);
     expect(canFocusAndPaste({ ...target, states: ['disabled'] })).toBe(false);
   });
-  it('shares duplicate history across paste, typing, and fresh refs', () => {
-    const history = new WriteHistory();
-    history.record(0, candidate, target, 'hello', 'hello');
-    expect(
-      history.alreadyApplied(
-        0,
-        { ...candidate, operation: 'TYPE' },
-        { ...target, ref: '@s2:e9', value: 'hello' },
-        'hello',
-      ),
-    ).toBe(true);
-    expect(history.alreadyApplied(0, candidate, target, 'hello')).toBe(false);
-    expect(history.alreadyApplied(1, candidate, target, 'hello')).toBe(false);
-  });
 });
 
-describe('Paste choice contract', () => {
-  const observation: DesktopObservation = {
-    id: 'obs',
-    capturedAt: 0,
-    context: { app: 'Example', windowId: 'w-1' },
-    applications: [],
-    windows: [],
-    notices: [],
-    snapshots: [
-      {
-        id: 's1',
-        app: 'Example',
-        windowId: 'w-1',
-        windowTitle: '',
-        capturedAt: 0,
-        complete: true,
-        elements: [target],
-      },
-    ],
-  };
-  it('offers exact input and goal-resolved choices without enabling semantic writes to disabled editors', () => {
-    const choices = desktopCandidates(
-      observation,
-      TaskInputSchema.parse({ provider: 'jev', goal: 'Fill editor', text: 'hello' }),
-    ).filter((action) => action.targetRef === target.ref);
-    expect(choices).toHaveLength(2);
-    expect(choices.every((action) => action.operation === 'FOCUS_AND_PASTE')).toBe(true);
-    expect(choices.some((action) => action.inputId === 'text_1')).toBe(true);
-    expect(choices.some((action) => action.inputFromGoal)).toBe(true);
-  });
-  it('requires a complete scope but permits new editors within existing windows', () => {
-    const incomplete = structuredClone(observation);
-    incomplete.snapshots[0].complete = false;
-    expect(
-      desktopCandidates(incomplete, TaskInputSchema.parse({ provider: 'jev', goal: 'Fill editor' })).some(
-        (action) => action.operation === 'FOCUS_AND_PASTE',
-      ),
-    ).toBe(false);
-    expect(
-      desktopCandidates(
-        observation,
-        TaskInputSchema.parse({ provider: 'jev', goal: 'Create a new document and write hello' }),
-      ).some((action) => action.operation === 'FOCUS_AND_PASTE'),
-    ).toBe(true);
-  });
-});
 
 describe('Native identifier namespaces', () => {
   it('preserves the identifier kind through flat and hierarchical observations and paste dispatch', async () => {

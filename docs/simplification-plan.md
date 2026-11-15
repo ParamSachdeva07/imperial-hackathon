@@ -2,6 +2,16 @@
 
 Written 15 November 2026 against commit `2e16da4` on branch `orchestrator-snapshot`.
 
+**Status: implemented.** The result is described in [architecture.md](architecture.md). Differences from
+the plan as written:
+
+- The phases landed together, with the deletions first, because every phase rewrote the same two files.
+- The Jev target-selection arm and the old evaluation harness were removed with the old controller.
+- The literal-text flag was removed instead of widened: it only ever refused text the model had flagged.
+- The stall exit for Luna was not added. Her decisions can no longer be refused, so that loop cannot occur.
+- Step-by-step ("Step") mode and the unused `applications`, `prepare` and `inspect` calls were removed.
+- Web search through the extension is unit-tested but has not been run in a real Chrome yet.
+
 Goal: one Luna orchestrator that plans a request, runs controller sessions one after another, and
 decides what context each session receives from the previous one. Nothing else. Each phase below
 must keep or improve function, speed and reliability, and leaves all tests passing.

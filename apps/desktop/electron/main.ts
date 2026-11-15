@@ -1,10 +1,9 @@
 import { app, BrowserWindow, ipcMain, shell, globalShortcut, screen, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { NavigationController } from './controller/navigation';
-import { NativeDesktopBridge } from './desktop/native';
 import { resolveNativeBinary } from './desktop/native-binary';
 import { WorkspaceDesktopBridge } from './desktop/workspace';
-import { JevDecisionClient, LocalTestPolicy } from './services/decision-client';
+import { DecisionClient } from './services/decision-client';
 import { defaultBrowserBundle } from './desktop/app-discovery';
 import { PageBridgeServer } from './page/page-bridge-server';
 import { PageWorkspace } from './page/page-workspace';
@@ -13,13 +12,12 @@ import type { ApiResult } from '../../../packages/contracts/src/index';
 
 app.setName('Desktop Assistant Lab');
 const root = process.env.ASSISTANT_ROOT || path.resolve(__dirname, '../../..');
-const api = new JevDecisionClient(
+const api = new DecisionClient(
   process.env.DECISION_API_URL || 'http://127.0.0.1:8765',
   process.env.DECISION_API_TOKEN || '',
 );
 let window: BrowserWindow;
 let controller: NavigationController;
-let bridge: NativeDesktopBridge;
 const devUrl = process.env.ASSISTANT_RENDERER_URL;
 function trusted(event: IpcMainInvokeEvent) {
   if (
@@ -47,15 +45,13 @@ app.whenReady().then(() => {
     resolveNativeBinary(root, process.resourcesPath),
     process.env.ASSISTANT_NATIVE_STATE || path.join(app.getPath('userData'), 'native-state'),
   );
-  bridge = new NativeDesktopBridge(workspace.binary, workspace.stateRoot);
-  // The browser extension, when installed, lets the planner controller read Chrome pages directly.
-  // If its port is taken or the extension is absent, everything runs through accessibility as before.
+  // The browser extension, when installed, reads and operates Chrome pages directly.
+  // If its port is taken or the extension is absent, everything runs through accessibility.
   const pageServer = new PageBridgeServer();
   if (process.env.ASSISTANT_PAGE_BRIDGE !== 'off') void pageServer.start();
   app.on('will-quit', () => pageServer.stop());
-  controller = new NavigationController(bridge, { jev: api, local: new LocalTestPolicy() }, workspace,
-    process.env.ASSISTANT_TRACE_DIR || path.join(app.getPath('userData'), 'traces'),
-    new PageAwareBridge(workspace, new PageWorkspace(pageServer), defaultBrowserBundle));
+  controller = new NavigationController(new PageAwareBridge(workspace, new PageWorkspace(pageServer), defaultBrowserBundle), api,
+    process.env.ASSISTANT_TRACE_DIR || path.join(app.getPath('userData'), 'traces'), defaultBrowserBundle);
   globalShortcut.register('CommandOrControl+Shift+.', () => controller.cancel());
   const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   window = new BrowserWindow({
@@ -114,24 +110,11 @@ app.whenReady().then(() => {
         },
       });
     });
-  handle('assistant:health', async () => ({ native: await bridge.health(), backend: await api.health(),
+  handle('assistant:health', async () => ({ native: await workspace.health(), backend: await api.health(),
     pageBridge: { connected: pageServer.connected, needsReload: pageServer.needsReload } }));
   handle('assistant:state', () => controller.state());
-  handle('assistant:applications', () => controller.applications());
-  handle('assistant:prepare', () => controller.prepare());
-  handle('assistant:inspect', () => controller.inspect());
-  handle('assistant:start', (input, singleStep) => {
-    if (typeof singleStep !== 'boolean') throw new Error('Invalid run mode.');
-    return controller.start(input, singleStep);
-  });
-  handle('assistant:replace', (input, singleStep) => {
-    if (typeof singleStep !== 'boolean') throw new Error('Invalid run mode.');
-    return controller.replace(input, singleStep);
-  });
-  handle('assistant:resume', (singleStep) => {
-    if (typeof singleStep !== 'boolean') throw new Error('Invalid run mode.');
-    return controller.resume(singleStep);
-  });
+  handle('assistant:start', (input) => controller.start(input));
+  handle('assistant:replace', (input) => controller.replace(input));
   handle('assistant:cancel', () => controller.cancel());
   handle('assistant:answer', (text) => controller.answer(text));
   handle('assistant:accessibility', async () => {

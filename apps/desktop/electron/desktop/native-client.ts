@@ -29,7 +29,7 @@ export class NativeClient {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
       const env: NodeJS.ProcessEnv = { ...process.env, AGENT_DESKTOP_HOME: this.stateRoot };
-      for (const credential of ['TYPESAFE_API_KEY', 'OPENAI_API_KEY', 'CEREBRAS_API_KEY', 'DECISION_API_TOKEN']) delete env[credential];
+      for (const credential of ['OPENAI_API_KEY', 'CEREBRAS_API_KEY', 'DECISION_API_TOKEN']) delete env[credential];
       const child = spawn(this.binary, args, {
         shell: false,
         windowsHide: true,

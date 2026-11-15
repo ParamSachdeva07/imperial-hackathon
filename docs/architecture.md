@@ -1,156 +1,94 @@
-# Desktop navigation architecture
-
-## Current runtime: orchestrated v2
-
-React overlay → restricted preload IPC → NavigationController → NavigationOrchestrator → persistent PlannerLoop → PageAwareBridge → native or page executor. FastAPI authenticates local model calls; credentials never reach the renderer or extension.
-
-The orchestrator alone owns milestone and task completion, as well as an explicit ordered milestone plan: each milestone has an objective, an observable completion condition, dependencies, and an optional branch condition. It assigns one milestone per bounded navigation session, normally up to eight decisions. It does not execute input. The navigator retrieves observations, chooses an operation and arguments, optionally asks Jev to ground the target, validates, dispatches once, settles and reconciles. The current configuration uses OpenAI gpt-6-luna with reasoning disabled and Priority service for the orchestrator, and Cerebras gpt-oss-120b with low reasoning for the navigator. ORCHESTRATOR_PROVIDER/MODEL/REASONING_EFFORT/SERVICE_TIER override the parent independently; vendor keys remain isolated. There are no action-confidence thresholds. The original Choice + Noul loop is retained behind the v1 selection.
-
-One task keeps one navigator, requirement ledger, action ledger and approval state. Orchestrated tasks have no total decision, session-count or elapsed-time cap. The parent declares all requirements; the navigator receives only its active milestone and cannot add obligations, evidence future milestones, or act on them. Each navigation session gets 1–12 decisions, including reads and rejected proposals, then yields its progress for the parent to assign the next concrete objective. Feedback-driven tasks can use many short cycles within one milestone. Standalone navigation retains its own requirement declaration, step budget and deadline. Invalid parent proposals return the validation error for correction without a retry-count cutoff. Stop or a replacement prompt aborts this correction loop as well as normal execution; verified completion, a model-reported concrete blocker, or an unrecoverable service error can still end a run. Reconfirming an already-evidenced milestone is a no-op and retains its original evidence. New user prompts still use the serialized cancel-and-replace path, so two sessions cannot control the desktop concurrently. Individual calls retain timeouts, and Stop remains available.
-
-### Session return contract
-
-`session-handoff.ts` builds a typed return from executor state, not a model-written summary:
-
-- App, window ID/title, surface, scope and observation ID identify where navigation stopped.
-- Completed and remaining requirement IDs separate finished work from outstanding obligations.
-- Effect receipts preserve operation, argument, delivery, outcome, readback, expected result and observed changes. Unresolved effects take priority over recent history in the bounded context; their total count remains explicit if the list is truncated. The full ledger stays local.
-- Controller issues explain rejected actions/evidence. Attempted scopes and the previous session's reason help choose a different inspection route.
-- A navigator `completionProposal` contains its milestone, source observation, evidence rows and summary. It never changes the milestone ledger. Only the orchestrator can accept completion from a fresh screen review.
-- Completion is explicitly `verified`, `unverified` or `incomplete`, derived from the parent-owned ledger. The next phase distinguishes further execution from uncertainty inspection.
-
-Navigator clarification questions yield to the orchestrator first. They travel in the handoff reason/issues; the parent supplies decisions and parameters in the next mission. Model-generated clarification prompts to the user are disabled; if indispensable information cannot be obtained, the parent reports a concrete blocker without inventing facts. These internal answers are never recorded as user statements. Explicit irreversible-action confirmations remain separate. The coordinator reads a fresh screen at every boundary. Historical element IDs are not reusable action handles; the navigator resolves semantic targets against the next observation. `finish` requires every planned milestone to have accepted evidence or an explicit conditional skip supported by completed dependency evidence. Failed or unverified navigation cannot establish a negative search finding. The parent can review the last yielded milestone using fresh screen element IDs, either confirming it or reopening premature completion from current counter-evidence while preserving all effect receipts; this applies the result-evidence checks at the authority boundary. The navigator cannot promote or reopen milestone status itself. Readback of a typed input alone cannot prove a navigation outcome. `finish_unverified` is accepted only after the navigator has reported all remaining work as delivered but unverifiable; it keeps that status and the tool's explanation. A failed child call becomes a tool result with its ledger intact. Cancellation and permanent authentication errors propagate.
-
-### Common execution, separate adapters
-
-Native applications and Safari use agent-desktop plus the generic focus-and-paste helper. Chrome's ordinary profile can expose page semantics through `extension/page-bridge`; its loopback bridge does not use CDP, remote debugging or an automation profile. Browser toolbar/menu operations and unavailable page surfaces fall back to native accessibility. DOM snapshots are not equivalent to native AX and can still omit inaccessible frame/custom content.
-
-Both adapters return the same delivery/readback contract. The page helper computes expected input text before inserting at the caret and compares the resulting value, including selected-text replacement; a page script changing the input leaves the result unverified. Native focused editors that report disabled AX state may offer only the existing focus-and-paste capability, whose helper checks live focus and clipboard handling. Ordinary actions remain unavailable on disabled controls.
-
-After browser navigation, settlement distinguishes a changed URL from changed body content. It waits within a bounded interval when a SPA still exposes the old controls. Window inventory changes remain usable across native scope transitions, while incomparable child controls are excluded from those deltas.
-
-### Known limits
-
-The models still choose the initial milestones, interpret evidence and may misclassify it. Provider responses are parsed by phase: explicit final_answer messages supply structured plans; commentary is never executable guidance. Unphased legacy responses still require one unambiguous assistant message. The plan is immutable within a task; recovery changes routes, not milestone meaning. Live Sainsbury’s trials still failed: one child omitted evidence in its handoff, and a later parent repeatedly proposed unobserved URLs despite corrective context. The new ownership contracts pass deterministic tests but have not established end-to-end reliability. The ledger prevents specific duplicate-delivery classes; it does not provide universal exactly-once semantics across alternate UI routes. Focus, selection and attributed-text capabilities differ across applications. Word formatting is not yet consistently verified by production observations. Native reads can dominate latency. The measured outcomes and failures are recorded in [navigation-evaluation.md](navigation-evaluation.md); the orchestrator is not a claim of universal reliability.
-
-## Original v1 runtime (retained for comparison)
-
-React instruction input and live log → restricted Electron preload IPC → NavigationController → persistent DesktopLoop. The loop calls the authenticated local FastAPI broker for an OpenAI/Cerebras supervisor review or a batched TypeSafe Jev Choice + Noul. Only the native workspace bridge dispatches desktop input through agent-desktop and the Swift paste helper.
-
-The Electron window is a floating, always-on-top overlay, visible across macOS Spaces and full-screen apps. Trusted IPC toggles its expanded log height. Task updates never call window focus/show; the user explicitly focuses it by clicking or using the global show shortcut. The default footprint is 380 × 190 px. Input clears after a start is accepted and remains editable while running. A new instruction uses serialized replace IPC: validate, cancel, await the old execution promise, then create a new task. Stop cancels a pending handoff too. There is no concurrent desktop executor.
-
-The supervisor owns intent, planning, subgoals, exact/generated arguments, target memory, interruption handling and semantic progress. Jev chooses one provided operation/target. Code owns fresh references, focus, input delivery, duplicate suppression, uncertainty tracking and outcome predicates. Calling the supervisor does not restart the task or clear the action ledger.
-
-The runtime uses native accessibility for all applications, including Chrome and Safari. It does not instantiate agent-browser, attach CDP, launch a debugging browser or request remote-debugging settings. Packaging excludes the browser executable. The previous browser adapter remains isolated source/test code for comparison; it is not a fallback. A non-debugger content-script extension with Native Messaging is a possible future adapter, not implemented here.
-
-Keys live in the backend `.env`. Electron receives a random application token for its loopback broker, not the OpenAI, Cerebras or TypeSafe keys. Selected accessibility content, user instructions, named inputs and history are sent to the relevant model provider. OpenAI requests use Responses structured output and `store:false`; Cerebras uses Chat Completions strict JSON schema. Both use a reused HTTP connection pool and shared local plan/evidence validation. Cerebras excludes unsupported length/format constraints from the wire schema while retaining them locally, and constrains evidence IDs within its enum capacity. Keys are selected per provider with no cross-provider fallback. The selected configuration is Cerebras `gpt-oss-120b` with low reasoning; this model cannot disable reasoning. Sol Ultrafast remains configurable through the OpenAI adapter. The economical alternative is Luna with reasoning off and no service tier override. Optional `OPENAI_SERVICE_TIER` supports a compatible provider tier; it does not silently fall back to a more expensive one. Model output cannot issue shell, arbitrary JavaScript or coordinate tools.
-
-## Persistent supervision
-
-`Supervision` maintains previous guidance, plan revision and review scheduling. The default review interval is twelve Jev decisions (configurable 1–50). Read-only navigation counts as a decision so excessive traversal is also reviewed. A declined completion proposal is cached against the observed state; unchanged evidence must not trigger another completion review. Content-changing input records a result receipt. The next Jev request batches an overall-goal Noul with the action Choice, avoiding a supervisor review after each ordinary action. Legacy responses without a Noul retain conservative action-result checkpoints. Reviews also occur at task start, uncertain action delivery, repeated choices, unavailable arguments, a new blocking dialog, a navigator stop and proposed completion. The interval remains a ceiling on decisions between routine reviews; DONE advances satisfied subgoals sooner, while positive completion Nouls preempt further input.
-
-Guidance contains `subgoal`, `plan`, `memory`, named `inputs`, `expectedOutcome`, current evidence and a brief rationale. The original task remains in every request. Relative/ordinal targets should be bound to an observed identity before the UI moves and retained in memory. This binding is model-managed; it is not a deterministic solution to every ambiguous list or changing page.
-
-The supervisor's output is schema-validated and bound to the current task and observation. The output selects evidence and target IDs from catalogs of the current observation. The broker binds target IDs back to observed app/window/role/name, window ID, native ID/kind and ancestor path when available; it never lets the model invent these identifiers. Verification prefers window/native IDs over mutable titles and labels, uses paths to disambiguate repeated IDs, and does not fall back to a similar label when a bound ID disappears. Oversized identities are omitted from the catalog rather than truncated into different identities. Historical memory alone cannot prove completion. Expectations stay broad unless the UI exposes concrete checks. A changed bound completion target requests inspection instead of terminating the task. Jev sees the full guidance, recent action outcomes and branch/ancestor context. An action receipt records the operation/arguments, delivery versus verification, before/after window identities and titles, and bounded observable fact differences. Ref changes, geometry and focus noise are not treated as object changes; a different read scope cannot prove objects appeared or disappeared.
-
-The controller does not split prose on “then,” infer new windows from “new document,” or mechanically rewrite URLs. New objects can appear in existing windows, tabs or panes. The supervisor decides the relevant subgoal and text arguments. The literal-span resolver remains a fallback when a named input is unavailable; it does not generate prose. Every TypeSafe Choice question passes a shared 255-criteria check before transport. Instructions with more than 254 selectable tokens use one additional paired boundary-group selection before exact token selection and assembled-span verification. Boundaries may lie in different groups; text remains an exact source slice. Grouping limits request size, not model interpretation errors.
-
-## Execution and uncertainty
-
-1. Read current apps, windows and a bounded accessibility scope.
-2. Review with the supervisor when due, then rebuild Jev choices with its current named inputs.
-3. Validate the chosen action against the task, observation, candidate ID, target capabilities and current state.
-4. Dispatch the mutation once. Reads/WAIT do not consume a single-step mutation allowance.
-5. Read fresh state and record delivery separately from the observed effect.
-6. Continue, request inspection/replanning, or finish after fresh result checks.
-
-Known stale-reference and pre-paste failures that prove nothing was delivered allow up to three refreshes/redecisions. Unknown/delivered failures never justify automatic replay. The recorded primitive/target identity is withheld for the remainder of the task. This is not a semantic effect ledger: a different primitive can represent the same intended effect, and a legitimate repeat of the original primitive can remain withheld after its uncertainty is resolved. The supervisor can inspect and choose a different supported continuation, or stop when evidence is insufficient.
-
-A native AXPress error can arise because the upstream activation check waits about 400 ms for focus/value, selection or menu evidence. Creating an object can replace a target/window or settle later without satisfying those checks. Non-write actions without a fixed local postcondition return an **unverified** report. The controller refreshes the app root/window inventory and asks the supervisor to reconcile. It does not relabel uncertainty as success. Exact write/state postconditions remain strict.
-
-Verified write history is scoped to the task and observed target identity including path. A duplicate is suppressed only while the current value still equals the verified result. Accepted tokens and cleared editors need semantic inspection; historical field text alone is not token-acceptance evidence. ValueEntries records verified entry, fresh value/focus observations and bounded subsequent interactions. It does not classify Return, Tab, a labeled option, a click or focus loss as proof of commitment. Controls may apply immediately. A missing or ambiguous field is unknown, and the supervisor is instructed to inspect the downstream effect before requesting a commit or retyping.
-
-## Outcome contracts
-
-`expectedOutcome` identifies an intended object and supplies optional explicit checks:
-
-- `target_present`: at least one matching object is visible in the observed scope. Other value/state predicates require a unique target.
-- `text_equals`: its complete value equals the supplied literal.
-- `state_present` / `state_absent`: its observed state contains/does not contain the named state.
-- `value_advances`: the same bound numeric/clock readout advances across fresh observations.
-
-Missing or ambiguous targets remain unknown. Absence of a target in a shallow tree is never treated as a proven absence. Native playback requires a bound media identity plus active-state and position checks; the supervisor selects the observed controls in their actual language. The controller has no English “play video,” “Pause” or “Seek” classifier in this completion path. Predicate semantics and numeric/clock parsing are general; inaccessible values or unsupported formats remain limitations.
-
-Jev returns one next-action Choice and one overall-completion Noul in the same request. A positive completion preference preempts mutations for verification; failed evidence checks preserve read-only inspection. Action confidence remains diagnostic. Once the supervisor identifies overall completion, only read operations remain available until verification finishes. Supervised DONE requires agreement on the original goal, complete observed scopes and current result evidence. Static checks need no redundant second Jev assessment; advancing measurements still require fresh samples. Unsupervised semantic completion retains two fresh assessments. Typed checks add mechanical proof for their stated predicates. An arbitrary `observed_state` remains model-assessed. A schema-valid LLM response cannot guarantee the right content was selected or that all application semantics are understood.
-
-## Hierarchy and budgets
-
-Native scopes start at depth 3 and expand locally within separate resource ceilings of 2,048 nodes and requested depth 12. The upstream `--skeleton` flag clamps depth to 3, so deeper reads omit it. TreeBrowser then adds complete layers in order and counts the actual generated action choices, reserving STOP, optional DONE and parent/root navigation. The first layer that would make the total exceed 255 is excluded in full; later layers cannot skip that boundary. This is an action limit, not a 255-node limit. Cached boundary nodes remain selectable even without native input references and are not removed after a fixed number of visits; descending repeats the same projection and preserves the ancestor route. Visit counts provide context, repeated choices request supervisor review, and task budgets still bound execution. A first layer too wide to fit remains an explicit observation limit, never a partial sibling list. Native requests are not paged after projection. The Python broker validates the final criteria count (including its navigation choices) before calling TypeSafe.
-
-All operations of the accepted native layers are presented together within the 255-choice provider limit. The contract can hold a raw inventory of up to 2,500 actions; this is not permission to send them all to Jev. Legacy/browser views retain explicit paging. The independent 2,048-node list-surfaces scan is not a prerequisite. Named/native-identified regions with retained element tokens receive read-only references even inside scoped snapshots; this does not grant input capabilities. Unnamed/unproven containers may still lack an addressable frontier.
-
-Defaults: 160 Jev decisions, configurable 1–500; 20-minute task deadline; native scope stack max50; cached-branch visit hints and repeated-choice reviews; at most three known-not-delivered refreshes. There are no confidence thresholds. Native reads/subprocesses and clipboard operations retain bounded time/output limits. Stop prevents further dispatch but cannot undo input already sent.
-
-## Swift focus-and-paste
-
-The helper performs whole-editor replacement after checking frontmost process/window, native identity, geometry, unchanged complete text and Select All coverage. It pastes once, verifies exact text and restores materialized clipboard formats unless newer clipboard content appeared. Already-equal text sends no paste. Selection offsets use native UTF-16; a final unselectable paragraph terminator is preserved only when proven by the selection range.
-
-Remaining constraints:
-
-- Whole-editor replacement is unsuitable for append-only requests or preserving arbitrary rich formatting. Jev must choose another exposed method.
-- Custom editors may not expose full text, selection or a stable identity. The supervisor cannot manufacture these capabilities.
-- Geometry changes, focus changes or user interaction can invalidate the transaction. Known pre-dispatch failures are refreshed; possible delivery is inspected without replay.
-- Clipboard preservation is capped at 32 MiB and cannot overwrite newer clipboard changes; restoration can fail and is reported.
-- Exact text verification can remain unknown when an editor normalizes content or embeds objects.
-- The helper still uses private `_AXUIElementGetWindow`; compatibility/distribution testing remains necessary.
-- Paste transactions are serialized and one controller owns a task, but a global cross-process desktop input lock is not implemented.
-
-## Remaining work
-
-No screenshot/OCR fallback, arbitrary coordinate click/drag or unrestricted keyboard/script tool is exposed. Native key choices remain an allowlist. The active innermost modal in a bounded read is prioritized, including wrappers without action references; focused editors cannot hide its sibling choices. A new modal triggers a supervisor review. Automatic modal scoping requires an explicit modal state or a native attached-sheet role. Plain alert/dialog/alertdialog roles and focus alone do not establish blocking. This is not general visual occlusion detection. An absent optional native surface returns to a fresh window read, without replaying input. Native menu and popover bounds establish their own clipping surfaces instead of inheriting the parent toolbar/scroll viewport; nested scrolling and explicit hidden state still apply. Custom controls and very deep/wide trees can remain unread. Model-managed memory and conservative action quarantine can still require intervention.
-
-Voice, CV wake/point/region input, avatar rendering and drawing should call or observe this same controller. They must not create competing desktop executors. Windows needs its own adapter validation and packaging tests. The OpenAI supervisor has completed a live Word creation, body entry and 24 pt formatting task. This is a specific successful test, not a guarantee across all applications. See verification.md for results and limitations.
-
-
-## Critical review: remaining state-model gaps
-
-The native accessibility bridge is useful; the main remaining reliability gaps sit above it. These are open issues, not guarantees supplied by the supervisor:
-
-- Broad `observed_state` completion can still have zero typed predicates. Agreement between models over a changed field value does not prove that the application applied it. The first Sol comparison reported completion with a 24-valued font control while the actual document text remained 12 pt. The value-entry notices are advisory, cover SET_VALUE, TYPE and FOCUS_AND_PASTE, and do not gate completion.
-- Fixed: verification now searches the observation tree, including non-addressable labels, and supports window presence. Action references remain separate and are never fabricated. Bounded reads for attributed text and selection are still missing from the production contract.
-- The uncertainty set has no reconciliation/removal transition. Identity includes the primitive operation and may lack the keyboard recipient. Replace it with an effect ledger that binds the intended effect, actual arguments, recipient, delivery, and reconciliation evidence before permitting or suppressing retries.
-- Keyboard commands check the active window but do not bind field-specific Return/selection commands to the intended focused control. These preconditions need to be checked immediately before dispatch.
-- Safe inference failures terminate tasks. Resume only supports paused tasks; starting again clears the ledgers. Checkpoints should preserve task identity and effects so model requests can retry without repeating desktop mutations. The current supervisor parser also rejects any response with other than one output_text block; the failing Luna response shape was not captured.
-- Scope/view changes contribute to the same fingerprint used for UI progress. Exploration memory resets after reads or mutations. Fixed branch-visit access limits have been removed; visit hints and repeated-choice reviews remain. Separate view identity, relevant application changes, and task progress; detect repeated state/action/result cycles in a persistent exploration graph.
-- Both models receive the same bounded, action-heavy projection. A target can expand into many candidates, and the evidence catalog repeats much of the text. The supervisor needs compact structured obligations, unresolved effects, and relevant deltas, rather than simply more frequent reviews.
-
-The intended division of responsibility is: supervisor owns structured intent and result obligations; Jev chooses a currently available action; controller binds targets, dispatches once, reconciles effects, and validates evidence. Current tests establish specific successes and failures, not reliable arbitrary desktop execution.
-
-
-## Repeated creation diagnosis and result checkpoints
-
-The recorded Chrome task dispatched Cmd+T three times. The repeat guard keyed actions by the full UI fingerprint, so each newly created tab made the next identical command eligible. The controller kept the creation subgoal active until a periodic/exception review instead of first reconciling its result. Completion then reported an absent/ambiguous New Tab target, and STOP caused another supervisor review and another identical read.
-
-The general correction is a structured action-result receipt and a distinct verification phase. The original patch reviewed every mutation. The current version screens the result with a completion Noul in Jev’s next call, escalating completion/subgoal boundaries and exceptions to the supervisor. Completion guidance removes mutations from the available choices; reads and current predicate checks remain available. This permits repeated creation when the user actually requested multiple objects, rather than permanently forbidding the primitive. Unit fixtures cover both one and two requested creations. Presence checks no longer demand uniqueness or native action refs; value/state checks retain uniqueness. Scope changes cannot themselves prove object creation. These changes do not turn the primitive uncertainty set into a full effect ledger or add missing native formatting evidence.
-
-## Batched completion screening
-
-`goal_complete` estimates whether the ORIGINAL overall goal is evidenced, not merely the active subgoal. The broker strictly validates the Noul's finite 0..1 value and returns it separately from action confidence. A probability above 0.5 is the most-probable yes branch, not a claim of calibrated certainty: it replaces even a conflicting mutation proposal with a completion check BEFORE dispatch. At exactly 0.5, supervised sessions request review. Below 0.5, the chosen action remains eligible irrespective of its action confidence. Unsupervised sessions still require two fresh completion assessments; supervised sessions retain current outcome predicates and supervisor agreement. Noul cannot manufacture missing UI capabilities or prove unexposed formatting.
-
-The goal, action receipt, current tree, history and guidance share one TypeSafe request for both questions. There is no separate completion network request. Urgent uncertain-delivery and dialog reviews still run before further decisions; periodic, text-needed, no-progress, STOP and DONE review paths remain. Repeated rejected completion on unchanged evidence is suppressed. The Noul reduces ordinary per-action reviews, not all supervisor calls.
-
-## Loaded controls and compact provider output
-
-All visible actionable descendants in a fetched chunk are selectable immediately, with their observed parent paths. Optional BROWSE_TREE narrows a large chunk; INSPECT_REGION still loads unread descendants. A focused field no longer hides its loaded siblings. Modal boundaries, hidden ancestors and actual native capabilities still constrain offered actions. Bounded native chunks keep all operations together; other views retain explicit paging. Jev receives one control record shared by its operation/argument choices, and observation text no longer repeats full candidate descriptions.
-
-Supervisor output omits the redundant plan, rationale and outcome-description strings; local consumers derive them from its subgoal. Target fields on the wire are IDs from a current observation catalog containing exact app/window/role/name, available window/native IDs and ancestor paths, plus value/states. The broker resolves IDs, so the model cannot change punctuation, substitute a bundle ID for a display name, or invent a target label. This does not prove the model chose the correct target or predicate. Original literal inputs are merged before generated inputs and cannot be replaced by an ID collision; the literal-span resolver reads the original goal. Before app activation, a native window inventory is preserved as historical context to distinguish existing windows from creation evidence; this is not a universal object-creation ledger.
-
-A failed completion check marks its evidence state as needing inspection. Positive Nouls on that unchanged state no longer override reads, and read-only operations preserve the verification probe. New scopes can supply new evidence. This prevents the observed identical-check loop without weakening actual result checks or imposing action confidence thresholds.
-
-## Generalizations deliberately deferred
-
-Broadening click eligibility for unlabeled containers and paste eligibility for arbitrary custom editors needs native capability and target evidence. Those eligibility rules remain conservative; focus, unchanged-value, full-selection and clipboard checks are retained. Universal completion proof also remains open: a stronger identity contract and better entry context cannot expose missing formatting, submission or playback evidence. No app-specific recipe or action-confidence threshold was introduced by these changes.
-
-## Planner controller (v2)
-
-A second controller lives in `controller/v2/` and is selected per task with `controller: 'v2'`. It addresses the state-model gaps listed above with one requirements list, one effect ledger with a reconcile transition, relevance-based retrieval over the full window read, and a bounded exit. Its design, what was built and what was not are in controller-redesign.md. It shares `WorkspaceBridge`, the native patch, the paste helper and the broker's provider adapters with the controller described in this document. It is unit-tested only; no live run has been made.
+# Architecture
+
+## The loop
+
+```mermaid
+flowchart LR
+  User([Request]) --> Luna
+  Luna -->|objective, done-when, context| Navigator
+  Navigator -->|status, summary, facts, location, unresolved| Luna
+  Navigator --> Adapters[Accessibility and Chrome extension]
+  Adapters --> Navigator
+  Luna -->|finish or blocked| User
+```
+
+Luna plans, the navigator executes, and that repeats. Each call to Luna returns exactly one decision:
+
+- **continue**: assign the next session, as `{ objective, doneWhen, context, irreversible }`;
+- **finish**: the request is done;
+- **blocked**: it cannot be done, for a reason outside the assistant's reach (a sign-in or code that needs
+  the user, something unavailable, a control that cannot be operated, information only the user has).
+
+Luna alone ends a task. She never asks the user anything, and code never refuses her decision. Code states
+two facts she cannot override: a finish while an action may not have arrived is reported as "completed,
+unverified", and an action that cannot be undone follows the caller's `confirmIrreversible` setting.
+
+There is no limit on steps, time or sessions.
+
+## A session
+
+The navigator works on one objective. On each turn it sees the screen as a list of elements and takes one
+step: act on an element, read another part of the screen, search the controls, wait, or yield. The controller
+checks the step against the live screen, sends it once, and reads the result.
+
+A session ends when the navigator yields, or when it proposes the same step that changes nothing three times
+against an unchanged screen. Either way Luna receives one object:
+
+```ts
+{ status,      // done | progress | needs_decision | blocked | unverified | error
+  summary,     // what is true now
+  facts,       // text of the elements the navigator cited
+  location,    // app, window, page address
+  unresolved,  // actions sent whose result nobody has seen
+  steps }
+```
+
+The same object is traced, kept in memory and shown to Luna. Luna reviews the screen the navigator ended on,
+with the same elements, so there is one screen read per session boundary.
+
+## Memory
+
+Memory belongs to one task. It is the ordered list of `{ assignment, result }` pairs, sent to Luna as a
+stable prefix with the current screen last. When the list passes about 48,000 characters the oldest pairs are
+dropped. Refused steps and retries are not stored.
+
+One request is linked to the next by the caller: a task accepts a short `context`, and its final state
+carries `completion` (summary, facts, location) to pass back. Nothing is written to disk except traces.
+
+## Rules the controller enforces
+
+- **One action, sent once.** Every action is recorded in the ledger with whether it was delivered and what
+  is known about its result. When the screen changes after an action, the controller records it as
+  confirmed.
+- **One rule about repeating.** The same action is not sent again while the earlier one may or may not
+  have arrived, or straight after it was sent and nothing changed. The navigator has to look first.
+- **Addresses.** A site may be opened by its front page. An address with a path, query or fragment must
+  come from the user or from a page that was read. Opening an address and searching the web go through the
+  extension, never through the browser's address bar.
+- **Irreversible actions** are sent only in a session Luna opened for one, and wait for the user when
+  `confirmIrreversible` is on.
+- **Screen text is data.** Only the user's request authorises work.
+
+## Failures
+
+- A model that does not answer is retried, with growing waits, for as long as the task runs. Each request
+  has its own timeout (20 s for Luna, 25 s for the navigator).
+- A request the provider rejects outright is tried once more with only the latest session as history, then
+  fails the task with the provider's message.
+- An adapter or navigator-model failure inside a session becomes a session result with status `error`, so
+  Luna can choose another route. Any other exception fails the task visibly.
+
+## Adapters
+
+- **Accessibility** (`desktop/`): the patched `agent-desktop` helper reads windows as trees and performs
+  actions. Large windows are read in layers; unread regions are offered as scopes.
+- **Chrome extension** (`page/`, `extension/page-bridge`): reads the active tab's DOM, operates elements,
+  opens addresses and runs searches. It talks only to the app on `127.0.0.1` and is pinned by extension id.
+  Chrome's own toolbar and tabs stay on accessibility. A Return key sent natively to Chrome's address bar
+  is ignored by Chrome, which is why opening and searching use the extension.
+
+## Models
+
+The broker (`services/decision-api`) makes both calls with strict structured output and validates what
+comes back. The navigator defaults to Cerebras `qwen-3.8-27b` at low reasoning; Luna to OpenAI `gpt-6-luna`.
+Requests are defined once, in `packages/contracts`; the broker names only the fields it reads.

@@ -59,6 +59,15 @@ async function handle(command) {
     await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
     return { tab: describeTab((await loaded(tab.id, command.waitMs || 6000)) || tab) };
   }
+  if (command.type === 'search') {
+    // The browser's own default search engine: no results address is ever built here.
+    const before = new Set((await chrome.tabs.query({})).map(tab => tab.id));
+    await chrome.search.query({ text: String(command.text || ''), disposition: 'NEW_TAB' });
+    const opened = (await chrome.tabs.query({})).filter(tab => !before.has(tab.id));
+    const tab = opened.find(tab => tab.active) || opened[0] || await activeTab();
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    return { tab: describeTab((await loaded(tab.id, command.waitMs || 6000)) || tab) };
+  }
   if (command.type === 'activate_tab') {
     const tab = await chrome.tabs.update(command.tabId, { active: true });
     return { tab: describeTab(tab) };

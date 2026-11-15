@@ -12,7 +12,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { PageBridgeServer } from '../apps/desktop/electron/page/page-bridge-server';
 import { PageWorkspace } from '../apps/desktop/electron/page/page-workspace';
-import { ObservationIndex } from '../apps/desktop/electron/controller/v2/observation-index';
+import { ObservationIndex } from '../apps/desktop/electron/controller/observation-index';
 
 const FIXTURE = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Shop - Fixture</title><body>
 <header><nav aria-label="Main"><a href="#home">Home</a> <a href="#deals">Deals</a></nav></header>

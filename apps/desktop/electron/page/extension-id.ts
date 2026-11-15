@@ -5,4 +5,4 @@
 export const PAGE_BRIDGE_EXTENSION_ID = 'fnkgdiiboieohdmillkacfkpfgidnfmf';
 export const PAGE_BRIDGE_PORT = 8767;
 /** The extension version this app speaks to. An older copy still loaded in the browser is not used. */
-export const PAGE_BRIDGE_VERSION = '0.2.2';
+export const PAGE_BRIDGE_VERSION = '0.3.0';

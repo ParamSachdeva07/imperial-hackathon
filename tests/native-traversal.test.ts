@@ -9,11 +9,9 @@ import {
   unreadChildren,
 } from '../apps/desktop/electron/desktop/accessibility-tree';
 import { WorkspaceDesktopBridge } from '../apps/desktop/electron/desktop/workspace';
-import { desktopCandidates } from '../apps/desktop/electron/controller/desktop-candidates';
 import { NATIVE_READ_NODE_BUDGET } from '../apps/desktop/electron/desktop/tree-budget';
-import { TreeBrowser } from '../apps/desktop/electron/controller/tree-browser';
 import { NativeError } from '../apps/desktop/electron/desktop/native-client';
-import { TaskInputSchema, type DesktopContext } from '../packages/contracts/src/index';
+import type { DesktopContext } from '../packages/contracts/src/index';
 
 type RawNode = {
   role: string;
@@ -25,7 +23,6 @@ type RawNode = {
 };
 type NativeSnapshot = { tree: RawNode; complete?: boolean };
 const dirs: string[] = [];
-const input = TaskInputSchema.parse({ goal: 'Find the search field', provider: 'jev' });
 const context: DesktopContext = { app: 'Example', windowId: 'w1', surface: 'window' };
 const signal = () => new AbortController().signal;
 const wrappedFrontier = (ref = '@s1:e1', width = 2): RawNode => ({
@@ -117,19 +114,6 @@ describe('Addressable native traversal frontiers', () => {
     expect(accessibilityTree(tree).childrenCount).toBe(2);
   });
 
-  it('offers INSPECT_REGION on an ancestor even when it has no native input action', async () => {
-    const bridge = new FixtureNative(() => ({ tree: { role: 'window', children: [wrappedFrontier('@s1:e1', NATIVE_READ_NODE_BUDGET + 1)] } }));
-    const observation = await bridge.observe(context);
-    expect(bridge.depths()).toEqual([3]);
-    const candidates = desktopCandidates(observation, input);
-    const inspect = candidates.find((c) => c.operation === 'INSPECT_REGION' && c.targetRef === '@s1:e1');
-    expect(inspect).toBeDefined();
-    expect(candidates.some((c) => c.operation === 'CLICK' && c.targetRef === '@s1:e1')).toBe(false);
-    const scoped = await bridge.act(inspect!, observation, undefined, false, signal());
-    expect(scoped.rootRef).toBe('@s1:e1');
-    expect(scoped.scopePath).toEqual([{ ref: '@s1:e1', name: 'Header' }]);
-    expect(bridge.calls.every((args) => ['snapshot', 'list-windows'].includes(args[0]))).toBe(true);
-  });
 
   it('reads deeper only where a frontier cannot be selected separately', () => {
     expect(needsDeeperRead(wrappedFrontier())).toBe(true);
@@ -140,41 +124,7 @@ describe('Addressable native traversal frontiers', () => {
 });
 
 describe('Bounded native region expansion', () => {
-  it('crosses wrappers at depth six and exposes their actual editable child', async () => {
-    const bridge = new FixtureNative((depth) => ({ tree: depth < 6 ? wrappedFrontier() : expandedHeader() }));
-    const observation = await bridge.observe({
-      ...context,
-      rootRef: '@s1:e1',
-      scopePath: [{ ref: '@s1:e1', name: 'Header' }],
-    });
-    expect(bridge.depths()).toEqual([3, 4, 5, 6]);
-    const candidates = desktopCandidates(observation, input);
-    expect(candidates.some((c) => c.operation === 'SET_VALUE' && c.name === 'Search')).toBe(true);
-    expect(observation.snapshots[0].elements.find((e) => e.ref === '@s1:e1')?.childrenCount).toBeUndefined();
-    expect(observation.notices.some((notice) => notice.startsWith('Observation limit:'))).toBe(false);
-    for (const args of bridge.calls.filter((args) => args[0] === 'snapshot')) {
-      expect(args[args.indexOf('--root') + 1]).toBe('@s1:e1');
-      expect(args).not.toContain('--skeleton');
-      expect(args).not.toContain('--surface');
-    }
-  });
 
-  it('keeps an addressable descendant as a separate drill choice', async () => {
-    const bridge = new FixtureNative(() => ({
-      tree: {
-        role: 'banner',
-        ref_id: '@s1:e1',
-        children: [{ role: 'group', ref_id: '@s1:e2', name: 'Search area', children_count: NATIVE_READ_NODE_BUDGET + 1 }],
-      },
-    }));
-    const observation = await bridge.observe({ ...context, rootRef: '@s1:e1' });
-    expect(bridge.depths()).toEqual([3]);
-    expect(
-      desktopCandidates(observation, input).some(
-        (c) => c.operation === 'INSPECT_REGION' && c.targetRef === '@s1:e2',
-      ),
-    ).toBe(true);
-  });
 
   it('caps reads even if wrappers never expose an addressable control', async () => {
     const bridge = new FixtureNative(() => ({ tree: wrappedFrontier() }));
@@ -228,30 +178,4 @@ describe('Bounded native region expansion', () => {
     expect(observation.snapshots[0].elements[0].childrenCount).toBe(2);
   });
 
-  it('updates only the current scope ref and preserves parent/root backtracking', async () => {
-    const bridge = new FixtureNative((depth) => ({
-      tree: depth < 6 ? wrappedFrontier('@s1:e10') : expandedHeader('@s1:e10'),
-    }));
-    const observation = await bridge.observe({
-      ...context,
-      rootRef: '@s1:e1',
-      scopePath: [
-        { ref: '@s1:e8', name: 'Content' },
-        { ref: '@s1:e1', name: 'Header' },
-      ],
-    });
-    expect(observation.context.rootRef).toBe('@s1:e10');
-    expect(observation.context.scopePath).toEqual([
-      { ref: '@s1:e8', name: 'Content' },
-      { ref: '@s1:e10', name: 'Header' },
-    ]);
-    const browser = new TreeBrowser(observation);
-    expect(browser.metadata().canGoUp).toBe(true);
-    expect(browser.nativeNavigation('GO_PARENT')).toMatchObject({
-      rootRef: '@s1:e8',
-      scopePath: [{ ref: '@s1:e8', name: 'Content' }],
-    });
-    expect(browser.nativeNavigation('GO_ROOT')?.rootRef).toBeUndefined();
-    expect(browser.nativeNavigation('GO_ROOT')?.scopePath).toBeUndefined();
-  });
 });
