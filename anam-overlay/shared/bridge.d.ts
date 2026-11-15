@@ -16,6 +16,8 @@ export interface OverlayBridge {
   getSessionToken(): Promise<TokenResult>;
   /** Synthesia: bring the avatar into the room this window has joined. Resolves once it is live (can take a minute). */
   startAvatar(): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Synthesia: the call is over; closes its room so the avatar's session ends. */
+  endAvatar(): Promise<void>;
   requestMicrophone(): Promise<boolean>;
   setExpanded(expanded: boolean): Promise<void>;
   getLauncherVisibility(): Promise<boolean>;

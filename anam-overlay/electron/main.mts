@@ -169,6 +169,12 @@ ipcMain.handle('anam:avatar-session', async (event): Promise<{ ok: true } | { ok
     return { ok: false, error: typeof body?.detail === 'string' ? body.detail.slice(0, 240) : 'The avatar could not be started.' };
   } catch { return { ok: false, error: 'The avatar could not be started. Check that the local backend is running.' }; }
 });
+async function endAvatar() {
+  await fetch('http://127.0.0.1:8765/api/avatar-session/end', {
+    method: 'POST', headers: { 'X-Anam-Overlay': '1' }, signal: AbortSignal.timeout(12_000), redirect: 'error', cache: 'no-store',
+  }).catch(() => undefined);
+}
+ipcMain.handle('anam:avatar-end', async (event) => { if (trusted(event)) await endAvatar(); });
 ipcMain.handle('overlay:microphone', async (event) => {
   if (!trusted(event)) return false;
   if (speakOnly) return false; // never request the microphone in speak-only mode

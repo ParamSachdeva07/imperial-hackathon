@@ -22,6 +22,8 @@ export type SynthesiaSession = {
   avatarIdentity: string;
   /** Ask the backend to start the avatar in the room this window has joined; resolves once it is live. */
   startAvatar(): Promise<{ ok: true } | { ok: false; error: string }>;
+  /** The call is over: have the backend close the room, which is what ends the avatar's session. */
+  endAvatar(): Promise<void>;
 };
 
 type Listener = (...args: never[]) => void;
@@ -91,7 +93,7 @@ export function createSynthesiaClient(session: SynthesiaSession) {
       stopped = true;
       live = false;
       writer = null;
-      await room.disconnect().catch(() => undefined);
+      await Promise.all([room.disconnect().catch(() => undefined), session.endAvatar().catch(() => undefined)]);
     },
 
     /** Lip-sync input. Only 16-bit mono PCM is sent; the rate is passed on as given. */

@@ -109,20 +109,40 @@ AVATAR_IDENTITY = "synthesia-avatar-agent"
 DRIVER_IDENTITY = "avatar-window"
 
 
-def livekit_token(config: Settings, *, room: str, identity: str, name: str, attributes: dict[str, str] | None = None) -> str:
-    """A LiveKit access token (HS256 JWT) for one participant of one room. Both participants are agents:
-    the window sends the voice audio, the avatar publishes video on the window's behalf."""
+def livekit_jwt(config: Settings, claims: dict) -> str:
     def part(value: dict) -> bytes:
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=")
     now = int(time())
-    claims = {
-        "iss": config.livekit_api_key, "sub": identity, "name": name, "nbf": now - 10, "exp": now + 3600, "kind": "agent",
-        "video": {"roomJoin": True, "room": room, "canPublish": True, "canSubscribe": True, "canPublishData": True},
-        **({"attributes": attributes} if attributes else {}),
-    }
+    claims = {"iss": config.livekit_api_key, "nbf": now - 10, "exp": now + 3600, **claims}
     signed = part({"alg": "HS256", "typ": "JWT"}) + b"." + part(claims)
     signature = hmac.new(config.livekit_api_secret.encode(), signed, hashlib.sha256).digest()
     return (signed + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")).decode()
+
+
+def livekit_token(config: Settings, *, room: str, identity: str, name: str, attributes: dict[str, str] | None = None) -> str:
+    """A LiveKit access token for one participant of one room. Both participants are agents:
+    the window sends the voice audio, the avatar publishes video on the window's behalf."""
+    return livekit_jwt(config, {
+        "sub": identity, "name": name, "kind": "agent",
+        "video": {"roomJoin": True, "room": room, "canPublish": True, "canSubscribe": True, "canPublishData": True},
+        **({"attributes": attributes} if attributes else {}),
+    })
+
+
+async def close_room(application: FastAPI, config: Settings) -> None:
+    """Delete the call's LiveKit room. This is what ends the Synthesia session: the avatar is a participant that
+    would otherwise stay in the room, and keep its session running, after the window has left."""
+    room = getattr(application.state, "room", None)
+    application.state.room = None
+    if not room:
+        return
+    try:
+        await application.state.anam_http.post(
+            config.livekit_ws_url().replace("wss://", "https://", 1).replace("ws://", "http://", 1) + "/twirp/livekit.RoomService/DeleteRoom",
+            headers={"Authorization": f"Bearer {livekit_jwt(config, {'sub': 'backend', 'video': {'roomCreate': True}})}"},
+            json={"room": room}, timeout=10.0)
+    except httpx.HTTPError:
+        pass  # the room also closes by itself once Synthesia's session times out
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None):
@@ -138,6 +158,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         ) as client:
             application.state.anam_http = client
             yield
+            if (settings or Settings.load()).synthesia:
+                await close_room(application, settings or Settings.load())  # never leave an avatar running after exit
 
     application = FastAPI(title="Anam Overlay", lifespan=lifespan, docs_url=None, redoc_url=None)
     application.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -177,6 +199,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             attempts.append(now)
         if config.synthesia:
             # The window joins this room first; POST /api/avatar-session then brings the avatar into it.
+            await close_room(request.app, config)  # a call that ended without saying so
             room = f"call-{uuid4().hex}"
             request.app.state.room = room
             return SessionToken(
@@ -212,11 +235,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return SessionToken(sessionToken=token)
 
     async def interactive_avatar_id(request: Request, config: Settings) -> str:
-        """The id sessions are started with. An interactive id (av_...) is used as it is; a Studio avatar id is
-        converted once by Synthesia, which takes a while the first time, and remembered until the backend restarts."""
+        """The id sessions are started with. Synthesia turns a Studio avatar into an interactive one on request
+        (slow the first time, then it returns the same one); the answer is remembered until the backend restarts.
+        Studio shows the id with or without its av_ prefix, so both are accepted."""
         configured = config.synthesia_avatar_id
-        if configured.startswith("av_"):
-            return configured
+        if not configured.startswith("av_"):
+            configured = f"av_{configured}"
         known = getattr(request.app.state, "interactive_avatar", None)
         if known and known[0] == configured:
             return known[1]
@@ -231,11 +255,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             data = upstream.json()
         except ValueError:
             data = {}
+        if upstream.status_code == 404:
+            return configured  # not a Studio avatar of this workspace: taken to be an interactive id already
         if not upstream.is_success:
             by_code = {"no_credit": "The Synthesia workspace has no interactive avatar credits.",
                        "insufficient_scope": "The Synthesia API key needs the Interactive Avatars (write) scope."}
-            by_status = {401: "Synthesia rejected the API key. Check backend/.env.",
-                         404: "Synthesia could not find that avatar, or it cannot be made interactive (stock actor avatars cannot). Check SYNTHESIA_AVATAR_ID."}
+            by_status = {401: "Synthesia rejected the API key. Check backend/.env."}
             raise HTTPException(502, by_code.get(data.get("code") if isinstance(data, dict) else None)
                                 or by_status.get(upstream.status_code) or "Synthesia could not prepare the avatar.")
         status, avatar_id = data.get("status"), data.get("id")
@@ -289,6 +314,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(429 if upstream.status_code == 429 else 502,
                                 messages.get(code) or by_status.get(upstream.status_code)
                                 or "Synthesia could not start the avatar. Please retry.")
+        if getattr(request.app.state, "room", None) != room:
+            # The call ended while the avatar was joining: take it out again.
+            request.app.state.room = room
+            await close_room(request.app, config)
+            raise HTTPException(409, "The call closed while the avatar was joining.")
+        return {"ok": True}
+
+    @application.post("/api/avatar-session/end")
+    async def avatar_session_end(request: Request):
+        """The call is over: close its room so the avatar leaves and the Synthesia session ends."""
+        if request.headers.get("x-anam-overlay") != "1":
+            raise HTTPException(403, "Use the desktop application to end a session.")
+        config = settings or Settings.load()
+        if config.synthesia:
+            await close_room(request.app, config)
         return {"ok": True}
 
     return application

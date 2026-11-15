@@ -98,7 +98,8 @@ export function useAnam() {
             const started = await window.overlay.startAvatar();
             if (!started.ok) avatarError = started.error;
             return started;
-          } }) as unknown as Client
+          },
+          endAvatar: () => window.overlay.endAvatar() }) as unknown as Client
         : createClient(result.sessionToken, { disableInputAudio: !useMicrophone });
       const disposers: (() => void)[] = [];
       active = { client, streams: [], turns: new Map(), dispose: () => disposers.splice(0).forEach((dispose) => dispose()) };
