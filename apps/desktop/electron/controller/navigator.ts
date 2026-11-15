@@ -111,9 +111,14 @@ export class Navigator {
     if (context.driver === 'browser') return snapshots[0] ? PAGE_KEYS : [];
     return snapshots[0]?.complete && context.windowId && windows.some(w => w.id === context.windowId && w.focused) ? KEYS : [];
   }
+  /** The window's own title, also while only one region or surface of it is being read. */
+  private windowTitle(observation?: DesktopObservation): string {
+    const snapshot = observation?.snapshots[0];
+    return observation?.windows.find(w => w.id === observation.context.windowId)?.title || snapshot?.tree?.name || snapshot?.windowTitle || '';
+  }
   private location(t: Task): Location {
     const observation = t.view?.observation;
-    return { app: t.context.app || '', window: clip(observation?.snapshots[0]?.windowTitle || '', 300),
+    return { app: t.context.app || '', window: clip(this.windowTitle(observation), 300),
       address: observation?.notices.find(n => n.startsWith('Page address: '))?.slice(14) || '' };
   }
   private result(t: Task, status: SessionResult['status'], summary: string, facts: string[] = []): SessionResult {
@@ -172,7 +177,7 @@ export class Navigator {
         taskId: t.taskId, observationId: observation.id, goal: input.goal, mission, effects: t.ledger.view(),
         observation: {
           // Windows are named by their element ids so they can be cited and targeted like any element.
-          app: t.context.app || '', windowId: windowElement(t.context.windowId), windowTitle: clip(snapshot?.tree?.name || snapshot?.windowTitle || '', 1000),
+          app: t.context.app || '', windowId: windowElement(t.context.windowId), windowTitle: clip(this.windowTitle(observation), 1000),
           surface: snapshot?.surface || (t.context.appSearch ? 'application search' : 'applications'), complete: snapshot?.complete === true,
           scope: (t.context.scopePath || []).map(p => clip(p.name, 300)), outline: index.outline().map(line => clip(line, 300)),
           windows: observation.windows.slice(0, 40).map(w => ({ id: windowElement(w.id), title: clip(w.title, 1000), focused: w.focused })),
@@ -228,14 +233,15 @@ export class Navigator {
       }
 
       // A step that sends nothing and is proposed again against the same screen cannot make
-      // progress. The third time, Luna gets the screen back and decides what to try instead.
+      // progress: the same read shows the same content. Luna gets the screen back and decides
+      // what to try instead. Only waiting is worth a second try, since a page may still be loading.
       const stalled = (reason: string): SessionResult | undefined => {
         const key = JSON.stringify([contentKey(index), step.kind, step.operation, step.target, step.text, step.key, step.direction, step.scope, step.query]);
         const count = (t.repeats.get(key) ?? 0) + 1;
         t.repeats.set(key, count);
-        if (count < 3) return;
+        if (count < (step.kind === 'wait' ? 3 : 2)) return;
         host.event('result', 'The navigator repeated a step that changes nothing. Returning to Luna.');
-        return this.result(t, 'progress', 'The navigator proposed "' + describe + '" three times against an unchanged screen. ' + reason);
+        return this.result(t, 'progress', 'The navigator proposed "' + describe + '" again against an unchanged screen. ' + reason);
       };
       const refuse = (...messages: string[]) => {
         t.issues = [...issues, ...messages];
@@ -274,6 +280,15 @@ export class Navigator {
 
       // act: check the step against the live screen, then send it once.
       const operation = step.operation as PlanOperation | '';
+      // A key meant for a named field goes to that field: give it keyboard focus first, then ask again.
+      const named = operation === 'PRESS' && sent.has(step.target) ? index.get(step.target) : undefined;
+      if (named?.element && named !== index.focused() && named.operations.includes('FOCUS')) {
+        await this.bridge.act(this.candidate('focus', 'FOCUS', named, observation, {}), named.owner, undefined, input.allowPhysical, signal);
+        t.issues = [...issues, named.label + ' did not have keyboard focus, so it was focused for you. No key was sent yet: press it now.'];
+        host.event('result', 'Focused ' + named.label + ' before the key.');
+        reread();
+        continue;
+      }
       let node: IndexedNode | undefined, recipient: IndexedNode | undefined, problem = '';
       const sources = [input.goal, input.context, ...t.seenUrls, ...index.nodes.flatMap(n => [n.label, n.value])];
       if (!operation) problem = 'act needs an operation.';

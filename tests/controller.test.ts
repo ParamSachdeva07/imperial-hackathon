@@ -57,7 +57,7 @@ class Desk implements WorkspaceBridge {
         windowTitle: 'Document', surface: 'window', complete: true, capturedAt: this.revision, tree: accessibilityTree(raw), elements: flattenTree(raw) }] };
   }
   async probe(_ref: string, property: 'states' | 'bounds') {
-    return property === 'bounds' ? { x: 1 } : { states: this.model.focused === 'Body' ? ['focused'] : [] };
+    return property === 'bounds' ? { x: 1 } : { states: ['focused'] };
   }
   async act(candidate: DesktopCandidate, observation: DesktopObservation, text?: string) {
     this.report = undefined;
@@ -70,6 +70,7 @@ class Desk implements WorkspaceBridge {
     }
     if (candidate.operation === 'CLICK' && candidate.name === 'Apply') this.model.size = this.model.boxValue;
     if (candidate.operation === 'CLICK' && candidate.name === 'Send') this.model.sent++;
+    if (candidate.operation === 'FOCUS') this.model.focused = candidate.name;
     return observation.context;
   }
   async openUrl(url: string) { this.opened.push(url); return { app: 'Example' }; }
@@ -205,14 +206,33 @@ describe('a navigator session', () => {
     expect(result!.unresolved).toHaveLength(2);
   });
 
-  it('returns to Luna when the same refused step comes a third time, instead of ending the task', async () => {
+  it('returns to Luna when a step that changes nothing is proposed again, instead of ending the task', async () => {
     const desk = new Desk();
     const { provider, requests } = models(() => ({ kind: 'act', operation: 'CLICK', target: 'e999' }));
     const result = await session(desk, provider, makeHost().host).result;
-    expect(requests).toHaveLength(3);
-    expect(result).toMatchObject({ status: 'progress', steps: 3 });
-    expect(result!.summary).toMatch(/three times/);
+    expect(requests).toHaveLength(2);
+    expect(result).toMatchObject({ status: 'progress', steps: 2 });
+    expect(result!.summary).toMatch(/again against an unchanged screen/);
     expect(desk.acts).toEqual([]);
+  });
+
+  it('catches a back-and-forth between two views, and gives a loading page a second wait', async () => {
+    const bounce = new Desk();
+    const first = models((_request, call) => ({ kind: 'read', scope: call % 2 ? 'surface:menubar' : 'surface:window' }));
+    expect(await session(bounce, first.provider, makeHost().host).result).toMatchObject({ status: 'progress', steps: 3 });
+    const second = models(() => ({ kind: 'wait', waitMs: 1 }));
+    expect(await session(new Desk(), second.provider, makeHost().host).result).toMatchObject({ status: 'progress', steps: 3 });
+  });
+
+  it('keeps the window title while one part of the window is read, and focuses a named field before a key meant for it', async () => {
+    const desk = new Desk();
+    const { provider, requests } = models((request, call) => call === 1 ? { kind: 'act', operation: 'PRESS', key: 'return', target: id(request, 'Font Size') }
+      : call === 2 ? { kind: 'act', operation: 'PRESS', key: 'return', target: id(request, 'Font Size') } : yielded(request));
+    const result = await session(desk, provider, makeHost().host).result;
+    expect(desk.acts.map(a => a.operation)).toEqual(['FOCUS', 'PRESS']);
+    expect(requests[1].issues.join(' ')).toMatch(/was focused for you/);
+    expect(requests[0].observation.windowTitle).toBe('Document');
+    expect(result!.location.window).toBe('Document');
   });
 
   it('opens a site by its front page and refuses an inner address nobody supplied', async () => {
