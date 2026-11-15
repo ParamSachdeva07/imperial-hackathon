@@ -9,7 +9,7 @@ import { NavigationController } from '../apps/desktop/electron/controller/naviga
 import { Navigator, SETTLE, type Host } from '../apps/desktop/electron/controller/navigator';
 import { Orchestrator, RETRY } from '../apps/desktop/electron/controller/orchestrator';
 import {
-  TaskInputSchema, type ControllerState, type DesktopCandidate, type DesktopContext, type DesktopObservation, type Mission,
+  OrchestratorResultSchema, PlanStepSchema, TaskInputSchema, type ControllerState, type DesktopCandidate, type DesktopContext, type DesktopObservation, type Mission,
   type OrchestratorRequest, type OrchestratorResult, type PlanRequest, type PlanStep,
 } from '../packages/contracts/src/index';
 
@@ -144,6 +144,14 @@ describe('the ledger: one rule about sending an action again', () => {
 });
 
 describe('a navigator session', () => {
+  it('reads a step exactly as the broker sends it, with empty fields left out', () => {
+    const wire = { taskId, observationId: 'o1', model: 'm', reconciliations: [], kind: 'act', operation: 'OPEN_URL', target: '',
+      text: 'https://twitch.tv', key: '', direction: '', risk: 'reversible', expect: '', query: '', scope: '', waitMs: 0 };
+    expect(PlanStepSchema.parse(wire).report).toBeUndefined();
+    expect(OrchestratorResultSchema.parse({ taskId, model: 'm', next: 'finish', objective: '', doneWhen: '', context: '',
+      irreversible: false, plan: [], message: 'Done.' }).usage).toBeUndefined();
+  });
+
   it('acts, sees the result, and returns one object saying what is true and where things stand', async () => {
     const desk = new Desk();
     const { provider, requests } = models((request, call) => call === 1 ? { kind: 'act', operation: 'SET_VALUE', target: id(request, 'Font Size'), text: '24' }

@@ -207,11 +207,11 @@ export const PlanStepSchema = z.object({
   query: z.string().max(300),
   scope: z.string().max(60),
   waitMs: z.number().int().min(0).max(5000),
-  /** Required on yield: what the session achieved, with the elements that show it. */
+  /** Present on yield: what the session achieved, with the elements that show it. The broker omits it otherwise. */
   report: z.object({
     status: z.enum(['done', 'progress', 'needs_decision', 'blocked', 'unverified']),
     summary: z.string().max(1000), evidence: z.array(z.string().max(40)).max(12),
-  }).strict().nullable(),
+  }).strict().nullish(),
   usage: ModelUsageSchema.optional(),
 }).strict();
 export type PlanStep = z.infer<typeof PlanStepSchema>;
