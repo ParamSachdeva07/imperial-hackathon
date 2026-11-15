@@ -12,7 +12,7 @@ Read this before touching hand tracking, gestures, the camera, or real mouse act
 
 **This package owns:**
 - Camera capture, MediaPipe hand tracking (`@mediapipe/tasks-vision` GestureRecognizer, 2 hands)
-- Gesture interpretation: wake, finger cursor, dwell selection, circle → region, mouse mode + dwell click, fist scroll
+- Gesture interpretation: wake, finger cursor, dwell selection, drag → rectangle region, mouse mode + dwell click, fist scroll
 - An Electron gesture service (hidden vision window + IPC to main)
 - **On-screen feedback for the user's own gestures**: wake ring around the raised hand, drawing cursor, trail, hold rings, selected point/region (transparent click-through overlay window)
 - Optional real mouse moves/clicks (nut-js)
@@ -32,7 +32,7 @@ Plan mapping (Notion plan "Pointy (TBD)"): this covers the **MediaPipe worker** 
 | Open palm, raised, fingers up, held **still** 0.7 s | `wake_progress` 0→1 (ring around the hand), then `wake_requested` | Only while the session is **closed**. Edge-triggered (once per raise), re-arms when the palm goes away. A moving hand (scratching, waving) does not wake. Works anywhere in the camera frame. |
 | **One finger** (index) | `mouse` start/move/end | Drives the **real system mouse** (if the controller attaches it). |
 | One finger, still ~1 s | `click_progress` 0→1, then `click` | **Dwell left click** where the mouse is. Needs ≥40 pt of movement before it can click again. Raising a still finger never clicks. |
-| **Two fingers held together** (index + middle) | `cursor_moved`, `dwell_progress`, then `point_selected` or `region_selected` | Drawing/selection cursor. Still ~0.8 s → point. Closed loop then still → region (convex hull polygon + bbox). |
+| **Two fingers held together** (index + middle) | `cursor_moved`, `dwell_progress`, then `point_selected` or `region_selected` | Drawing/selection cursor. Still ~0.8 s → point. Drag then still → region (the rectangle between the drag's start and end). |
 | Closed **fist**, moved | `scroll` start/move/end with `dx`, `dy` | Drag semantics (hand down ⇒ content down ⇒ scroll up). With `attachSystemMouse`, becomes real wheel scrolling of the window under the mouse pointer. |
 | Two fingers spread (V) | nothing | Intentionally unused. |
 | Drawing hand disappears or changes pose | `hand_lost` | `reason: "absent" \| "pose_changed"`. **Only** emitted for the drawing (two-finger) cursor: it means "the stroke ended without a selection". |
@@ -118,7 +118,7 @@ What the service already does: hidden `BrowserWindow` with `backgroundThrottling
 | `src/config.ts` | All thresholds (`DEFAULT_CONFIG`), tunable at runtime |
 | `src/interpreter.ts` | `GestureInterpreter`: pure, frame-driven, no DOM/MediaPipe. All gesture logic |
 | `src/pose.ts` | Pose classification (MediaPipe label + landmark rules), debouncing, two-finger hysteresis |
-| `src/geometry.ts`, `src/oneEuro.ts`, `src/calibration.ts`, `src/util.ts` | Loop detection, smoothing, calibration, checked indexing |
+| `src/geometry.ts`, `src/oneEuro.ts`, `src/calibration.ts`, `src/util.ts` | Geometry helpers, smoothing, calibration, checked indexing |
 | `src/detector.ts` | MediaPipe GestureRecognizer wrapper → `FrameObservation` |
 | `src/electron/service.ts` | Main-process service (section 3) |
 | `src/electron/preload.ts`, `api.ts` | Sandboxed preload exposing `window.pointyGestures` |
@@ -191,6 +191,5 @@ Do not reimplement gesture logic in `apps/desktop`: subscribe to events. If beha
 - The camera area mapped to the screen (`activeZone`, default x 15–85 %, y 20–65 % of the image) assumes a laptop webcam above the screen; other setups may need calibration (`computeActiveZone`, playground flow) or `POINTY_GESTURES_ZONE` in the launcher. An onboarding calibration step would help in the app.
 - Latency/precision: each camera frame is processed as soon as it arrives (4 ms polling), the cursor uses a One Euro filter plus an 8 DIP deadband with slow easing (`cursorDeadband`), and the launcher logs fps, processing time per frame and the real camera mode. `startVisionRenderer` takes `cameraFps` (default 30) and `numHands` (default 2) to trade latency/CPU.
 - Thresholds are tuned for one young user. Expect to raise `dwellMs`, `clickDwellMs` and `wakeHoldMs` after testing with older adults.
-- Circle detection could be made more forgiving (`closeFrac`, `minLoopLength`) at the cost of more accidental regions.
 - No "end session" gesture: closing is the controller's job (stop button / inactivity timeout).
 - Model and wasm are loaded at runtime (see 6.3). The model falls back to Google's URL if the local file is missing (dev only).

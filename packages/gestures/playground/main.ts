@@ -125,7 +125,7 @@ resizeScreen();
 /* ---------- threshold panel ---------- */
 const TUNABLE: (keyof GestureConfig)[] = [
   "wakeHoldMs", "dwellMs", "dwellSpeed", "moveSpeed", "oneEuroMinCutoff", "oneEuroBeta",
-  "minLoopLength", "minLoopArea", "minCompactness", "closeFrac", "poseStableMs", "fingerExtendRatio",
+  "rectMinSize", "poseStableMs", "fingerExtendRatio",
   "wakeMaxMotion", "wakeUprightMin", "scrollGain", "scrollDeadzone", "scrollGraceMs", "scrollMinCutoff", "twoFingerMaxSpread",
   "poseGraceMs", "handoffDecayDist", "clickDwellMs", "clickArmDist",
 ];

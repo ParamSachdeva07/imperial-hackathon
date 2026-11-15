@@ -178,14 +178,11 @@ describe("pointing", () => {
     expect(evs).toHaveLength(0);
   });
 
-  it("moves the cursor, then a steady hold selects a point", () => {
+  it("moves the cursor; a steady hold without a drag selects a point", () => {
     const it = active();
-    // Sweep right for 1 s, then hold still for 1.2 s.
-    const move = frames(0, 1000, (i, n) => [twoFingersAt("Right", 0.7 - 0.3 * (i / n), 0.4)]);
-    const hold = frames(1000, 1200, () => [twoFingersAt("Right", 0.4, 0.4)]);
-    const evs = run(it, [...move, ...hold]);
+    const evs = run(it, frames(0, 1500, () => [twoFingersAt("Right", 0.4, 0.4)]));
 
-    expect(ofType(evs, "cursor_moved").length).toBeGreaterThan(50);
+    expect(ofType(evs, "cursor_moved").length).toBeGreaterThan(30);
     expect(ofType(evs, "region_selected")).toHaveLength(0);
     const pts = ofType(evs, "point_selected");
     expect(pts).toHaveLength(1);
@@ -223,60 +220,58 @@ describe("pointing", () => {
   });
 });
 
-describe("circling", () => {
-  it("a closed loop followed by a pause selects a region", () => {
-    const it = active();
-    const cx = 0.5, cy = 0.4, r = 0.12;
-    const loop = frames(0, 2000, (i, n) => {
-      const a = (2 * Math.PI * i) / (n - 1);
-      return [twoFingersAt("Right", cx + r * Math.cos(a), cy + r * Math.sin(a))];
-    });
-    const hold = frames(2000, 1200, () => [twoFingersAt("Right", cx + r, cy)]);
-    const evs = run(it, [...loop, ...hold]);
+describe("dragging a rectangle", () => {
+  /** Two fingers go up at (x0, y0), drag in a straight line to (x1, y1) over 1 s, then hold still. */
+  const drag = (x0: number, y0: number, x1: number, y1: number) => [
+    ...frames(0, 300, () => [twoFingersAt("Right", x0, y0)]),
+    ...frames(300, 1000, (i, n) => [twoFingersAt("Right", x0 + (x1 - x0) * (i / (n - 1)), y0 + (y1 - y0) * (i / (n - 1)))]),
+    ...frames(1300, 1200, () => [twoFingersAt("Right", x1, y1)]),
+  ];
+
+  it("a diagonal drag followed by a pause selects the rectangle between its two ends", () => {
+    const evs = run(active(), drag(0.6, 0.3, 0.4, 0.5));
 
     expect(ofType(evs, "point_selected")).toHaveLength(0);
     const regions = ofType(evs, "region_selected");
     expect(regions).toHaveLength(1);
     const { bbox, polygon } = at(regions, 0);
-    // radius 0.12 → ≈247 pt horizontally, 240 pt vertically → bbox ≈ 494 × 480
-    expect(bbox.width).toBeGreaterThan(400);
-    expect(bbox.width).toBeLessThan(560);
-    expect(bbox.height).toBeGreaterThan(400);
-    expect(bbox.height).toBeLessThan(540);
-    expect(polygon.length).toBeGreaterThan(6);
-    expect(polygon.length).toBeLessThan(60); // simplified
-    // Convex hull → never self-intersecting: every turn has the same orientation.
-    const turns = polygon.map((p, i) => {
-      const a = at(polygon, (i + 1) % polygon.length), b = at(polygon, (i + 2) % polygon.length);
-      return Math.sign((at(a, 0) - p[0]) * (b[1] - p[1]) - (a[1] - p[1]) * (at(b, 0) - p[0]));
-    });
-    expect(new Set(turns.filter((s) => s !== 0)).size).toBe(1);
+    // x 0.6→0.4 mirrored = 0.4→0.6 → 514..926 pt; y 0.3→0.5 → 200..600 pt
+    expect(bbox.x).toBeCloseTo(514, -1);
+    expect(bbox.y).toBeCloseTo(200, -1);
+    expect(bbox.width).toBeCloseTo(411, -1);
+    expect(bbox.height).toBeCloseTo(400, -1);
+    // Four corners, clockwise from the top left.
+    const [x1, y1] = at(polygon, 2);
+    expect(polygon).toEqual([[bbox.x, bbox.y], [x1, bbox.y], [x1, y1], [bbox.x, y1]]);
+    expect(x1 - bbox.x).toBeCloseTo(bbox.width, 0);
+    expect(y1 - bbox.y).toBeCloseTo(bbox.height, 0);
   });
 
-  it("a slow square drawn over 7 s still counts", () => {
-    const it = active();
-    const corners: [number, number][] = [[0.35, 0.25], [0.65, 0.25], [0.65, 0.55], [0.35, 0.55], [0.35, 0.25]];
-    const square = frames(0, 7000, (i, n) => {
-      const u = (i / (n - 1)) * 4;
-      const k = Math.min(3, Math.floor(u));
-      const f = u - k;
-      const [ax, ay] = at(corners, k), [bx, by] = at(corners, k + 1);
-      return [twoFingersAt("Right", ax + f * (bx - ax), ay + f * (by - ay))];
-    });
-    const hold = frames(7000, 1200, () => [twoFingersAt("Right", 0.35, 0.25)]);
-    const evs = run(it, [...square, ...hold]);
-    expect(ofType(evs, "region_selected")).toHaveLength(1);
+  it("works in any direction (up and to the left)", () => {
+    const evs = run(active(), drag(0.4, 0.5, 0.6, 0.3));
+    const { bbox } = at(ofType(evs, "region_selected"), 0);
+    expect(bbox.x).toBeCloseTo(514, -1);
+    expect(bbox.y).toBeCloseTo(200, -1);
   });
 
-  it("a back-and-forth scribble is not a region", () => {
+  it("reports where the drag began with every cursor move, so the rectangle can be drawn live", () => {
+    const evs = run(active(), drag(0.6, 0.3, 0.4, 0.5));
+    const moves = ofType(evs, "cursor_moved").filter((e) => e.t < 1300);
+    expect(moves.every((e) => e.anchor && Math.abs(e.anchor.x - 514) < 10 && Math.abs(e.anchor.y - 200) < 10)).toBe(true);
+  });
+
+  it("after a selection, moving on starts a new rectangle from there", () => {
     const it = active();
-    const scribble = frames(0, 2000, (i) => [
-      twoFingersAt("Right", 0.4 + 0.15 * Math.abs(Math.sin((i / 15) * Math.PI)), 0.4),
+    run(it, drag(0.6, 0.3, 0.4, 0.5));
+    const evs = run(it, [
+      ...frames(2500, 800, (i, n) => [twoFingersAt("Right", 0.4 - 0.1 * (i / (n - 1)), 0.5 - 0.1 * (i / (n - 1)))]),
+      ...frames(3300, 1200, () => [twoFingersAt("Right", 0.3, 0.4)]),
     ]);
-    const hold = frames(2000, 1200, () => [twoFingersAt("Right", 0.4, 0.4)]);
-    const evs = run(it, [...scribble, ...hold]);
-    expect(ofType(evs, "region_selected")).toHaveLength(0);
-    expect(ofType(evs, "point_selected")).toHaveLength(1);
+    const regions = ofType(evs, "region_selected");
+    expect(regions).toHaveLength(1);
+    // From about (926, 600) to (1131, 400): far smaller than a rectangle anchored at the first drag's start.
+    expect(at(regions, 0).bbox.width).toBeLessThan(260);
+    expect(at(regions, 0).bbox.x).toBeGreaterThan(880);
   });
 });
 
@@ -487,7 +482,7 @@ describe("dwell click (mouse mode)", () => {
       ...frames(800, 1500, () => [twoFingersAt("Right", 0.6, 0.4)]),
     ]);
     expect(ofType(evs, "click")).toHaveLength(0);
-    expect(ofType(evs, "point_selected")).toHaveLength(1);
+    expect(ofType(evs, "region_selected")).toHaveLength(1);
   });
 });
 

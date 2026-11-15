@@ -15,7 +15,7 @@ const phase = z.enum(["start", "move", "end"]);
 export const GestureEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("wake_requested"), source: z.literal("open_palm"), hand, heldForMs: num, t: num }),
   z.object({ type: z.literal("wake_progress"), ...base, progress: num.min(0).max(1), ...xy }),
-  z.object({ type: z.literal("cursor_moved"), ...base, ...xy }),
+  z.object({ type: z.literal("cursor_moved"), ...base, ...xy, anchor: z.object({ x: num, y: num }).optional() }),
   z.object({ type: z.literal("dwell_progress"), ...base, progress: num.min(0).max(1), ...xy }),
   z.object({ type: z.literal("point_selected"), ...base, ...xy, heldForMs: num }),
   z.object({

@@ -47,6 +47,8 @@ export type GestureEvent =
       hand: HandLabel;
       x: number;
       y: number;
+      /** Where the current drag began: the corner opposite the cursor of the rectangle being dragged out. Absent right after a selection, until the finger moves again. */
+      anchor?: { x: number; y: number };
       displayId: number;
       t: number;
     }

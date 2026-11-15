@@ -69,19 +69,11 @@ export interface GestureConfig {
   moveSpeed: number;
   /** Hold duration that confirms a selection. */
   dwellMs: number;
-  /** Path history kept for loop detection. */
-  pathMaxMs: number;
-
-  /* Loop (circle) detection */
-  minLoopLength: number;
-  /** Loop closes if end is within max(closeMinDist, closeFrac · loop length) of an earlier point. */
-  closeFrac: number;
-  closeMinDist: number;
-  minLoopArea: number;
-  /** 4πA/P², 1 for a circle; rejects back-and-forth scribbles. */
-  minCompactness: number;
-  /** Ramer-Douglas-Peucker tolerance for the sent polygon. */
-  simplifyEpsilon: number;
+  /**
+   * A drag whose longer side is at least this many points selects the rectangle between where the
+   * drag began and where the hold happens; anything smaller selects the held point.
+   */
+  rectMinSize: number;
 
   /** Pointing hand absent this long → hand_lost. */
   lostMs: number;
@@ -155,14 +147,7 @@ export const DEFAULT_CONFIG: GestureConfig = {
   dwellSpeed: 60,
   moveSpeed: 160,
   dwellMs: 800,
-  pathMaxMs: 10000,
-
-  minLoopLength: 150,
-  closeFrac: 0.2,
-  closeMinDist: 40,
-  minLoopArea: 2500,
-  minCompactness: 0.2,
-  simplifyEpsilon: 3,
+  rectMinSize: 40,
 
   lostMs: 300,
   handoffMs: 1500,

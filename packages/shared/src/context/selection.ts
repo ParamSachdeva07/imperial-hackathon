@@ -1,5 +1,5 @@
 /**
- * A frozen snapshot of what the user selected with a gesture (circled region or held point), taken
+ * A frozen snapshot of what the user selected with a gesture (dragged rectangle or held point), taken
  * the moment the selection happened. Producers: apps/desktop/src/main/capture (SelectionCapture).
  * Consumers: the GPT Realtime dev voice loop today; the brain/controller (Jev) later.
  *
@@ -36,7 +36,7 @@ export interface SelectionSnapshot {
    * y likewise. Optional for older producers.
    */
   focusGlobal?: Rect;
-  /** Region only: the circled polygon, global DIP. */
+  /** Region only: the selected rectangle's corners, global DIP. */
   polygonGlobal?: Point[];
   /** Point only: the selected point, global DIP. */
   pointGlobal?: Point;

@@ -1,6 +1,6 @@
 /**
  * Drawing for the feedback overlay page: call `startFeedbackRenderer()` from its script.
- * Big, high-contrast, calm (older users): a large cursor, a thick trail, wide hold rings,
+ * Big, high-contrast, calm (older users): a large cursor, the rectangle being dragged out, wide hold rings,
  * selections that fade out by themselves.
  */
 import type { GestureEvent } from "../events";
@@ -9,8 +9,6 @@ import type { FeedbackMessage } from "./protocol";
 export interface FeedbackRendererOptions {
   /** How long a selected point/region stays visible (ms). The controller can also clear it. */
   selectionTtlMs?: number;
-  /** How long the trail stays (ms). */
-  trailMs?: number;
 }
 
 type Selection = Extract<GestureEvent, { type: "point_selected" | "region_selected" }>;
@@ -18,7 +16,6 @@ type Selection = Extract<GestureEvent, { type: "point_selected" | "region_select
 const C = {
   cursor: "#ffffff",
   outline: "rgba(0, 0, 0, 0.75)",
-  trail: "#ffd54a",
   dwell: "#2ecc71",
   click: "#ff9f43",
   region: "#2f9bff",
@@ -29,7 +26,6 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
   const api = window.pointyGestureFeedback;
   if (!api) throw new Error("window.pointyGestureFeedback is missing: load the feedback preload in this window.");
   const ttl = opts.selectionTtlMs ?? 4000;
-  const trailMs = opts.trailMs ?? 10000;
 
   document.documentElement.style.background = "transparent";
   document.body.style.margin = "0";
@@ -42,7 +38,8 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
 
   let active = false;
   let cursor: { x: number; y: number } | null = null;
-  let trail: { x: number; y: number; t: number }[] = [];
+  /** The fixed corner of the rectangle being dragged out (the cursor is the opposite one). */
+  let anchor: { x: number; y: number } | null = null;
   let dwell = 0;
   let mouse: { x: number; y: number } | null = null;
   let clickProgress = 0;
@@ -53,7 +50,7 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
 
   const reset = () => {
     cursor = null;
-    trail = [];
+    anchor = null;
     dwell = 0;
     mouse = null;
     clickProgress = 0;
@@ -70,7 +67,7 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
         break;
       case "cursor_moved":
         cursor = { x: e.x, y: e.y };
-        trail.push({ x: e.x, y: e.y, t: now });
+        anchor = e.anchor ?? null;
         break;
       case "dwell_progress":
         dwell = e.progress;
@@ -78,12 +75,12 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
       case "point_selected":
       case "region_selected":
         selection = { s: e, at: now };
-        trail = [];
+        anchor = null;
         dwell = 0;
         break;
       case "hand_lost":
         cursor = null;
-        trail = [];
+        anchor = null;
         dwell = 0;
         break;
       case "mouse":
@@ -180,17 +177,17 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
         }
       }
 
-      // Trail of the drawing cursor.
-      trail = trail.filter((p) => now - p.t < trailMs);
-      if (trail.length > 1) {
+      // The rectangle being dragged out, from where the drag began to the cursor.
+      if (cursor && anchor) {
+        const x = Math.min(anchor.x, cursor.x), y = Math.min(anchor.y, cursor.y);
+        const rw = Math.abs(cursor.x - anchor.x), rh = Math.abs(cursor.y - anchor.y);
+        g.fillStyle = "rgba(47, 155, 255, 0.10)";
+        g.fillRect(x, y, rw, rh);
         g.lineJoin = "round";
-        g.lineCap = "round";
-        for (const [color, width] of [[C.outline, 10], [C.trail, 6]] as const) {
+        for (const [color, width] of [[C.outline, 5], [C.region, 2.5]] as const) {
           g.strokeStyle = color;
           g.lineWidth = width;
-          g.beginPath();
-          trail.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
-          g.stroke();
+          g.strokeRect(x, y, rw, rh);
         }
       }
 

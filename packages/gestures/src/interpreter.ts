@@ -1,6 +1,6 @@
 import { makeConfig, type FingerPose, type GestureConfig } from "./config";
 import type { DisplayInfo, FrameObservation, GestureEvent, HandLabel, HandObservation } from "./events";
-import { findClosedLoop, simplify, convexHull, bbox, dist, type Vec2 } from "./geometry";
+import { dist, type Vec2 } from "./geometry";
 import { OneEuroFilter2D } from "./oneEuro";
 import { classifyPose, PoseTracker, type Pose } from "./pose";
 import { at } from "./util";
@@ -41,7 +41,8 @@ interface PointerState {
   pos: Vec2;
   lastSeen: number;
   recent: TimedPoint[];
-  path: TimedPoint[];
+  /** Where the current drag began (the fixed corner of the rectangle); null between a selection and the next movement. */
+  anchor: Vec2 | null;
   restStart: number | null;
   restPts: Vec2[];
   armed: boolean;
@@ -498,7 +499,7 @@ export class GestureInterpreter {
       pos: [0, 0],
       lastSeen: 0,
       recent: [],
-      path: [],
+      anchor: null,
       restStart: null,
       restPts: [],
       armed: true,
@@ -612,8 +613,10 @@ export class GestureInterpreter {
     const [sx, sy] = this.clampToDisplay([raw[0] + p.offset[0], raw[1] + p.offset[1]]);
     const [x, y] = this.follow(p.lastSeen === 0 ? null : p.pos, p.filter.filter(sx, sy, t / 1000), t - p.lastSeen);
     p.pos = [x, y];
+    if (p.lastSeen === 0) p.anchor = [x, y]; // the drag starts where the two fingers went up
     p.lastSeen = t;
-    events.push({ type: "cursor_moved", hand: p.hand, x: round1(x), y: round1(y), displayId, t });
+    const anchor = p.anchor ? { anchor: { x: round1(p.anchor[0]), y: round1(p.anchor[1]) } } : {};
+    events.push({ type: "cursor_moved", hand: p.hand, x: round1(x), y: round1(y), ...anchor, displayId, t });
 
     // Speed over a short window.
     p.recent.push({ t, x, y });
@@ -621,10 +624,6 @@ export class GestureInterpreter {
     const first = at(p.recent, 0);
     const dt = (t - first.t) / 1000;
     const speed = dt > 0 ? dist([first.x, first.y], [x, y]) / dt : 0;
-
-    // Path for loop detection.
-    p.path.push({ t, x, y });
-    while (p.path.length && at(p.path, 0).t < t - c.pathMaxMs) p.path.shift();
 
     // Hysteresis: once resting, stay resting until clearly moving.
     const resting = p.restStart !== null ? speed <= c.moveSpeed : speed < c.dwellSpeed;
@@ -654,34 +653,32 @@ export class GestureInterpreter {
     }
     if (!p.armed && speed > c.moveSpeed) {
       p.armed = true;
-      p.path = [{ t, x, y }];
+      p.anchor = [x, y]; // a new drag starts where the finger moved off again
     }
   }
 
+  /** The hold completed: the dragged rectangle if the finger travelled far enough, otherwise the held point. */
   private select(p: PointerState, t: number, events: GestureEvent[]): void {
-    const c = this.cfg;
     const displayId = this.display.id;
-    const pts: Vec2[] = p.path.map((q) => [q.x, q.y]);
-    const loop = findClosedLoop(pts, c);
+    const n = p.restPts.length;
+    const mx = p.restPts.reduce((s, q) => s + q[0], 0) / n;
+    const my = p.restPts.reduce((s, q) => s + q[1], 0) / n;
+    const [ax, ay] = p.anchor ?? [mx, my];
+    const width = Math.abs(mx - ax);
+    const height = Math.abs(my - ay);
 
-    if (loop) {
-      // Hand-drawn loops wobble and self-intersect; the convex hull is what the user meant to enclose.
-      const poly = convexHull(simplify(loop, c.simplifyEpsilon)).map(
-        ([x, y]) => [round1(x), round1(y)] as [number, number],
-      );
-      const b = bbox(poly);
+    if (Math.max(width, height) >= this.cfg.rectMinSize) {
+      const x0 = round1(Math.min(ax, mx)), y0 = round1(Math.min(ay, my));
+      const x1 = round1(Math.max(ax, mx)), y1 = round1(Math.max(ay, my));
       events.push({
         type: "region_selected",
         hand: p.hand,
-        polygon: poly,
-        bbox: { x: round1(b.x), y: round1(b.y), width: round1(b.width), height: round1(b.height) },
+        polygon: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+        bbox: { x: x0, y: y0, width: round1(x1 - x0), height: round1(y1 - y0) },
         displayId,
         t,
       });
     } else {
-      const n = p.restPts.length;
-      const mx = p.restPts.reduce((s, q) => s + q[0], 0) / n;
-      const my = p.restPts.reduce((s, q) => s + q[1], 0) / n;
       events.push({
         type: "point_selected",
         hand: p.hand,
@@ -694,7 +691,7 @@ export class GestureInterpreter {
     }
 
     p.armed = false;
-    p.path = [];
+    p.anchor = null;
     p.lastProgress = 0;
   }
 }
