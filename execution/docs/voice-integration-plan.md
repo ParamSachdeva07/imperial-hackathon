@@ -26,19 +26,28 @@ The two repositories are merged in this one: the voice app at the root, the exec
 - Avatar backend: with `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` and `ANAM_AVATAR_ID` set, the
   session token is created for that ElevenLabs agent on a Cara 4 avatar. Tested with fake upstreams.
 
-**Not done: what still stands between this and talking to ElevenLabs through Anam**
+- Agent mode, both apps (`POINTY_VOICE_STACK=elevenlabs`): the avatar app turns the microphone on,
+  registers a handler per tool with the Anam SDK and forwards each call to the main app's tool bridge;
+  the main app runs the tool (drawing, execution, or `look_at_screen`, which returns today's
+  "[screen]" text) and a small session class replaces the Realtime controller for opening, closing,
+  idle, gestures and menu-bar status. Typechecked and unit-tested; **never run against Anam.**
+- One start command: `npm run pointy` also launches the execution service, and picks the avatar's
+  mode from `POINTY_VOICE_STACK`.
 
-1. Phase 0's four questions. Nothing below can be finished without the first two answers.
-2. Avatar app, agent mode: microphone on, register a handler per tool with the Anam SDK, forward each
-   call to the main app and return its result. Add a control route that injects a message.
-3. Main app, agent mode: a local tool bridge the avatar app calls (drawing tools, the three execution
-   tools, `look_at_screen` returning today's "[screen]" text), and a small lifecycle in place of the
-   Realtime controller (open, close, idle, gestures, tray status).
-4. Announcing a finished task in agent mode, and the selection offer: both need message injection.
-5. One start command that also launches the execution service.
-6. Interruptions in agent mode are ElevenLabs' and Anam's own; what remains is forwarding the
-   "interrupted" event so memory records what was actually said. On the current stack interruption
-   already works, and a running task is stopped by `stop_computer_task`, the hotkey or the hand.
+**Still to do, all of it needing real keys**
+
+1. Run `scripts/elevenlabs-agent.ts` to create the agent, and put its id, the ElevenLabs key and a
+   Cara 4 avatar id in `anam-overlay/backend/.env`. The API paths in the script are from the
+   documentation and have not been called.
+2. Phase 0's questions, now concrete:
+   - Does `sendUserMessage` reach the ElevenLabs agent? Announcing a finished task in agent mode is
+     built on it (`POST /message` on the avatar app). If it does not, the result is still returned
+     by `computer_task_status`.
+   - Does the avatar's own voice trigger the agent on laptop speakers? Interruption is ElevenLabs'.
+   - Can an image reach the agent? Until then the agent gets the control list as text, no picture.
+3. The spoken offer right after a selection is not built in agent mode. The selection is included
+   the next time the agent calls `look_at_screen`.
+4. Try it by voice on both stacks. Nothing here has been spoken to yet.
 
 ## Target shape
 

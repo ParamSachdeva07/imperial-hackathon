@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, Menu, screen, session, systemPreferences }
 import type { IpcMainEvent, IpcMainInvokeEvent, Rectangle } from 'electron';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import type { TokenResult } from '../shared/bridge.js';
 import { startControlServer } from './control.mjs';
 import type { ControlServer } from './control.mjs';
@@ -15,7 +17,19 @@ const rendererFile = path.join(directory, '../dist/index.html');
 const dev = process.env.OVERLAY_DEV === '1';
 // Speak-only: another local app (Pointy) drives the avatar as a mouth. No mic, no sendUserMessage.
 const speakOnly = process.env.ANAM_SPEAK_ONLY === '1';
-const speaker = speakOnly ? createSpeakController({
+// Agent mode: an ElevenLabs agent is the conversation. The main app still opens and ends the call, the
+// microphone is on, and the agent's tool calls are forwarded to the main app's tool bridge.
+const agentMode = !speakOnly && process.env.ANAM_AGENT_MODE === '1';
+const bridgeFile = process.env.POINTY_TOOL_BRIDGE_FILE ?? path.join(os.homedir(), '.pointy', 'tool-bridge.json');
+async function toolBridge(route: string, body?: unknown): Promise<unknown> {
+  const { port, token } = JSON.parse(fs.readFileSync(bridgeFile, 'utf8')) as { port: number; token: string };
+  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+    method: body === undefined ? 'GET' : 'POST', headers: { 'x-tool-bridge-token': token, 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(30_000),
+  });
+  return response.json();
+}
+const speaker = speakOnly || agentMode ? createSpeakController({
   send: sendSpeakCommand,
   setExpanded: (value) => setExpanded(value, false),
 }) : null;
@@ -154,7 +168,23 @@ ipcMain.handle('overlay:microphone', async (event) => {
   try { return await systemPreferences.askForMediaAccess('microphone'); }
   catch { return false; }
 });
-ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly }));
+ipcMain.handle('anam:mode', async (event) => {
+  if (!trusted(event)) return { speakOnly: false };
+  if (!agentMode) return { speakOnly };
+  // The tool names come from the main app, so the two never drift apart.
+  const tools = await toolBridge('/tools').then((r) => (r as { tools?: unknown }).tools, () => []);
+  return { speakOnly: false, agent: true, tools: Array.isArray(tools) ? tools.filter((t): t is string => typeof t === 'string') : [] };
+});
+ipcMain.handle('anam:tool-call', async (event, name: unknown, args: unknown): Promise<string> => {
+  if (!trusted(event) || !agentMode || typeof name !== 'string') return JSON.stringify({ ok: false, error: 'not available' });
+  try {
+    const reply = await toolBridge('/tool', { name, arguments: args ?? {} }) as { result?: unknown };
+    return typeof reply.result === 'string' ? reply.result : JSON.stringify(reply.result ?? { ok: false, error: 'no result' });
+  } catch { return JSON.stringify({ ok: false, error: 'The assistant app did not answer.' }); }
+});
+ipcMain.on('anam:agent-event', (event, payload: unknown) => {
+  if (trusted(event) && agentMode && payload && typeof payload === 'object') void toolBridge('/event', payload).catch(() => undefined);
+});
 ipcMain.on('anam:speak-report', (event, report: unknown) => {
   if (!trusted(event) || !speaker || !report || typeof report !== 'object') return;
   const { connected, speaking, session } = report as { connected?: unknown; speaking?: unknown; session?: unknown };
@@ -257,6 +287,7 @@ void app.whenReady().then(() => {
   createWindow();
   startControlServer({
     ...(speaker ? { speak: speaker } : {}),
+    ...(agentMode ? { message: (text: string) => { if (!speaker?.state().connected) return false; sendSpeakCommand({ type: 'message', text }); return true; } } : {}),
     getState: () => {
       if (!overlay) return null;
       const bounds = overlay.getBounds();

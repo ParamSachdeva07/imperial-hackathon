@@ -195,6 +195,16 @@ if (!flags.noAnam) {
   if (!shuttingDown) start("anam", C.anam, "npm", ["start"], { cwd: anamDir, env: anamEnv(process.env) });
 }
 
+// The execution agent: what run_on_computer hands requests to. POINTY_EXECUTION=0 leaves it out.
+const executionDir = join(root, "execution");
+if (!shuttingDown && process.env.POINTY_EXECUTION !== "0") {
+  if (existsSync(join(executionDir, "node_modules"))) {
+    start("exec", C.api, process.execPath, ["scripts/launch.mjs", "serve"], { cwd: executionDir, env: process.env });
+  } else {
+    log("exec", "execution/ has no node_modules: run `npm ci && npm run setup` there. Starting without the execution agent.", C.err);
+  }
+}
+
 if (!shuttingDown) {
   start("pointy", C.pointy, "npx", ["electron", "."], {
     cwd: join(root, "apps/desktop"),

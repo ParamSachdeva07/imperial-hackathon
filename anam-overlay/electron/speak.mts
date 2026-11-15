@@ -6,6 +6,7 @@ export type SpeakCommand =
   | { type: 'start'; session: number }
   | { type: 'end' }
   | { type: 'interrupt' }
+  | { type: 'message'; text: string }
   | ({ type: 'talk' } & Talk);
 // `session` echoes the start command of the call the report is about; reports for an older call are ignored.
 export type SpeakReport = { connected?: boolean; speaking?: boolean; session?: number };

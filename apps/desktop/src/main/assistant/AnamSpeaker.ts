@@ -63,6 +63,11 @@ export class AnamSpeaker implements AnamSpeakerClient {
     await this.mustOk("POST", "/interrupt", {});
   }
 
+  /** Agent mode: put a text message into the live conversation (the ElevenLabs agent answers it aloud). */
+  async message(text: string): Promise<void> {
+    await this.mustOk("POST", "/message", { text: text.slice(0, 4000) });
+  }
+
   async state(): Promise<AnamSpeakerState | null> {
     const res = await this.request("GET", "/state");
     if (!res || res.status !== 200) return null;

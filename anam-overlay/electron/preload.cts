@@ -3,6 +3,8 @@ import type { OverlayBridge, SpeakCommand } from '../shared/bridge.js';
 
 const bridge: OverlayBridge = {
   getMode: () => ipcRenderer.invoke('anam:mode'),
+  callTool: (name, args) => ipcRenderer.invoke('anam:tool-call', name, args),
+  agentEvent: (event) => ipcRenderer.send('anam:agent-event', event),
   onSpeakCommand: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, command: SpeakCommand) => callback(command);
     ipcRenderer.on('anam:speak-command', listener);
