@@ -39,5 +39,6 @@ console.log('Accessibility: ' + native.accessibility + ' | navigator: ' + (backe
 
 const shutdown = () => { service.stop(); pages.stop(); broker.kill('SIGTERM'); process.exit(0); };
 process.on('SIGINT', shutdown);
+process.on('SIGHUP', shutdown);
 process.on('SIGTERM', shutdown);
 broker.on('exit', () => { console.error('The broker stopped.'); shutdown(); });
