@@ -176,6 +176,9 @@ function createWindow() {
     resizable: false, maximizable: false, fullscreenable: false,
     frame: false, transparent: true, backgroundColor: '#00000000',
     alwaysOnTop: true, hasShadow: false, show: false,
+    // macOS: an NSPanel (like Pointy's overlay) can float over another app's full-screen Space;
+    // a normal window stays on the desktop Space even with visibleOnFullScreen.
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {
       preload: path.join(directory, 'preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
