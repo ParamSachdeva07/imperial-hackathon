@@ -1,7 +1,7 @@
 /**
  * Drawing for the feedback overlay page: call `startFeedbackRenderer()` from its script.
- * Light and calm: a short thin trace behind the mouse finger, a plain rectangle while dragging a selection
- * (like a mouse drag: no cursor, no trail), thin hold rings,
+ * Light and calm: one finger moves the real mouse pointer and draws nothing; two fingers drag out a plain
+ * rectangle (like a mouse drag: no cursor, no trail); thin hold rings,
  * selections that fade out by themselves.
  */
 import type { GestureEvent } from "../events";
@@ -13,9 +13,6 @@ export interface FeedbackRendererOptions {
 }
 
 type Selection = Extract<GestureEvent, { type: "point_selected" | "region_selected" }>;
-
-/** How long the mouse finger's trace stays (ms): short, so it reads as motion, not as a drawing. */
-const TRACE_MS = 220;
 
 const C = {
   cursor: "#ffffff",
@@ -46,8 +43,6 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
   let anchor: { x: number; y: number } | null = null;
   let dwell = 0;
   let mouse: { x: number; y: number } | null = null;
-  /** Where the mouse finger just was: a short trace that follows the movement and fades within TRACE_MS. */
-  let trace: { x: number; y: number; t: number }[] = [];
   let clickProgress = 0;
   let clickFlash: { x: number; y: number; at: number } | null = null;
   let selection: { s: Selection; at: number } | null = null;
@@ -59,7 +54,6 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
     anchor = null;
     dwell = 0;
     mouse = null;
-    trace = [];
     clickProgress = 0;
   };
 
@@ -92,10 +86,7 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
         break;
       case "mouse":
         mouse = e.phase === "end" ? null : { x: e.x, y: e.y };
-        if (e.phase === "end") {
-          clickProgress = 0;
-          trace = [];
-        } else trace.push({ x: e.x, y: e.y, t: now });
+        if (e.phase === "end") clickProgress = 0;
         break;
       case "click_progress":
         clickProgress = e.progress;
@@ -210,24 +201,6 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
         g.stroke();
         if (dwell > 0) ring(cursor.x, cursor.y, 22, dwell, C.dwell);
       }
-
-      // Mouse finger: a short thin trace behind the pointer, fading towards its tail.
-      trace = trace.filter((p) => now - p.t < TRACE_MS);
-      g.lineCap = "round";
-      for (let i = 1; i < trace.length; i++) {
-        const a = trace[i - 1]!, b = trace[i]!;
-        const fresh = 1 - (now - b.t) / TRACE_MS;
-        for (const [color, width] of [[C.outline, 3.5], [C.cursor, 1.75]] as const) {
-          g.globalAlpha = fresh * (color === C.outline ? 0.5 : 1);
-          g.strokeStyle = color;
-          g.lineWidth = width;
-          g.beginPath();
-          g.moveTo(a.x, a.y);
-          g.lineTo(b.x, b.y);
-          g.stroke();
-        }
-      }
-      g.globalAlpha = 1;
 
       // Dwell-click ring around the real mouse pointer, and a click confirmation.
       if (mouse && clickProgress > 0) ring(mouse.x, mouse.y, 20, clickProgress, C.click);
