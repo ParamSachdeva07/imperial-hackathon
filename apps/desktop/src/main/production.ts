@@ -259,6 +259,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     },
     selection: selectionStore,
     bargeIn: parseBargeIn(env.POINTY_BARGE_IN),
+    greet: true,
     // Pause ONLY the gesture session while Anam speaks (so the open hand can interrupt and the mouse is not driven by a
     // hand that is just resting). Deliberately NOT the setSessionActive wrapper above: ax.setActive(false) would cancel
     // the anchors (target_lost, the AI's drawings vanish) and the selection must survive until the answer is done.

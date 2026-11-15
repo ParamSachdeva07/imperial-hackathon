@@ -1325,6 +1325,20 @@ describe("interrupt ordering", () => {
   });
 });
 
+describe("greeting", () => {
+  it("asks the model to greet when a call opens, and only when enabled", async () => {
+    const s = setup({ greet: true });
+    await openIt(s);
+    const notes = s.transport.sent.filter((e) => e.type === "conversation.item.create" && JSON.stringify(e).includes("[call started]"));
+    expect(notes).toHaveLength(1);
+    expect(s.transport.sent.filter((e) => e.type === "response.create")).toHaveLength(1);
+
+    const quiet = setup();
+    await openIt(quiet);
+    expect(quiet.transport.sent.filter((e) => e.type === "response.create")).toHaveLength(0);
+  });
+});
+
 describe("open-hand interrupt hooks", () => {
   it("reports answer speech (not the offer) and wake_requested while answering interrupts", async () => {
     const hook: boolean[] = [];

@@ -154,6 +154,8 @@ export interface AssistantDeps {
   clock: Clock;
   /** POINTY_BARGE_IN (default guarded). */
   bargeIn?: BargeInMode;
+  /** Say a short greeting when a call opens. */
+  greet?: boolean;
   /**
    * Called with true when an ANSWER (not the short offer) starts being spoken and false when speaking ends / is interrupted / the
    * assistant closes. Production sets the gesture session INACTIVE on true (so an open hand yields wake_requested) and ACTIVE on
@@ -426,6 +428,7 @@ export class AssistantController {
     const queued = this.pendingSelection;
     this.pendingSelection = null;
     if (queued) void this.onSelection(queued); // selected while opening: offer now instead of freezing the mouse until the outline's safety cap
+    else if (this.deps.greet) this.greet();
   }
 
   async close(reason = "close"): Promise<void> {
@@ -491,6 +494,15 @@ export class AssistantController {
       this.requestResponse();
     };
     attempt();
+  }
+
+  /** The call just opened: have the model say hello. The note is not kept in memory. */
+  private greet(): void {
+    this.deps.transport.send({
+      type: "conversation.item.create",
+      item: { id: `note_${++this.noteSeq}`, type: "message", role: "user", content: [{ type: "input_text", text: "[call started] Greet the user in one short sentence, such as 'Hi, how can I help you today?'. Say nothing else." }] },
+    });
+    this.requestResponse();
   }
 
   /** Anam reported the call ended (e.g. end-call button). */
