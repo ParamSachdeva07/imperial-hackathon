@@ -7,7 +7,7 @@ import {
 import { KEYS, validatedUrl, type WorkspaceBridge } from '../desktop/workspace';
 import { PAGE_KEYS } from '../page/page-workspace';
 import { NativeError } from '../desktop/native-client';
-import type { DecisionProvider } from '../services/decision-client';
+import { BrokerError, type DecisionProvider } from '../services/decision-client';
 import { Ledger, VIEW_OPERATIONS, WRITE_OPERATIONS, type Delivery, type Effect } from './ledger';
 import type { ElementIdentity } from './identity';
 import { MenuIndex } from './menu-index';
@@ -184,7 +184,10 @@ export class Navigator {
       host.trace?.('plan_request', request);
       host.status('deciding', 'Planning the next step.');
       const started = Date.now();
-      const step = PlanStepSchema.parse(await this.provider.plan(request, signal));
+      const parsed = PlanStepSchema.safeParse(await this.provider.plan(request, signal));
+      // A malformed step is a model slip, not a defect: Luna gets the session back and carries on.
+      if (!parsed.success) throw new BrokerError('The navigator returned a malformed step (' + parsed.error.issues[0]?.path.join('.') + ').', true);
+      const step = parsed.data;
       signal.throwIfAborted();
       if (step.taskId !== t.taskId || step.observationId !== observation.id) throw new Error('Rejected a stale or mismatched plan step.');
       state.step++;

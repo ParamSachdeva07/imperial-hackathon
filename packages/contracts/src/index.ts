@@ -195,7 +195,7 @@ export type PlanRequest = {
 export const PlanStepSchema = z.object({
   taskId: z.string(), observationId: z.string(), model: z.string(),
   reconciliations: z.array(z.object({ effectId: z.string(), outcome: z.enum(['confirmed', 'refuted']),
-    evidence: z.array(z.string().max(40)).max(6) }).strict()).max(8),
+    evidence: z.array(z.string()).max(6) }).strict()).max(8),
   kind: z.enum(['act', 'find', 'read', 'wait', 'yield']),
   operation: z.union([z.enum(PLAN_OPERATIONS), z.literal('')]),
   target: z.string().max(40),
@@ -210,7 +210,7 @@ export const PlanStepSchema = z.object({
   /** Present on yield: what the session achieved, with the elements that show it. The broker omits it otherwise. */
   report: z.object({
     status: z.enum(['done', 'progress', 'needs_decision', 'blocked', 'unverified']),
-    summary: z.string().max(1000), evidence: z.array(z.string().max(40)).max(12),
+    summary: z.string().max(1000), evidence: z.array(z.string()).max(12),
   }).strict().nullish(),
   usage: ModelUsageSchema.optional(),
 }).strict();

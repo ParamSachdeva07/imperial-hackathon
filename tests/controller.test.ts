@@ -165,6 +165,18 @@ describe('a navigator session', () => {
     expect(requests[2].effects.map(e => [e.operation, e.outcome])).toEqual([['SET_VALUE', 'confirmed'], ['CLICK', 'confirmed']]);
   });
 
+  it('treats prose in place of an element id as a refused citation, and a malformed step as a model slip', async () => {
+    const desk = new Desk();
+    desk.fail = new NativeError('TIMEOUT', 'The helper timed out.', { delivery: 'unknown' });
+    const { provider, requests } = models((request, call) => call === 1 ? { kind: 'act', operation: 'CLICK', target: id(request, 'Send') }
+      : call === 2 ? { kind: 'wait', waitMs: 1, reconciliations: [{ effectId: 'fx1', outcome: 'confirmed', evidence: ['The Outbox counter now reads one message sent, which shows it worked.'] }] }
+      : call === 3 ? { kind: 'bogus' as never } : yielded(request));
+    const { navigator, result } = session(desk, provider, makeHost().host);
+    await expect(result).rejects.toMatchObject({ retryable: true });
+    expect(requests[2].issues.join(' ')).toMatch(/not on the current screen/);
+    expect(navigator.hasUncertainActions()).toBe(true);
+  });
+
   it('accepts a key under another name and a search that names a scope', async () => {
     const desk = new Desk();
     const { provider } = models((request, call) => call === 1 ? { kind: 'act', operation: 'PRESS', key: 'Enter' }
