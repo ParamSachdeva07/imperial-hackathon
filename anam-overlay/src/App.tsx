@@ -51,7 +51,7 @@ export function App() {
       if (!external || reexpand) await window.overlay.setExpanded(true);
       if (opening.current === attempt) void anam.start(true); // speak-only forces mic-less inside the hook
     } catch {
-      setWindowError('The desktop overlay could not open. Please relaunch Anam.');
+      setWindowError('The desktop overlay could not open. Please relaunch the app.');
     }
   }
 
@@ -69,7 +69,7 @@ export function App() {
       expandedRef.current = false;
       setExpanded(false);
     } catch {
-      setWindowError('The call ended. Please relaunch Anam to restore the dot.');
+      setWindowError('The call ended. Please relaunch the app to restore the dot.');
     } finally {
       closingRef.current = false;
       setClosing(false);
@@ -145,11 +145,12 @@ export function App() {
         externalRef.current = false;
         expandedRef.current = false;
         setExpanded(false);
-        if (manual) void Promise.resolve(window.overlay?.setExpanded(false)).catch(() => setWindowError('The call failed. Please relaunch Anam to restore the dot.'));
+        if (manual) void Promise.resolve(window.overlay?.setExpanded(false)).catch(() => setWindowError('The call failed. Please relaunch the app to restore the dot.'));
       }
     }
   }, [anam.phase, anam.error]);
   useEffect(() => { window.overlay?.reportSpeak?.({ speaking: anam.speaking, session: phaseSession.current }); }, [anam.speaking]);
+  useEffect(() => { window.overlay?.reportSpeak?.({ voice: anam.voice, session: phaseSession.current }); }, [anam.voice]);
   useEffect(() => { window.overlay?.reportSpeak?.({ muted: anam.muted, session: phaseSession.current }); }, [anam.muted]);
 
   function keyDown(event: KeyboardEvent) {
@@ -186,29 +187,27 @@ export function App() {
 
   return <main className={`companion ${expanded ? 'expanded' : 'collapsed'}`} onKeyDown={keyDown}>
     <button ref={dot} className={`launcher ${launcherVisible ? 'is-revealed' : ''}`} hidden={expanded}
-      aria-label="Open Anam and start a call" aria-expanded={expanded} aria-controls="anam-call"
-      title="Talk to Anam"
+      aria-label="Start a call" aria-expanded={expanded} aria-controls="anam-call"
+      title="Start a call"
       onFocus={() => window.overlay?.setLauncherFocused(true)}
       onBlur={() => window.overlay?.setLauncherFocused(false)}
       onClick={() => void open()}>
       <span className="launcher-dot" aria-hidden="true"><Phone size={17} strokeWidth={0} fill="currentColor" /></span>
     </button>
 
-    <section id="anam-call" className={`call ${closing ? 'leaving' : ''}`} hidden={!expanded} aria-label="Anam call">
+    <section id="anam-call" className={`call ${closing ? 'leaving' : ''}`} hidden={!expanded} aria-label="Call">
       <div className={`avatar ${connected ? 'live' : ''} ${failed ? 'failed' : ''}`} {...dragProps}>
-        <video id="persona-video" autoPlay playsInline aria-label="Your Anam AI persona" />
+        <video id="persona-video" autoPlay playsInline aria-label="Your assistant" />
         {!connected && <div className="avatar-placeholder">
           {failed ? <>
-            <span className="placeholder-name">anam</span>
             <p role="alert">{windowError || anam.error}</p>
             {!windowError && <button className="retry-button" onClick={() => void anam.start(true)}><RotateCcw size={15} aria-hidden="true" />Try again</button>}
           </> : <>
             <span className="connection-orbit" aria-hidden="true" />
-            <span className="placeholder-name">anam</span>
             <p>{closing ? 'Ending your call…' : 'Connecting…'}</p>
           </>}
         </div>}
-        <span className="avatar-label"><span className={connected ? 'live-indicator' : ''} />{anam.muted && connected ? 'Mic muted' : 'Anam · AI'}</span>
+        {anam.muted && connected && <span className="avatar-label"><span className="live-indicator" />Mic muted</span>}
       </div>
 
       <div className="call-controls">

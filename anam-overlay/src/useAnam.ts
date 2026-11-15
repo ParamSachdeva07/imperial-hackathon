@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnamEvent, ConnectionClosedCode, createClient } from '@anam-ai/js-sdk';
 import type { MessageDeliveryFailure } from '@anam-ai/js-sdk';
-import { SYNTHESIA_JOIN_MS, createSynthesiaClient } from './synthesiaClient';
+import { AVATAR_SPEAKING, SYNTHESIA_JOIN_MS, createSynthesiaClient } from './synthesiaClient';
 
 type Client = ReturnType<typeof createClient>;
 type Phase = 'idle' | 'connecting' | 'connected' | 'stopping' | 'error';
@@ -42,6 +42,8 @@ export function useAnam() {
   const busy = useRef(false);
   const mounted = useRef(true);
   const [speaking, setSpeaking] = useState(false);
+  // True while a Synthesia call is up: the avatar's own audio is the audible voice.
+  const [voice, setVoice] = useState(false);
   const speakOnlyRef = useRef(false);
   // Resolved once from the main process: speak-only is decided by ANAM_SPEAK_ONLY, not by the page.
   const modeRef = useRef<Promise<{ speakOnly: boolean; lipSync: boolean }> | null>(null);
@@ -58,7 +60,7 @@ export function useAnam() {
     if (previous) await cleanup(previous);
     busy.current = false;
     if (mounted.current) {
-      setPhase('idle'); setMuted(false); setSpeaking(false); setStatus('Conversation ended');
+      setPhase('idle'); setMuted(false); setSpeaking(false); setVoice(false); setStatus('Conversation ended');
       const video = document.getElementById('persona-video') as HTMLVideoElement | null;
       if (video) video.srcObject = null;
     }
@@ -128,9 +130,10 @@ export function useAnam() {
         const turn = active?.turns.get(failure.correlationId);
         if (turn && active) markFailed(active, turn);
       };
+      const onAvatarSpeaking = (value: boolean) => { if (current()) setSpeaking(value); };
       const onClose = (reason: ConnectionClosedCode) => {
         if (!current()) return;
-        setSpeaking(false);
+        setSpeaking(false); setVoice(false);
         ++generation.current;
         session.current = null;
         busy.current = false;
@@ -154,6 +157,7 @@ export function useAnam() {
       client.addListener(AnamEvent.CONNECTION_CLOSED, onClose);
       client.addListener(AnamEvent.TALK_STREAM_INTERRUPTED, onTalkInterrupted);
       client.addListener(AnamEvent.MESSAGE_DELIVERY_FAILED, onDeliveryFailed);
+      if (synthesia) client.addListener(AVATAR_SPEAKING as never, onAvatarSpeaking as never);
       client.addListener(AnamEvent.MIC_PERMISSION_DENIED, onDenied);
       client.addListener(AnamEvent.INPUT_AUDIO_STREAM_STARTED, onInputStream);
       disposers.push(
@@ -163,6 +167,7 @@ export function useAnam() {
         () => client.removeListener(AnamEvent.CONNECTION_CLOSED, onClose),
         () => client.removeListener(AnamEvent.TALK_STREAM_INTERRUPTED, onTalkInterrupted),
         () => client.removeListener(AnamEvent.MESSAGE_DELIVERY_FAILED, onDeliveryFailed),
+        () => client.removeListener(AVATAR_SPEAKING as never, onAvatarSpeaking as never),
         () => client.removeListener(AnamEvent.MIC_PERMISSION_DENIED, onDenied),
         () => client.removeListener(AnamEvent.INPUT_AUDIO_STREAM_STARTED, onInputStream),
       );
@@ -175,10 +180,12 @@ export function useAnam() {
       })]);
       if (!current()) return;
       if (lipSync || synthesia) {
-        // The voice is heard from the app that produced it; here it only drives the lips, so the avatar's own copy is silenced.
         active.lips = client.createAgentAudioInputStream({ encoding: 'pcm_s16le', sampleRate: 24000, channels: 1 });
         const video = document.getElementById('persona-video') as HTMLVideoElement | null;
-        if (video) video.muted = true;
+        // Anam: the voice is heard from the app that produced it, so the avatar's own copy stays silenced.
+        // Synthesia: the avatar's audio (a separate element, see synthesiaClient) is the lip-synced, audible voice.
+        if (video) video.muted = !synthesia;
+        setVoice(Boolean(synthesia));
       }
       setPhase('connected');
       setStatus(idleStatus);
@@ -297,5 +304,5 @@ export function useAnam() {
     };
   }, []);
 
-  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, audio, interrupt };
+  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, audio, interrupt, voice };
 }

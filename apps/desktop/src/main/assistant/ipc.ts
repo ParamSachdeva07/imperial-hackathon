@@ -12,7 +12,9 @@ export type AssistantCommand =
   | { kind: "connect" }
   | { kind: "disconnect" }
   | { kind: "send"; event: object }
-  | { kind: "mic"; enabled: boolean };
+  | { kind: "mic"; enabled: boolean }
+  /** Whether Pointy plays the model's voice itself (false while the avatar's own audio is the voice). */
+  | { kind: "voice"; local: boolean };
 
 export type AssistantMessage =
   | { kind: "ready" }

@@ -7,6 +7,8 @@
 //     raw 16-bit PCM; closing the stream ends the utterance
 //   - interrupt: RPC "lk.clear_buffer" to the avatar
 //   - the avatar calls RPC "lk.playback_finished" on us when it has finished an utterance
+// The avatar also publishes the audio it lip-syncs to, in sync with its video: that is played here (the audible voice),
+// and "avatar-speaking" is emitted from the first chunk of an utterance until playback finishes.
 // The avatar only lip-syncs here: speech comes as audio from the app that drives this window (lip-sync mode).
 import { AnamEvent, ConnectionClosedCode } from '@anam-ai/js-sdk';
 import { Room, RoomEvent, Track } from 'livekit-client';
@@ -15,6 +17,10 @@ import type { RemoteParticipant, RemoteTrack } from 'livekit-client';
 const AUDIO_TOPIC = 'lk.audio_stream';
 /** Synthesia documents joins of around 45 seconds. */
 export const SYNTHESIA_JOIN_MS = 110_000;
+/** Slack on top of the audio's own duration before speaking is cleared without a playback_finished. */
+const SPEAKING_SAFETY_MS = 2_000;
+/** Emitted with a boolean: the avatar is (not) playing a voice. */
+export const AVATAR_SPEAKING = 'avatar-speaking';
 
 export type SynthesiaSession = {
   url: string;
@@ -45,6 +51,17 @@ export function createSynthesiaClient(session: SynthesiaSession) {
   let stopped = false;
   let live = false;
   let writer: Writer | null = null;
+  let audioEl: HTMLAudioElement | null = null;
+  let speaking = false;
+  let sentBytes = 0;
+  let speakingSince = 0;
+  let speakingTimer: ReturnType<typeof setTimeout> | undefined;
+  const setSpeaking = (value: boolean) => {
+    if (!value) { clearTimeout(speakingTimer); speakingTimer = undefined; sentBytes = 0; }
+    if (speaking === value) return;
+    speaking = value;
+    emit(AVATAR_SPEAKING, value);
+  };
   /** Audio operations run one after another so chunks stay in order and an end never overtakes its audio. */
   let queue: Promise<void> = Promise.resolve();
   const enqueue = (work: () => Promise<void>) => { queue = queue.then(work).catch(() => undefined); };
@@ -68,7 +85,20 @@ export function createSynthesiaClient(session: SynthesiaSession) {
       if (!video) throw new Error('Video element missing');
       const attached = new Promise<void>((resolve) => {
         const attach = (track: RemoteTrack, participant: RemoteParticipant) => {
-          if (participant.identity !== session.avatarIdentity || track.kind !== Track.Kind.Video) return;
+          if (participant.identity !== session.avatarIdentity) return;
+          console.info(`[avatar] track ${track.kind}`);
+          if (track.kind === Track.Kind.Audio) {
+            // The avatar's own audio, in sync with its lips: this is the voice that is heard.
+            audioEl ??= document.createElement('audio');
+            audioEl.autoplay = true;
+            audioEl.muted = false;
+            audioEl.style.display = 'none';
+            if (!audioEl.isConnected) document.body.appendChild(audioEl);
+            track.attach(audioEl);
+            void audioEl.play().catch(() => undefined);
+            return;
+          }
+          if (track.kind !== Track.Kind.Video) return;
           track.attach(video);
           resolve();
         };
@@ -80,7 +110,7 @@ export function createSynthesiaClient(session: SynthesiaSession) {
       });
       // The room must exist with us in it before the avatar is started: its token publishes on our behalf.
       await room.connect(session.url, session.token);
-      room.registerRpcMethod('lk.playback_finished', async () => 'ok');
+      room.registerRpcMethod('lk.playback_finished', async () => { setSpeaking(false); return 'ok'; });
       const started = await session.startAvatar();
       if (!started.ok) throw new Error(started.error);
       await attached;
@@ -93,6 +123,8 @@ export function createSynthesiaClient(session: SynthesiaSession) {
       stopped = true;
       live = false;
       writer = null;
+      setSpeaking(false);
+      if (audioEl) { audioEl.srcObject = null; audioEl.remove(); audioEl = null; }
       await Promise.all([room.disconnect().catch(() => undefined), session.endAvatar().catch(() => undefined)]);
     },
 
@@ -102,6 +134,13 @@ export function createSynthesiaClient(session: SynthesiaSession) {
         sendAudioChunk(chunk: string) {
           if (!live) return;
           const bytes = decode(chunk);
+          // Speaking from the first chunk of an utterance; the avatar says when it has finished playing it.
+          if (!writer && sentBytes === 0) speakingSince = Date.now();
+          sentBytes += bytes.length;
+          const audioMs = (sentBytes / (config.sampleRate * 2 * config.channels)) * 1000;
+          clearTimeout(speakingTimer);
+          speakingTimer = setTimeout(() => setSpeaking(false), Math.max(0, speakingSince + audioMs + SPEAKING_SAFETY_MS - Date.now()));
+          setSpeaking(true);
           enqueue(async () => {
             writer ??= await room.localParticipant.streamBytes({
               name: `AUDIO_${crypto.randomUUID().slice(0, 8)}`,
@@ -124,6 +163,7 @@ export function createSynthesiaClient(session: SynthesiaSession) {
 
     interruptPersona() {
       if (!live) return;
+      setSpeaking(false);
       enqueue(async () => {
         const open = writer;
         writer = null;

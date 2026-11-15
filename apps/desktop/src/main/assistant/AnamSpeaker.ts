@@ -77,7 +77,7 @@ export class AnamSpeaker implements AnamSpeakerClient {
     if (!res || res.status !== 200) return null;
     const s = (res.body as { state?: Record<string, unknown> } | null)?.state;
     if (!s || typeof s !== "object") return null;
-    return { connected: s.connected === true, speaking: s.speaking === true, expanded: s.expanded === true, ...(typeof s.starting === "boolean" ? { starting: s.starting } : {}), ...(s.muted === true ? { muted: true } : {}) };
+    return { connected: s.connected === true, speaking: s.speaking === true, expanded: s.expanded === true, ...(typeof s.starting === "boolean" ? { starting: s.starting } : {}), ...(s.muted === true ? { muted: true } : {}), ...(s.voice === true ? { voice: true } : {}) };
   }
 
   private connection(): Connection | null {

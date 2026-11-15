@@ -1345,6 +1345,26 @@ describe("the model's own voice", () => {
     expect(s.c.status.get()).toBe("listening");
   });
 
+  it("keeps the mic closed while the avatar's own audio is still speaking, and frees it once that stops", async () => {
+    const s = setup({ ownVoice: true });
+    await openIt(s);
+    s.setState({ connected: true, speaking: true, expanded: true, voice: true });
+    await speak(s);
+    await flushPromises(30);
+    created(s, "r1");
+    s.transport.emit({ type: "output_audio_buffer.started" });
+    s.transport.emit({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "It is on the left. " });
+    await done(s, "r1");
+    s.transport.emit({ type: "output_audio_buffer.stopped" }); // local playback over; the avatar is still voicing it
+    await flushPromises(30);
+    expect(s.c.status.get()).toBe("speaking");
+    await settle(s, 1_200);
+    expect(s.c.status.get()).toBe("speaking");
+    s.setState({ connected: true, speaking: false, expanded: true, voice: true });
+    await settle(s, 500);
+    expect(s.c.status.get()).toBe("listening");
+  });
+
   it("clears the playing audio on interrupt", async () => {
     const s = setup({ ownVoice: true });
     await openIt(s);

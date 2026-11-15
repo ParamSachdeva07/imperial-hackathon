@@ -282,6 +282,31 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     clock: realClock,
     log: plog,
   });
+  // Voice routing: while the avatar's own (lip-synced) audio is the voice, Pointy's local copy stays silent.
+  let voicePoll: ReturnType<typeof setInterval> | null = null;
+  let localVoice: boolean | null = null;
+  const syncVoice = async () => {
+    const st = await speaker.state().catch(() => null);
+    const local = !(st?.connected && st.voice);
+    if (local !== localVoice && voicePoll) {
+      localVoice = local;
+      assistantWin.transport.setLocalVoice(local);
+    }
+  };
+  const stopVoicePoll = () => {
+    if (voicePoll) clearInterval(voicePoll);
+    voicePoll = null;
+    localVoice = null;
+    assistantWin.transport.setLocalVoice(true); // never leave the next call muted
+  };
+  controller.status.onChange((s) => {
+    if (s === "idle" || s === "error") {
+      if (voicePoll) stopVoicePoll();
+    } else if (!voicePoll && ownVoice) {
+      voicePoll = setInterval(() => void syncVoice(), 500);
+      void syncVoice();
+    }
+  });
   controller.status.onChange((s) => {
     if (s === "idle" || s === "error") {
       execution.dispose(); // the assistant closed: nobody is left to hear the result, so the task stops with it
@@ -367,6 +392,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     hotkey.unregister();
     tray.destroy();
     execution.dispose();
+    if (voicePoll) clearInterval(voicePoll);
     controller.dispose();
     assistantWin.dispose();
     for (const d of stopSelection.splice(0)) d();

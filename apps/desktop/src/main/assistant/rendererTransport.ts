@@ -63,6 +63,11 @@ export class RendererTransport implements RealtimeTransport {
     this.opts.channel.send({ kind: "mic", enabled });
   }
 
+  /** Whether the assistant page plays the model's voice (true) or leaves it to the avatar (false). Applies from the next answer. */
+  setLocalVoice(local: boolean): void {
+    this.opts.channel.send({ kind: "voice", local });
+  }
+
   maxMessageBytes(): number | undefined {
     return this.maxBytes;
   }

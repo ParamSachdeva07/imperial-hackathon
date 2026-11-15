@@ -201,6 +201,9 @@ test('speak: start expands and asks the renderer; talk queues until connected th
     t.speak.report({ speaking: true });
     state = (await (await t.call('/state', undefined, 'GET')).json()).state;
     assert.equal(state.connected, true); assert.equal(state.speaking, true); assert.equal(state.expanded, true);
+    assert.equal(state.voice, false); // the Anam path: the avatar is not the voice
+    t.speak.report({ voice: true });
+    assert.equal(t.speak.state().voice, true); // Synthesia: its own audio is the voice
     assert.equal((await t.call('/interrupt', {})).status, 200);
     assert.deepEqual(t.sent.at(-1), { type: 'interrupt' });
   } finally { await done(t); }

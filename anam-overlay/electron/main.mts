@@ -185,11 +185,12 @@ ipcMain.handle('overlay:microphone', async (event) => {
 ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly, lipSync: trusted(event) && speakOnly && process.env.ANAM_LIP_SYNC === '1' }));
 ipcMain.on('anam:speak-report', (event, report: unknown) => {
   if (!trusted(event) || !speaker || !report || typeof report !== 'object') return;
-  const { connected, speaking, muted, session } = report as { connected?: unknown; speaking?: unknown; muted?: unknown; session?: unknown };
+  const { connected, speaking, muted, voice, session } = report as { connected?: unknown; speaking?: unknown; muted?: unknown; voice?: unknown; session?: unknown };
   speaker.report({
     ...(typeof connected === 'boolean' ? { connected } : {}),
     ...(typeof speaking === 'boolean' ? { speaking } : {}),
     ...(typeof muted === 'boolean' ? { muted } : {}),
+    ...(typeof voice === 'boolean' ? { voice } : {}),
     ...(typeof session === 'number' && Number.isInteger(session) ? { session } : {}),
   });
 });

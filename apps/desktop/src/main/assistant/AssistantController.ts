@@ -276,6 +276,8 @@ export class AssistantController {
   /** First time anam was observed connected + speaking for the current queued speech (playback start). */
   private speakingSeenAt: number | null = null;
   private releaseTimer: TimerHandle | null = null;
+  /** ownVoice release step once local playback has ended: waits while the avatar is still speaking its own audio. */
+  private ownVoiceCheck: (() => void) | null = null;
   /** Bumped by every clearRelease(): an in-flight Anam state() check from before it must not release the mic. */
   private releaseGen = 0;
   private idleTimer: TimerHandle | null = null;
@@ -646,7 +648,14 @@ export class AssistantController {
       case "output_audio_buffer.stopped":
       case "output_audio_buffer.cleared":
         this.audioPlaying = false;
-        if (this.deps.ownVoice && this.releaseTimer !== null) this.releaseMic(); // the answer was already complete: it has now been heard in full
+        if (this.deps.ownVoice && this.releaseTimer !== null) {
+          // The answer was already complete: it has now been heard in full (unless the avatar is still voicing it).
+          const check = this.ownVoiceCheck;
+          if (check) {
+            this.deps.clock.clearTimeout(this.releaseTimer);
+            check(); // runs the same generation-guarded step the poll would
+          } else this.releaseMic();
+        }
         return;
       case "response.output_audio_transcript.delta": // ownVoice: what the model is saying
       case "response.output_text.delta": {
@@ -1451,9 +1460,25 @@ export class AssistantController {
       const poll = (): void => {
         this.releaseTimer = null;
         if (my !== this.epoch || rg !== this.releaseGen || !this.micGated) return;
-        if (this.audioPlaying && this.deps.clock.now() < deadline) this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
-        else this.releaseMic();
+        if (this.audioPlaying && this.deps.clock.now() < deadline) {
+          this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
+          return;
+        }
+        // Local playback is over. If the avatar's own audio is the voice, it is still being heard until it stops speaking.
+        void this.deps.anam.state().then(
+          (st) => {
+            if (my !== this.epoch || rg !== this.releaseGen || this.releaseTimer !== null || !this.micGated) return;
+            if (this.audioPlaying) { this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs); return; }
+            if (st?.connected && st.voice && st.speaking && this.deps.clock.now() < deadline) {
+              this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
+              return;
+            }
+            this.releaseMic();
+          },
+          () => { if (my === this.epoch && rg === this.releaseGen && this.releaseTimer === null && this.micGated) this.releaseMic(); },
+        );
       };
+      this.ownVoiceCheck = poll;
       this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
       return;
     }

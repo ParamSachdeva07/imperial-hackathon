@@ -10,9 +10,10 @@ export type SpeakCommand =
   // Lip-sync: voice audio played elsewhere (base64 PCM, 16-bit 24 kHz mono); null ends the utterance.
   | { type: 'audio'; pcm: string | null };
 // `session` echoes the start command of the call the report is about; reports for an older call are ignored.
-export type SpeakReport = { connected?: boolean; speaking?: boolean; muted?: boolean; session?: number };
+export type SpeakReport = { connected?: boolean; speaking?: boolean; muted?: boolean; voice?: boolean; session?: number };
+// `voice`: the avatar's own lip-synced audio is playing as the voice (Synthesia), so the app that drives it should stay silent.
 // `muted`: the user pressed Mute in the avatar window; the app that owns the microphone applies it.
-export type SpeakState = { connected: boolean; speaking: boolean; starting: boolean; muted: boolean };
+export type SpeakState = { connected: boolean; speaking: boolean; starting: boolean; muted: boolean; voice: boolean };
 export type TalkResult = 'sent' | 'queued' | 'no_call' | 'queue_full';
 
 export type SpeakDeps = {
@@ -41,6 +42,7 @@ export function createSpeakController(deps: SpeakDeps) {
   let speaking = false;
   let starting = false;
   let muted = false;
+  let voice = false;
   let session = 0; // generation of the current call, bumped on every new start
   let idle: unknown = null;
   let queue: { talk: Talk; at: number }[] = [];
@@ -65,7 +67,7 @@ export function createSpeakController(deps: SpeakDeps) {
     const active = connected || starting;
     stopIdle();
     queue = [];
-    connected = false; speaking = false; starting = false;
+    connected = false; speaking = false; starting = false; voice = false;
     if (active) deps.send({ type: 'end' });
     deps.setExpanded(false);
   }
@@ -100,6 +102,7 @@ export function createSpeakController(deps: SpeakDeps) {
     if (r.session !== undefined && r.session !== session) return;
     if (r.speaking !== undefined) speaking = connected && r.speaking;
     if (r.muted !== undefined) muted = r.muted;
+    if (r.voice !== undefined) voice = r.voice;
     if (r.connected === undefined) return;
     if (r.connected) {
       const wasConnected = connected;
@@ -112,12 +115,12 @@ export function createSpeakController(deps: SpeakDeps) {
       for (const q of pending) deps.send({ type: 'talk', ...q.talk });
     } else if (connected || starting) {
       stopIdle();
-      queue = []; connected = false; speaking = false; starting = false;
+      queue = []; connected = false; speaking = false; starting = false; voice = false;
       deps.setExpanded(false);
     }
   }
 
   return { start, end, talk, audio, interrupt, report,
-    state: (): SpeakState => ({ connected, speaking, starting, muted: connected && muted }) };
+    state: (): SpeakState => ({ connected, speaking, starting, muted: connected && muted, voice: connected && voice }) };
 }
 export type SpeakController = ReturnType<typeof createSpeakController>;

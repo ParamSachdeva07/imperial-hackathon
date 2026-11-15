@@ -13,6 +13,8 @@ export interface AnamSpeakerState {
   starting?: boolean;
   /** The user pressed Mute in the avatar window. */
   muted?: boolean;
+  /** The avatar's own (lip-synced) audio is the audible voice while connected: the local voice should stay silent. */
+  voice?: boolean;
 }
 
 /** Speak-only Anam control API client (HTTP, implemented by T2). */

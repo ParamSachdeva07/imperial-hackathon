@@ -80,6 +80,7 @@ function trackVoice(voice: Voice, type: string): void {
     clearTimeout(voice.stopTimer);
     voice.stopTimer = undefined;
     voice.forwarding = true;
+    voice.el.muted = !localVoice;
   } else if (type === "output_audio_buffer.stopped") {
     clearTimeout(voice.stopTimer);
     voice.stopTimer = setTimeout(stop, VOICE_TAIL_MS);
@@ -99,6 +100,8 @@ interface Attempt {
 }
 let active: Attempt | null = null;
 let micEnabled = true;
+/** Whether this page plays the model's voice. Latched per answer at output_audio_buffer.started, never mid-answer. */
+let localVoice = true;
 
 function applyMic(a: Attempt | null): void {
   for (const t of a?.mic?.getAudioTracks() ?? []) t.enabled = micEnabled;
@@ -210,5 +213,8 @@ const session: RtcSession = {
 };
 
 const handle = createCommandHandler(session, (m) => api.emit(m));
-api.onCommand(handle);
+api.onCommand((cmd) => {
+  if (cmd.kind === "voice") localVoice = cmd.local;
+  else handle(cmd);
+});
 api.emit({ kind: "ready" });
