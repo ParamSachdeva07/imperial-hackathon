@@ -6,10 +6,11 @@
  * Fallbacks: no AX permission/snapshot -> screenshot only (and says so); no Screen Recording ->
  * element list only (and says so); neither -> a text saying the screen can't be seen.
  */
-import type { DisplayInfo } from "@pointy/shared/overlay";
+import type { DisplayInfo, Rect } from "@pointy/shared/overlay";
 import type { AxProvider, ElementInfo, ElementSnapshot } from "../ax/types";
 import type { BgraImage, ImageOps } from "../capture/SelectionCapture";
 import type { CaptureHiding } from "../gestures/captureHiding";
+import { drawMarker } from "../capture/annotate";
 
 export const MAX_ELEMENTS = 150;
 export const MAX_IMAGE_BYTES = 150_000;
@@ -29,6 +30,24 @@ export interface ScreenContext {
   elementIds: string[];
   /** Why parts are missing ("no_ax", "no_screen", ...). */
   notes: string[];
+  /** Sharp unmarked close-up around the pointer (only when the user pointed recently). */
+  pointerCloseupDataUrl?: string | null;
+  /** Global DIP rect the close-up was cropped from (cards avoid it this turn). */
+  pointerCloseupRect?: Rect | null;
+}
+
+/** The pointer is "pointing" (not just resting) when the finger moved it this recently. */
+export const POINTER_ACTIVE_MS = 10_000;
+export const POINTER_CLOSEUP_DIP = { width: 480, height: 320 };
+export const POINTER_CLOSEUP_MAX_SIDE = 768;
+export const POINTER_CLOSEUP_MAX_BYTES = 50_000;
+const MARKER_TARGET_PX = 16;
+
+export interface PointerElement {
+  id: string;
+  role: string;
+  label: string;
+  window?: string;
 }
 
 export interface ScreenContextDeps {
@@ -44,7 +63,68 @@ export interface ScreenContextDeps {
   cursorDisplayId?(): string | null;
   /** Do not capture a screenshot (a fresh selection already carries one; capturing would flicker the kept outline): AX list only. */
   skipScreenshot?: boolean;
+  /** The real mouse pointer in global DIP (screen.getCursorScreenPoint + its display). Absent/null: no [pointer] section. */
+  getPointer?(): { x: number; y: number; displayId: string } | null;
+  /** True when the user moved the pointer with a gesture within `ms` (gestures handle). Absent: no close-up. */
+  pointerActiveRecently?(ms: number): boolean;
+  /** AX hit test at a global point. Absent / null: the [pointer] line has no control info. */
+  elementAt?(point: { x: number; y: number }): Promise<PointerElement | null>;
+  /** The AX hit test is abandoned (no control info) after this long so it cannot cost the whole [screen] context (default 400 ms). */
+  elementAtTimeoutMs?: number;
+  /** Compact "[overlays] ..." line describing the drawings currently on screen. Absent: no line. */
+  overlays?(): string;
   log?(msg: string): void;
+}
+
+/** Close-up around the pointer cropped from the already-captured image (no extra capture), under a small byte budget. Pure given ops. */
+/** The global DIP rect a pointer close-up covers (centred on the pointer, clamped to the display). Pure. */
+export function closeupRect(display: DisplayInfo, p: { x: number; y: number }): Rect {
+  const w = Math.min(POINTER_CLOSEUP_DIP.width, display.bounds.width);
+  const h = Math.min(POINTER_CLOSEUP_DIP.height, display.bounds.height);
+  const x = Math.min(Math.max(p.x - w / 2, display.bounds.x), display.bounds.x + display.bounds.width - w);
+  const y = Math.min(Math.max(p.y - h / 2, display.bounds.y), display.bounds.y + display.bounds.height - h);
+  return { x, y, width: w, height: h };
+}
+
+export function pointerCloseup(image: BgraImage, display: DisplayInfo, p: { x: number; y: number }, ops: ImageOps): string | null {
+  const sx = image.width / display.bounds.width;
+  const sy = image.height / display.bounds.height;
+  const { x: gx, y: gy, width: w, height: h } = closeupRect(display, p);
+  const px = Math.max(0, Math.min(image.width - 1, Math.round((gx - display.bounds.x) * sx)));
+  const py = Math.max(0, Math.min(image.height - 1, Math.round((gy - display.bounds.y) * sy)));
+  const crop = ops.crop(image, { x: px, y: py, width: Math.max(1, Math.min(image.width - px, Math.round(w * sx))), height: Math.max(1, Math.min(image.height - py, Math.round(h * sy))) });
+  const base = Math.min(1, POINTER_CLOSEUP_MAX_SIDE / Math.max(crop.width, crop.height));
+  for (const k of [1, 0.8, 0.64, 0.5]) {
+    const small = ops.resize(crop, Math.max(1, Math.round(crop.width * base * k)), Math.max(1, Math.round(crop.height * base * k)));
+    for (const q of [70, 55, 40]) {
+      const jpeg = ops.encodeJpeg(small, q);
+      if (jpeg.length <= POINTER_CLOSEUP_MAX_BYTES) return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+    }
+  }
+  return null;
+}
+
+export interface PointerInfo {
+  x: number;
+  y: number;
+  /** null: no hit test available / nothing found. */
+  element: PointerElement | null;
+  /** The pointer is on a display other than the one in the screenshot. */
+  otherDisplay: boolean;
+  marked: boolean;
+  closeup: boolean;
+}
+
+/** The [pointer] text line. Pure. */
+export function pointerLine(p: PointerInfo): string {
+  const where = p.element
+    ? `over ${sanitizeLabel(p.element.role) || "a control"} '${sanitizeLabel(p.element.label) || "(no label)"}' (id ${sanitizeLabel(p.element.id)})`
+    : "over nothing identifiable";
+  const extra = [
+    p.otherDisplay ? "It is on a different display than the screenshot." : p.marked ? "It is drawn as a white ring on the screenshot." : "",
+    p.closeup ? "The user pointed there just now: the last image is a sharp close-up around it. Questions like 'this' or 'what I'm pointing at' mean this spot. Do not draw anything unless asked." : "",
+  ].filter(Boolean);
+  return `[pointer] The user's pointer is at (${r(p.x)},${r(p.y)}) ${where}.${extra.length ? ` ${extra.join(" ")}` : ""}`;
 }
 
 /**
@@ -127,6 +207,9 @@ export interface ComposeInput {
   screenError: string | null;
   /** The screenshot was deliberately not taken (the [selection] images show the screen). */
   skippedScreenshot?: boolean;
+  pointer?: PointerInfo | null;
+  /** The "[overlays] ..." line (what is drawn right now). */
+  overlays?: string | null;
 }
 
 /** Build the [screen] message text. Pure. */
@@ -176,7 +259,37 @@ export function composeScreenText(input: ComposeInput): { text: string; elementI
         (input.image ? "Use region targets read off the screenshot with the scale above, and tell the user if you are not sure where something is." : ""),
     );
   }
+  if (input.pointer) lines.push(pointerLine(input.pointer));
+  if (input.overlays) lines.push(input.overlays);
   return { text: lines.join("\n"), elementIds: ids, notes };
+}
+
+const ELEMENT_AT_TIMEOUT_MS = 400;
+
+/** Resolve to null if `p` does not settle in `ms` (the late result is ignored). */
+function withTimeout<T>(p: Promise<T | null>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(t);
+        resolve(null);
+      },
+    );
+  });
+}
+
+function safeOverlays(deps: ScreenContextDeps): string | null {
+  try {
+    return deps.overlays?.() ?? null;
+  } catch (e) {
+    deps.log?.(`overlay summary failed: ${String(e)}`);
+    return null;
+  }
 }
 
 /** Capture the screen once (hidden overlays) and snapshot AX, in parallel. Never throws. */
@@ -206,8 +319,38 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
   let image: { jpeg: Buffer; width: number; height: number } | null = null;
   let display: DisplayInfo | null = displays.find((d) => d.id === displayId) ?? null;
   let screenError: string | null = null;
+  // The pointer is read right after the capture so it matches the pixels; the hit test may be slow, so it runs while we encode.
+  let pointer: { x: number; y: number; displayId: string } | null = null;
+  try {
+    pointer = deps.getPointer?.() ?? null;
+  } catch (e) {
+    log(`pointer read failed: ${String(e)}`);
+  }
+  const elementP: Promise<PointerElement | null> = pointer && deps.elementAt ? withTimeout(deps.elementAt({ x: pointer.x, y: pointer.y }).catch(() => null), deps.elementAtTimeoutMs ?? ELEMENT_AT_TIMEOUT_MS) : Promise.resolve(null);
+  let closeup: string | null = null;
+  let closeupBox: Rect | null = null;
+  let marked = false;
   if (shot.ok) {
     display = shot.shot.display;
+    if (pointer && String(pointer.displayId) === display.id) {
+      if (deps.pointerActiveRecently?.(POINTER_ACTIVE_MS)) {
+        try {
+          closeup = pointerCloseup(shot.shot.image, display, pointer, deps.ops);
+          if (closeup) closeupBox = closeupRect(display, pointer);
+        } catch (e) {
+          log(`pointer close-up failed: ${String(e)}`);
+        }
+      }
+      try {
+        const kx = shot.shot.image.width / display.bounds.width;
+        const ky = shot.shot.image.height / display.bounds.height;
+        const down = Math.max(1, shot.shot.image.width / Math.min(MAX_IMAGE_WIDTH, shot.shot.image.width));
+        drawMarker(shot.shot.image, (pointer.x - display.bounds.x) * kx, (pointer.y - display.bounds.y) * ky, { radius: MARKER_TARGET_PX * down, thickness: 3 * down });
+        marked = true;
+      } catch (e) {
+        log(`pointer marker failed: ${String(e)}`);
+      }
+    }
     image = encodeUnderBudget(shot.shot.image, deps.ops);
     if (!image) screenError = "screenshot too large to send";
   } else {
@@ -222,6 +365,10 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
     axUnavailable: deps.ax ? (axTrusted ? "failed" : "untrusted") : "failed",
     screenError,
     skippedScreenshot: deps.skipScreenshot === true,
+    overlays: safeOverlays(deps),
+    pointer: pointer
+      ? { x: pointer.x, y: pointer.y, element: await elementP, otherDisplay: shot.ok ? String(pointer.displayId) !== display?.id : false, marked: marked && image !== null, closeup: closeup !== null && image !== null }
+      : null,
   });
   return {
     text: composed.text,
@@ -230,6 +377,8 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
     displayId: image ? (display?.id ?? displayId) : null,
     elementIds: composed.elementIds,
     notes: composed.notes,
+    pointerCloseupDataUrl: image ? closeup : null,
+    pointerCloseupRect: image && closeup ? closeupBox : null,
   };
 }
 
@@ -237,6 +386,7 @@ export async function captureScreenContext(deps: ScreenContextDeps): Promise<Scr
 export function screenItemEvent(ctx: ScreenContext, itemId: string): object {
   const content: object[] = [{ type: "input_text", text: ctx.text }];
   if (ctx.imageDataUrl) content.push({ type: "input_image", image_url: ctx.imageDataUrl, detail: "auto" });
+  if (ctx.imageDataUrl && ctx.pointerCloseupDataUrl) content.push({ type: "input_image", image_url: ctx.pointerCloseupDataUrl, detail: "auto" });
   return { type: "conversation.item.create", item: { id: itemId, type: "message", role: "user", content } };
 }
 
@@ -247,6 +397,11 @@ export function screenItemEvent(ctx: ScreenContext, itemId: string): object {
 export function screenItemEventWithin(ctx: ScreenContext, itemId: string, maxMessageBytes: number | undefined): { event: object; droppedImage: boolean } {
   const full = screenItemEvent(ctx, itemId);
   if (!maxMessageBytes || !ctx.imageDataUrl || Buffer.byteLength(JSON.stringify(full)) <= maxMessageBytes) return { event: full, droppedImage: false };
+  if (ctx.pointerCloseupDataUrl) {
+    // The optional close-up is what pushed it over: keep the overview and drop only the close-up.
+    const noCloseup = screenItemEvent({ ...ctx, pointerCloseupDataUrl: null }, itemId);
+    if (Buffer.byteLength(JSON.stringify(noCloseup)) <= maxMessageBytes) return { event: noCloseup, droppedImage: false };
+  }
   const text = `${ctx.text}\n[screen] The screenshot was too large to send, so you cannot see the screen this turn; rely on the control list only.`;
-  return { event: screenItemEvent({ ...ctx, text, imageDataUrl: null, imageBytes: 0 }, itemId), droppedImage: true };
+  return { event: screenItemEvent({ ...ctx, text, imageDataUrl: null, imageBytes: 0, pointerCloseupDataUrl: null }, itemId), droppedImage: true };
 }

@@ -430,9 +430,10 @@ In Anam Lab, **disable the persona LLM** for the persona in `ANAM_PERSONA_ID`; t
 
 ### 10.7 Open items
 
-- **Alexandre (gestures):** `wake_requested` fires only while the gesture session is closed, so an open hand cannot
-  interrupt or close the assistant while it is open. A small event from the package is needed (palm while session open).
-  Until then use Cmd+Option+P, the tray or Anam's end-call button. No pause API either, so the gestures toggle cannot stop the camera.
+- **Alexandre (gestures):** `wake_requested` fires only while the gesture session is closed. Worked around in Pointy: the
+  session is paused while an answer is spoken (section 10.9), so the open hand interrupts then. A native "palm while session
+  open" event would still be cleaner (it would also allow open-hand close while listening). No pause API either, so the
+  gestures toggle cannot stop the camera.
 - **Anam teammate:** please review the speak-only mode in `anam-overlay` (behind `ANAM_SPEAK_ONLY=1`; default behaviour
   and its tests unchanged). `speaking` is inferred from persona stream events and not yet confirmed against a live session.
 - Tune the half-duplex timing (`speechMarginMs`, `speechStartLatencyMs`) after a live test; the overlay blinks about 80 ms
@@ -468,4 +469,30 @@ guard: `AssistantDeps.contextRevision` is bumped by AX context events and the sc
 
 How to test: `npm test` (AssistantController offer/stale tests, toolTargets, overlay tests); `npm run pointy`, select an email, listen for the offer;
 gallery scenes `parts-scam`, `explainer-verdict`; `pointy-draw label-parts ID:"Label" --tone warning`.
+
+### 10.9 Conversation fixes (barge-in, memory, interrupt, guard, pointer)
+
+- **Barge-in** (`POINTY_BARGE_IN`): `guarded` (default) keeps the mic open while Anam speaks and treats speech as a candidate
+  until its transcript is not an echo of Anam; `open` interrupts on any speech (use headphones); `off` is half-duplex (mic muted
+  while speaking, no talking over).
+- **Memory:** a rolling in-RAM conversation memory is injected as `[memory]` when the assistant opens. It survives close/open,
+  is never persisted, and is cleared by the tray item "Start over (forget conversation)" (and dies on quit). Images are stubbed in memory.
+- **Hotkey (Cmd+Option+P):** single press = interrupt when something is active or was recently (30 s); double press (within 600 ms) = close;
+  closed = open. Tray "Stop talking" = interrupt. Idle auto-close is 150 s.
+- **Open-hand interrupt:** `wake_requested` only fires while the gesture session is closed, so while an answer is spoken
+  (`onAnswerSpeaking`) production pauses ONLY the gesture session (`gestures.setSessionPaused`). The open hand then arrives as
+  `wake_requested` and `controller.wake()` interrupts. The pause deliberately bypasses the `setSessionActive` wrapper: it does not call
+  `ax.setActive(false)` (that would cancel anchors, `target_lost`, and the AI's `label_parts`/highlight drawings would vanish while Anam
+  talks), it does not reset the selection guard, and `attachSelection` ignores that session-close for `clearOnSessionClose`, so the
+  SelectionStore survives. Cost: while paused the real mouse is detached and a new selection is not captured. A real open/close
+  (controller teardown, gestures toggle) clears the pause flag first.
+- **Selection guard:** after a selection the real mouse, click and scroll are frozen (and clamped edge selections dropped) until the
+  selection is answered/dismissed (`clearSelection`) plus a 1.5 s cooldown, or at most `selectionTtlMs + 500` (120.5 s in production,
+  so the controller's 15 s silence timeout always fires first). Use `gestures.events` (the guarded view), not `.sim`, for selection and scroll consumers; wake events are not filtered.
+- **Dwell-click is off by default** (one finger only points). `POINTY_GESTURES_CLICK=1` enables it.
+- **Pointer questions** ("what am I pointing at / explain this"): each turn's context gets a `[pointer]` line (position, the AX element under it via
+  `AxBoundsProvider.elementAt`, which skips Pointy and Anam pids), a pointer marker on the screenshot and a close-up crop when the pointer
+  moved within 10 s. The model answers verbally without drawing.
+- **Model / effort:** `POINTY_REALTIME_MODEL` (default `gpt-realtime-2.1-mini`) and `POINTY_REASONING_EFFORT` (default `minimal`, auto
+  fallback to `low` if the API rejects it). Start log: `[pointy] realtime model=..., effort=...` and the effective values after minting.
 

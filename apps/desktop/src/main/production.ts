@@ -10,6 +10,7 @@ import { app, screen } from "electron";
 import { exportToolDefinitions, type ScreenCaptureProvider } from "@pointy/shared/overlay";
 import { createOverlayControl, AnamAvatarClient, anamControlFile, imagesEnabled, readManifestPrompts } from "./overlay";
 import { CompositeAvoidRects } from "./overlay/avatar/CompositeAvoidRects";
+import { TurnAvoidRects } from "./overlay/avatar/TurnAvoidRects";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
 import { MockBoundsProvider } from "./overlay/mocks/MockBoundsProvider";
 import { ElectronScreen } from "./overlay/OverlayWindowManager";
@@ -21,16 +22,18 @@ import { bgraCapture, nativeImageOps } from "./capture/nativeImageOps";
 import { DesktopCapturerProvider } from "./capture/DesktopCapturerProvider";
 import { clearOnSessionClose, SelectionStore } from "./capture/SelectionStore";
 import { AxBoundsProvider, AxHelperClient } from "./ax";
-import { AssistantController } from "./assistant/AssistantController";
+import { AssistantController, parseBargeIn } from "./assistant/AssistantController";
 import { AnamSpeaker } from "./assistant/AnamSpeaker";
 import { createAssistantWindow } from "./assistant/assistantWindow";
 import { buildAssistantInstructions } from "./assistant/instructions";
 import { mintAssistantSecret } from "./assistant/secret";
-import { captureScreenContext } from "./assistant/screenContext";
+import { describeRealtimeConfig } from "./assistant/realtimeProtocol";
+import { summarizeOverlays } from "./assistant/overlaySummary";
+import { captureScreenContext, POINTER_ACTIVE_MS } from "./assistant/screenContext";
 import { realClock } from "./overlay/clock";
 import { checkPermissions, hideDockInProduction, openMissingSettings, registerAssistantHotkey } from "./permissions";
 import { createTray } from "./tray";
-import { createQuitGuard, createScrollInvalidator } from "./productionLogic";
+import { createQuitGuard, createScrollInvalidator, pickPointer } from "./productionLogic";
 import { loadRendererPage, PRELOAD_DIR } from "./rendererPages";
 import { startDevHarness } from "../dev/devHarness";
 
@@ -68,7 +71,12 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   const ax = new AxBoundsProvider({
     client: new AxHelperClient({ binPath: join(repoRoot, "apps/desktop/resources/bin/pointy-ax"), log: plog }),
     getDisplayMatching: (r) => screen.getDisplayMatching({ x: r.x, y: r.y, width: r.width, height: r.height }),
-    excludePids: () => [process.pid, ...(anamPid() === null ? [] : [anamPid() as number])],
+    // Pointy's own processes (main, renderers, GPU helpers: the overlay/feedback windows) and the Anam avatar app.
+    excludePids: () => {
+      const own = app.getAppMetrics().map((m) => m.pid);
+      const a = anamPid();
+      return [...new Set([process.pid, ...own, ...(a === null ? [] : [a])])];
+    },
     // Screen/AX data is read only while the assistant is open (setSessionActive below); the dev server keeps it live.
     active: opts.devServer,
     log: plog,
@@ -83,7 +91,10 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   const provider = new DesktopCapturerProvider(() => displays.getDisplays());
   const hideFeedback = (p: ScreenCaptureProvider): ScreenCaptureProvider =>
     env.POINTY_HIDE_DURING_CAPTURE === "1" ? hideFeedbackDuringCapture(p, feedbackCaptureHiding) : p;
+  // Cards / label_parts title chips keep clear of the user's selection and the pointer close-up (set by the assistant per turn).
+  const turnAvoid = new TurnAvoidRects();
   const overlay = createOverlayControl({
+    cardAvoidRects: turnAvoid,
     boundsProvider: ax,
     captureProvider: hideFeedback(provider),
     avoidRects: new CompositeAvoidRects(anam, new MockAvoidRects(primary, "none")),
@@ -127,6 +138,8 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   );
   const stopSelection: (() => void)[] = [];
   const clog = (level: "info" | "warn" | "error") => (msg: string) => console[level](`[selection] ${msg}`);
+  // The temporary session pause while an answer is spoken (onAnswerSpeaking) is not a "session close": it must
+  // not clear the SelectionStore, so the store only sees real closes.
   const attachSelection = (source: SelectionSource & { onSession(cb: (active: boolean) => void): () => void }): (() => void) => {
     const cap = attachSelectionCapture(source, {
       screen: { getDisplays: () => displays.getDisplays() },
@@ -137,7 +150,9 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
       log: { info: clog("info"), warn: clog("warn"), error: clog("error") },
       store: selectionStore,
     });
-    const offClear = clearOnSessionClose(selectionStore, source);
+    const offClear = clearOnSessionClose(selectionStore, {
+      onSession: (cb) => source.onSession((active) => (!active && gestures?.sessionPaused ? undefined : cb(active))),
+    });
     return () => {
       cap.dispose();
       offClear();
@@ -145,7 +160,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   };
   if (gestures) {
     try {
-      stopSelection.push(attachSelection(gestures.sim));
+      stopSelection.push(attachSelection(gestures.events));
     } catch (err) {
       console.error(`[selection] capture not available: ${String(err)}`);
     }
@@ -154,10 +169,15 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   // --- assistant: hidden Realtime window + controller
   const images = imagesEnabled(env);
   const tools = exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] });
+  plog(`realtime ${describeRealtimeConfig()}`);
   const assistantWin = createAssistantWindow({
     preloadDir: PRELOAD_DIR,
     loadPage: (w) => loadRendererPage(w, "assistant"),
-    mintSecret: () => mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images }), tools }),
+    mintSecret: async () => {
+      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images }), tools });
+      plog(`realtime session: model=${secret.model}, effort=${secret.effort ?? "default"}`);
+      return secret;
+    },
     log: plog,
   });
   const controller = new AssistantController({
@@ -168,6 +188,19 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
         getDisplays: () => displays.getDisplays(),
         primaryDisplayId: () => displays.getPrimaryDisplayId(),
         cursorDisplayId: () => String(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id),
+        getPointer: () => {
+          const real = screen.getCursorScreenPoint();
+          // While the user points with a finger the real cursor may not follow (mouse control off / frozen after a selection).
+          const g = gestures?.pointerActiveRecently(POINTER_ACTIVE_MS) ? gestures.lastPointer() : null;
+          const p = pickPointer({ gestureActive: g !== null, gesture: g, real });
+          return { x: p.x, y: p.y, displayId: String(screen.getDisplayNearestPoint({ x: Math.round(p.x), y: Math.round(p.y) }).id) };
+        },
+        pointerActiveRecently: (ms) => gestures?.pointerActiveRecently(ms) ?? false,
+        overlays: () => summarizeOverlays(overlay.debug.items?.() ?? []),
+        elementAt: async (p) => {
+          const e = (await ax.elementAt?.(p)) ?? null;
+          return e ? { id: e.id, role: e.role, label: e.label, window: e.window } : null;
+        },
         capture: bgraCapture(provider),
         hiding,
         ops: nativeImageOps,
@@ -182,13 +215,29 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
         ax.setActive(active || opts.devServer);
         if (active) void ax.snapshotNow("session-open").catch(() => undefined); // attach AX observers even if the user selects before speaking
         if (!gestures) return;
+        gestures.setSessionPaused(false, false); // a real open/close supersedes a pause for the spoken answer
         if (active && gesturesEnabled) gestures.session.open();
         else gestures.session.close();
       },
       clearSelection: () => gestures?.clearSelection(),
     },
     selection: selectionStore,
+    bargeIn: parseBargeIn(env.POINTY_BARGE_IN),
+    // Pause ONLY the gesture session while Anam speaks (so the open hand can interrupt and the mouse is not driven by a
+    // hand that is just resting). Deliberately NOT the setSessionActive wrapper above: ax.setActive(false) would cancel
+    // the anchors (target_lost, the AI's drawings vanish) and the selection must survive until the answer is done.
+    onAnswerSpeaking: (speaking) => {
+      if (!gestures) return;
+      if (speaking) {
+        if (gesturesEnabled && gestures.session.isActive()) gestures.setSessionPaused(true);
+      } else if (gestures.sessionPaused) {
+        // Also while gestures are toggled off: the pause flag must not outlive the speech (a stale flag makes the next pause a no-op).
+        gestures.setSessionPaused(false, controller.isOpen() && gesturesEnabled);
+      }
+    },
     contextRevision: () => contextRevision,
+    overlayState: () => summarizeOverlays(overlay.debug.items?.() ?? []),
+    setTurnAvoid: (rects) => turnAvoid.set(rects),
     clock: realClock,
     log: plog,
   });
@@ -202,7 +251,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     mouseAttached: () => !!gestures && gestures.mouseEnabled && gestures.session.isActive(),
     now: () => Date.now(),
   });
-  const offWake = gestures?.sim.onAny((e) => {
+  const offWake = gestures?.events.onAny((e) => {
     if (scrollInvalidates(e)) invalidateContext();
     if (e.type === "wake_requested" && gesturesEnabled) void controller.wake();
   });
@@ -214,12 +263,15 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     actions: {
       openAssistant: () => void controller.open("tray"),
       closeAssistant: () => void controller.close("tray"),
+      stopTalking: () => void controller.interrupt(),
+      startOver: () => controller.clearMemory(),
       setMouseEnabled: (on) => {
         gestures?.setMouseEnabled(on);
         tray.refresh();
       },
       setGesturesEnabled: (on) => {
         gesturesEnabled = on;
+        gestures?.setSessionPaused(false, false); // a real toggle supersedes a pause for the spoken answer
         if (!on) gestures?.session.close();
         else if (controller.isOpen()) gestures?.session.open();
         tray.refresh();

@@ -5,13 +5,13 @@
  *
  *   npx tsx scripts/realtime-smoke.ts
  *
- * Needs OPENAI_API_KEY in the repo-root .env (never printed). Model: OPENAI_REALTIME_MODEL ?? gpt-realtime-2.1.
+ * Needs OPENAI_API_KEY in the repo-root .env (never printed). Model: POINTY_REALTIME_MODEL ?? OPENAI_REALTIME_MODEL ?? gpt-realtime-2.1-mini; effort POINTY_REASONING_EFFORT ?? minimal.
  */
 import { resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { loadRepoEnv } from "@pointy/shared/node/env";
-import { assistantSessionConfig } from "../apps/desktop/src/main/assistant/realtimeProtocol";
+import { assistantSessionConfig, realtimeModel, reasoningEffort } from "../apps/desktop/src/main/assistant/realtimeProtocol";
 
 loadRepoEnv(resolve(fileURLToPath(import.meta.url), "../.."));
 const key = process.env.OPENAI_API_KEY;
@@ -19,7 +19,8 @@ if (!key) {
   console.error("OPENAI_API_KEY missing (repo-root .env)");
   process.exit(1);
 }
-const model = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2.1";
+const model = realtimeModel();
+const effort = reasoningEffort();
 
 type Ev = { type: string; [k: string]: unknown };
 const WS = WebSocket as unknown as new (url: string, opts: { headers: Record<string, string> }) => WebSocket;
@@ -66,13 +67,39 @@ void created;
 
 // 1. session.update with the config we intend to use in production.
 let n = mark();
-send({ type: "session.update", session: assistantSessionConfig({ instructions: "You are a test. Answer in at most 8 words.", tools: [] }) });
+send({ type: "session.update", session: assistantSessionConfig({ instructions: "You are a test. Answer in at most 8 words.", tools: [], effort }) });
 const upd = await waitFor((e) => e.type === "session.updated" || e.type === "error", 10000, "session.updated");
 note(upd.type === "session.updated", "session.update with output_modalities:[text] + audio.input.turn_detection{create_response:false,interrupt_response:false}" + (upd.type === "error" ? ` -> ${errorsSince(n)[0]}` : ""));
 if (upd.type === "session.updated") {
   const s = upd.session as { output_modalities?: string[]; audio?: { input?: { turn_detection?: unknown } } };
   console.log("  echoed output_modalities:", JSON.stringify(s.output_modalities), " turn_detection:", JSON.stringify(s.audio?.input?.turn_detection));
+  const r = (upd.session as { reasoning?: { effort?: string } }).reasoning;
+  note(r?.effort === effort, `session.reasoning.effort echoed as ${JSON.stringify(r)} (asked ${effort})`);
 }
+
+// 1b. Effort variants via session.update (field = session.reasoning.effort).
+for (const v of ["low", "bogus", effort]) {
+  n = mark();
+  send({ type: "session.update", session: { type: "realtime", reasoning: { effort: v } } });
+  const r = await waitFor((e) => events.indexOf(e) >= n && (e.type === "session.updated" || e.type === "error"), 10000, `effort ${v}`);
+  console.log(`  effort=${v} -> ${r.type}${r.type === "error" ? ": " + errorsSince(n)[0] : ""}`);
+}
+
+// 1c. A tool call round-trip.
+n = mark();
+send({ type: "session.update", session: { type: "realtime", tools: [{ type: "function", name: "point_at", description: "Point at a named thing on screen.", parameters: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } }], tool_choice: "required" } });
+await waitFor((e) => events.indexOf(e) >= n && (e.type === "session.updated" || e.type === "error"), 10000, "tools");
+send({ type: "conversation.item.create", item: { id: "tool_smoke1", type: "message", role: "user", content: [{ type: "input_text", text: "Point at the Save button." }] } });
+send({ type: "response.create" });
+await waitFor((e) => events.indexOf(e) >= n && e.type === "response.done", 30000, "tool response.done");
+const fc = since(n).find((e) => e.type === "response.function_call_arguments.done");
+note(!!fc, `tool call emitted (response.function_call_arguments.done, args=${String((fc as { arguments?: string } | undefined)?.arguments)})`);
+send({ type: "session.update", session: { type: "realtime", tools: [], tool_choice: "auto" } });
+await new Promise((r) => setTimeout(r, 800));
+send({ type: "conversation.item.delete", item_id: "tool_smoke1" });
+await new Promise((r) => setTimeout(r, 500));
+
+events.length = 0; // earlier probes left an expected error in the log; start the next checks clean
 
 // 2. Text item with an image + response.create; text-only streaming deltas.
 n = mark();

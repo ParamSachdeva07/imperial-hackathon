@@ -56,6 +56,14 @@ class FakeClient implements AxHelperLike {
   async trusted() {
     return this.trustedValue;
   }
+  hit: RawElement | null = null;
+  hitCalls: Array<[number, number, number[]]> = [];
+  failHit = false;
+  async elementAt(x: number, y: number, excl: number[]) {
+    this.hitCalls.push([x, y, excl]);
+    if (this.failHit) throw Object.assign(new Error("x"), { code: "timeout" });
+    return this.hit;
+  }
 }
 
 const snap = (els: RawElement[]): RawSnapshot => ({ app: "A", pid: 1, window: "W", elements: els, truncated: false });
@@ -322,5 +330,41 @@ describe("AxBoundsProvider", () => {
     client.emit({ event: "ready", trusted: true });
     expect(client.activeCalls.at(-1)).toBe(false);
     p.stop();
+  });
+
+  it("elementAt maps the helper element to ElementInfo and passes excluded pids", async () => {
+    const { p, client } = make();
+    await p.start();
+    client.hit = el("ax-9", 1200, 5);
+    const r = await p.elementAt({ x: 1205, y: 8 });
+    expect(r).toMatchObject({ id: "ax-9", role: "Button", displayId: "2", rect: { x: 1200, y: 5, width: 20, height: 10 } });
+    expect(client.hitCalls[0]).toEqual([1205, 8, [99]]);
+  });
+
+  it("a hit-tested element missing from the capped snapshot is registered so getBounds can resolve it", async () => {
+    const { p, client } = make();
+    await p.start();
+    await p.snapshotNow("turn");
+    client.hit = el("ax-omitted", 40, 50);
+    client.live["ax-omitted"] = { x: 41, y: 51, w: 20, h: 10 };
+    expect(await p.getBounds("ax-omitted")).toBeNull(); // unknown before the hit test
+    await p.elementAt({ x: 45, y: 55 });
+    const b = await p.getBounds("ax-omitted");
+    expect(b?.rect).toEqual({ x: 41, y: 51, width: 20, height: 10 });
+    expect(client.resolveCalls.at(-1)).toEqual(["ax-omitted"]);
+  });
+
+  it("elementAt returns null (never throws) when nothing is there, the helper fails, or inactive", async () => {
+    const { p, client } = make();
+    await p.start();
+    expect(await p.elementAt({ x: 1, y: 1 })).toBeNull();
+    client.hit = el("ax-1");
+    client.failHit = true;
+    expect(await p.elementAt({ x: 1, y: 1 })).toBeNull();
+    client.failHit = false;
+    p.setActive(false);
+    const n = client.hitCalls.length;
+    expect(await p.elementAt({ x: 1, y: 1 })).toBeNull();
+    expect(client.hitCalls.length).toBe(n);
   });
 });

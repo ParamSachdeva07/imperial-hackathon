@@ -28,6 +28,8 @@ export interface SceneSink {
 export interface OverlayDebug {
   /** One row per live annotation. */
   state(): { id: string; tool: string; state: string; bounds: Rect | null; steps: unknown }[];
+  /** The render items currently visible (for telling the model what is on screen). */
+  items?(): RenderItem[];
   /** An anatomy card's captured image (data URL), to verify capture exclusion; null if none. */
   anatomyImage(id: string): string | null;
 }

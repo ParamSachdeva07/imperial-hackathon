@@ -28,6 +28,8 @@ export interface CreateOverlayOptions {
   captureProvider: ScreenCaptureProvider;
   /** Rects to keep clear, e.g. the avatar window. */
   avoidRects?: AvoidRectsProvider;
+  /** Extra rects only cards and label_parts title chips keep clear (the assistant's turn-scoped selection / pointer area). */
+  cardAvoidRects?: AvoidRectsProvider;
   /** The voice avatar window: enables the `move_avatar` tool and auto-dodge. Usually the same object as `avoidRects`. */
   avatar?: AvatarController;
   /**
@@ -86,6 +88,7 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     screen,
     sink: windows,
     ...(opts.avoidRects ? { avoidRects: opts.avoidRects } : {}),
+    ...(opts.cardAvoidRects ? { cardAvoidRects: opts.cardAvoidRects } : {}),
     ...(opts.avatar ? { avatar: opts.avatar } : {}),
     ...(imageSource ? { imageSource } : {}),
     hideDuringCapture: dev.hideDuringCapture ?? false,

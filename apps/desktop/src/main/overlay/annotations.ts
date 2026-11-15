@@ -75,6 +75,8 @@ export interface LayoutContext {
   state: ItemState;
   /** Other annotations' drawings + the avatar window (computed on first use). */
   avoid(): Rect[];
+  /** Extra rects only cards and group title chips keep clear (e.g. the user's selection / pointer close-up for this turn). */
+  extraAvoid?(): Rect[];
   displayOf(r: ResolvedTarget | null): DisplayInfo;
   otherDisplayBounds(display: DisplayInfo): Rect[];
   /** Place a label beside `around`; `key` names it so it keeps its side across re-layouts. */
@@ -193,7 +195,7 @@ const labelParts: AnnotationKind<"label_parts"> = {
     const first = parts[0]!.r;
     // The group's title chip sits adjacent to the union of the items: above its top edge first (then right / left / below if that is
     // blocked), never over any item's ring or label.
-    const title = ctx.placeLabel("title", l.input.title, undefined, union, ctx.displayOf(first), [...ctx.avoid(), ...rings, ...placedLabels], { prefer: "above", gap: TITLE_GAP });
+    const title = ctx.placeLabel("title", l.input.title, undefined, union, ctx.displayOf(first), [...ctx.avoid(), ...(ctx.extraAvoid?.() ?? []), ...rings, ...placedLabels], { prefer: "above", gap: TITLE_GAP });
     return { kind: "parts", id: l.id, state: ctx.state, parts: rendered, title };
   },
 };
@@ -317,7 +319,7 @@ const explainer: AnnotationKind<"show_explainer"> = {
       hasImages: hasImages(l.input.spec),
       workArea: display.workArea,
       // Never cover the thing being explained: an anatomy card also avoids its crop region.
-      avoid: region ? [...ctx.avoid(), region.bounds] : ctx.avoid(),
+      avoid: region ? [...ctx.avoid(), ...(ctx.extraAvoid?.() ?? []), region.bounds] : [...ctx.avoid(), ...(ctx.extraAvoid?.() ?? [])],
       compactImageScale: COMPACT_IMAGE_SCALE,
       ...(ctx.previousSide("card") ? { prefer: ctx.previousSide("card")! } : {}),
     });

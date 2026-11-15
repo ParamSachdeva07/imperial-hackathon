@@ -20,6 +20,8 @@ export interface AxHelperLike {
   snapshot(maxElements: number, excludePids: number[]): Promise<RawSnapshot>;
   resolve(ids: string[]): Promise<Record<string, RawRect | null>>;
   trusted(): Promise<boolean>;
+  /** Optional: element under a global point. */
+  elementAt?(x: number, y: number, excludePids: number[]): Promise<RawElement | null>;
   /** Optional: gate the helper's reading/observing (it starts inactive). */
   setActive?(on: boolean): Promise<void>;
 }
@@ -221,6 +223,30 @@ export class AxBoundsProvider implements AxProvider {
     const anchor = this.anchors.get(elementId);
     if (anchor) anchor.rect = rect;
     return { rect, displayId: String(this.o.getDisplayMatching(rect).id) };
+  }
+
+  /**
+   * The accessibility element under a global point (e.g. where the mouse pointer / pointing finger is).
+   * Never throws: null when inactive, untrusted, unavailable, timed out, or nothing useful is there.
+   */
+  async elementAt(point: { x: number; y: number }): Promise<ElementInfo | null> {
+    if (!this._active || !this.o.client.elementAt || !this.o.client.available) return null;
+    try {
+      const raw = await this.o.client.elementAt(point.x, point.y, this.o.excludePids?.() ?? [process.pid]);
+      if (!raw) return null;
+      if (!this._active) return null;
+      const info = toInfo(raw, this.o.getDisplayMatching);
+      // The id is about to be given to the model: make it resolvable even when the (capped) snapshot omitted this element.
+      if (!this.current.elements.some((e) => e.id === info.id)) {
+        this.shadow.set(info.id, info);
+        while (this.shadow.size > 2000) this.shadow.delete(this.shadow.keys().next().value as string);
+      }
+      return info;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "not_trusted") this.setTrusted(false);
+      return null;
+    }
   }
 
   /** Forget anchors (all, or just these ids); polling stops when none remain. */

@@ -6,9 +6,16 @@ describe("SentenceBatcher", () => {
   it("emits the first sentence as soon as it is long enough and complete", () => {
     const b = new SentenceBatcher();
     expect(b.push("Sure, I can help")).toEqual([]);
-    expect(b.push(" you with that.")).toEqual([]); // no whitespace after the period yet
-    expect(b.push(" Click the")).toEqual(["Sure, I can help you with that. "]);
+    expect(b.push(" you.")).toEqual([]); // no whitespace after the period yet
+    expect(b.push(" Click the")).toEqual(["Sure, I can help you. "]);
     expect(b.flush()).toBe("Click the");
+  });
+
+  it("starts the first chunk after the 6th word when no sentence end has arrived", () => {
+    const b = new SentenceBatcher();
+    expect(b.push("One two three four five six")).toEqual([]); // no whitespace after the 6th word yet
+    expect(b.push(" seven eight")).toEqual(["One two three four five six "]);
+    expect(b.flush()).toBe("seven eight");
   });
 
   it("does not split on decimals or short fragments", () => {

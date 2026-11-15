@@ -4,13 +4,28 @@
  */
 /** Read lazily: the repo .env is loaded after this module is imported. */
 export function realtimeModel(): string {
-  return process.env.OPENAI_REALTIME_MODEL || "gpt-realtime-2.1";
+  return process.env.POINTY_REALTIME_MODEL || process.env.OPENAI_REALTIME_MODEL || DEFAULT_REALTIME_MODEL;
+}
+
+export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
+export const FALLBACK_REASONING_EFFORT = "low";
+
+/** Reasoning effort (GA field: session.reasoning.effort). Verified accepted: minimal|low|medium|high|xhigh (+none). */
+export function reasoningEffort(): string {
+  return process.env.POINTY_REASONING_EFFORT || "minimal";
+}
+
+/** One-line summary for a start log. */
+export function describeRealtimeConfig(model = realtimeModel(), effort: string | undefined = reasoningEffort()): string {
+  return `model=${model}, effort=${effort ?? "default"}`;
 }
 
 export interface AssistantSessionOpts {
   instructions: string;
   tools: unknown[];
   model?: string;
+  /** Reasoning effort; omit for the model default. */
+  effort?: string;
 }
 
 /**
@@ -21,6 +36,7 @@ export function assistantSessionConfig(opts: AssistantSessionOpts): Record<strin
   return {
     type: "realtime",
     ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.effort ? { reasoning: { effort: opts.effort } } : {}),
     instructions: opts.instructions,
     output_modalities: ["text"],
     audio: {
