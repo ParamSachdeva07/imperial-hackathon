@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   BACKEND_PORT,
   anamEnv,
+  lipSyncEnv,
   parseArgs,
   pointyEnv,
   runPreflight,
@@ -183,7 +184,7 @@ if (!flags.noAnam) {
   } else {
     start("api", C.api, join(anamDir, "backend/.venv/bin/python"), ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", String(BACKEND_PORT)], {
       cwd: anamDir,
-      env: process.env,
+      env: { ...process.env, ...lipSyncEnv(process.env) },
     });
     if (!(await waitForHealth())) {
       if (!shuttingDown) log("api", `backend did not become healthy on :${BACKEND_PORT}`, C.err);

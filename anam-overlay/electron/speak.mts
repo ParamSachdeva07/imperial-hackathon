@@ -6,7 +6,9 @@ export type SpeakCommand =
   | { type: 'start'; session: number }
   | { type: 'end' }
   | { type: 'interrupt' }
-  | ({ type: 'talk' } & Talk);
+  | ({ type: 'talk' } & Talk)
+  // Lip-sync: voice audio played elsewhere (base64 PCM, 16-bit 24 kHz mono); null ends the utterance.
+  | { type: 'audio'; pcm: string | null };
 // `session` echoes the start command of the call the report is about; reports for an older call are ignored.
 export type SpeakReport = { connected?: boolean; speaking?: boolean; session?: number };
 export type SpeakState = { connected: boolean; speaking: boolean; starting: boolean };
@@ -76,6 +78,13 @@ export function createSpeakController(deps: SpeakDeps) {
     return 'queued';
   }
 
+  // Live audio is only worth showing now: nothing is queued while the call is still connecting.
+  function audio(pcm: string | null) {
+    if (!connected) return;
+    touch();
+    deps.send({ type: 'audio', pcm });
+  }
+
   function interrupt() {
     queue = [];
     if (connected || starting) deps.send({ type: 'interrupt' });
@@ -104,7 +113,7 @@ export function createSpeakController(deps: SpeakDeps) {
     }
   }
 
-  return { start, end, talk, interrupt, report,
+  return { start, end, talk, audio, interrupt, report,
     state: (): SpeakState => ({ connected, speaking, starting }) };
 }
 export type SpeakController = ReturnType<typeof createSpeakController>;

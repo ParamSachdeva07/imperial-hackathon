@@ -154,7 +154,7 @@ ipcMain.handle('overlay:microphone', async (event) => {
   try { return await systemPreferences.askForMediaAccess('microphone'); }
   catch { return false; }
 });
-ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly }));
+ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly, lipSync: trusted(event) && speakOnly && process.env.ANAM_LIP_SYNC === '1' }));
 ipcMain.on('anam:speak-report', (event, report: unknown) => {
   if (!trusted(event) || !speaker || !report || typeof report !== 'object') return;
   const { connected, speaking, session } = report as { connected?: unknown; speaking?: unknown; session?: unknown };

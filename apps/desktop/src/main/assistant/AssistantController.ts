@@ -157,6 +157,11 @@ export interface AssistantDeps {
   /** Say a short greeting when a call opens. */
   greet?: boolean;
   /**
+   * The model speaks in its own voice (audio output, played by the transport) instead of the avatar reading its text.
+   * The spoken transcript is then the answer, playback is known from the model's own audio events, and the avatar is not sent text.
+   */
+  ownVoice?: boolean;
+  /**
    * Called with true when an ANSWER (not the short offer) starts being spoken and false when speaking ends / is interrupted / the
    * assistant closes. Production sets the gesture session INACTIVE on true (so an open hand yields wake_requested) and ACTIVE on
    * false (only while the assistant is open). wake_requested while open + answering interrupts.
@@ -274,6 +279,8 @@ export class AssistantController {
   private releaseGen = 0;
   private idleTimer: TimerHandle | null = null;
   private pollTimer: TimerHandle | null = null;
+  /** ownVoice: the model's audio is being heard right now (output_audio_buffer.started .. stopped/cleared). */
+  private audioPlaying = false;
   private prevItemIds: string[] = [];
   private lastSelectionId: string | null = null;
   private openedAt = 0;
@@ -528,6 +535,7 @@ export class AssistantController {
     this.recordAnswer("closed"); // what was actually said before the close still goes to memory
     if (this.micGated) this.setMic(true); // the renderer keeps its mic flag across sessions: never leave it muted
     this.micGated = false;
+    this.audioPlaying = false;
     this.pendingSelection = null;
     this.ignoreCommit = false;
     this.speechEndsAt = 0;
@@ -614,6 +622,15 @@ export class AssistantController {
         if (typeof id === "string") this.onResponseCreated(id);
         return;
       }
+      case "output_audio_buffer.started":
+        this.audioPlaying = true;
+        return;
+      case "output_audio_buffer.stopped":
+      case "output_audio_buffer.cleared":
+        this.audioPlaying = false;
+        if (this.deps.ownVoice && this.releaseTimer !== null) this.releaseMic(); // the answer was already complete: it has now been heard in full
+        return;
+      case "response.output_audio_transcript.delta": // ownVoice: what the model is saying
       case "response.output_text.delta": {
         const id = ev.response_id;
         if (typeof id !== "string" || id !== this.activeResponseId || this.cancelled.has(id)) return; // late delta
@@ -1147,6 +1164,7 @@ export class AssistantController {
   /** Anam /interrupt (fired, not awaited). Queued talk chunks are dropped; an in-flight /talk that lands after it is interrupted again. */
   private interruptAnam(): void {
     this.talkGen++;
+    if (this.deps.ownVoice) this.deps.transport.send({ type: "output_audio_buffer.clear" }); // stop the voice itself; the avatar call below stops the lips
     const fire = () => void this.deps.anam.interrupt().catch((e: unknown) => this.log(`anam interrupt failed: ${String(e)}`));
     fire();
     if (this.talksInFlight > 0) {
@@ -1389,6 +1407,7 @@ export class AssistantController {
       this.spokenLog.push({ end: this.speechEndsAt, text });
       this.spokenLog = this.spokenLog.filter((e) => this.micGated || now <= e.end + this.cfg.echoWindowMs);
     }
+    if (this.deps.ownVoice) return; // the model's own audio is the speech: nothing to send to the avatar
     this.talkChain = this.talkChain.then(async () => {
       if (gen !== this.talkGen || my !== this.epoch) return; // interrupted / closed meanwhile
       this.talksInFlight++;
@@ -1407,6 +1426,18 @@ export class AssistantController {
     const my = this.epoch;
     const rg = this.releaseGen;
     const now = this.deps.clock.now();
+    if (this.deps.ownVoice) {
+      // Playback is known exactly from the audio events; the estimate only bounds the wait if one is lost.
+      const deadline = Math.max(now, this.speechEndsAt) + this.cfg.maxSpeechExtendMs;
+      const poll = (): void => {
+        this.releaseTimer = null;
+        if (my !== this.epoch || rg !== this.releaseGen || !this.micGated) return;
+        if (this.audioPlaying && this.deps.clock.now() < deadline) this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
+        else this.releaseMic();
+      };
+      this.releaseTimer = this.deps.clock.setTimeout(poll, this.cfg.speechPollMs);
+      return;
+    }
     const check = () => {
       this.releaseTimer = null;
       if (my !== this.epoch) return;

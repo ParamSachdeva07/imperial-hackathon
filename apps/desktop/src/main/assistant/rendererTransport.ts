@@ -21,6 +21,7 @@ export interface RendererTransportOptions {
 export class RendererTransport implements RealtimeTransport {
   private readonly events = new Set<(e: RealtimeServerEvent) => void>();
   private readonly closes = new Set<(r: string) => void>();
+  private readonly audio = new Set<(pcm: string | null) => void>();
   private maxBytes: number | undefined;
   private ready = false;
   private open = false;
@@ -76,11 +77,18 @@ export class RendererTransport implements RealtimeTransport {
     return () => this.closes.delete(cb);
   }
 
+  /** The model's voice as it plays (see AssistantMessage "audio"). */
+  onAudio(cb: (pcm: string | null) => void): () => void {
+    this.audio.add(cb);
+    return () => this.audio.delete(cb);
+  }
+
   dispose(): void {
     this.off();
     this.fail(new Error("disposed"));
     this.events.clear();
     this.closes.clear();
+    this.audio.clear();
   }
 
   private fail(err: Error): void {
@@ -120,6 +128,9 @@ export class RendererTransport implements RealtimeTransport {
       }
       case "server":
         for (const cb of [...this.events]) cb(m.event);
+        return;
+      case "audio":
+        for (const cb of [...this.audio]) cb(m.pcm);
         return;
     }
   }

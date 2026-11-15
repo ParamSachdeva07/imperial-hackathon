@@ -109,14 +109,15 @@ export function App() {
   }, []);
 
   // Speak-only: the control API (Pointy) starts, speaks, interrupts and ends the call.
-  const handlers = useRef({ open, endCall, talk: anam.talk, interrupt: anam.interrupt });
-  handlers.current = { open, endCall, talk: anam.talk, interrupt: anam.interrupt };
+  const handlers = useRef({ open, endCall, talk: anam.talk, audio: anam.audio, interrupt: anam.interrupt });
+  handlers.current = { open, endCall, talk: anam.talk, audio: anam.audio, interrupt: anam.interrupt };
   useEffect(() => {
     if (!window.overlay?.onSpeakCommand) return;
     return window.overlay.onSpeakCommand((command) => {
       if (command.type === 'start') void handlers.current.open(true, false, command.session);
       else if (command.type === 'end') { pendingStart.current = null; void handlers.current.endCall(); } // an end supersedes a start queued behind a teardown
       else if (command.type === 'interrupt') handlers.current.interrupt();
+      else if (command.type === 'audio') handlers.current.audio(command.pcm);
       else handlers.current.talk({ turnId: command.turnId, text: command.text, final: command.final });
     });
   }, []);

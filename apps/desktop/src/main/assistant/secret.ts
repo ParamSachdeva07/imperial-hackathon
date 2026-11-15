@@ -2,7 +2,7 @@
  * Mint a short-lived Realtime client secret for the hidden assistant window (the standard API key never
  * leaves main). Session config is the GA shape verified by scripts/realtime-smoke.ts. No electron import.
  */
-import { FALLBACK_REASONING_EFFORT, assistantSessionConfig, reasoningEffort, realtimeModel } from "./realtimeProtocol";
+import { FALLBACK_REASONING_EFFORT, assistantSessionConfig, reasoningEffort, realtimeModel, realtimeVoice } from "./realtimeProtocol";
 
 export interface AssistantSecret {
   value: string;
@@ -28,7 +28,7 @@ export async function mintAssistantSecret(opts: {
       headers: { authorization: `Bearer ${opts.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         expires_after: { anchor: "created_at", seconds: 600 },
-        session: assistantSessionConfig({ instructions: opts.instructions, tools: opts.tools, model, effort }),
+        session: assistantSessionConfig({ instructions: opts.instructions, tools: opts.tools, model, effort, voice: realtimeVoice() }),
       }),
     });
     const data = (await res.json().catch(() => ({}))) as { value?: string; expires_at?: number; error?: { message?: string; param?: string } };

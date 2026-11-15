@@ -25,6 +25,9 @@ class Settings:
     api_key: str = field(default="", repr=False)
     api_base: str = "https://api.anam.ai"
     persona_id: str = "ec3b8e17-2ff7-517d-92e5-c13a3a865023"
+    # Lip-sync (ANAM_LIP_SYNC=1 with ANAM_AVATAR_ID): the avatar mouths audio it is sent; Anam runs no voice or model.
+    lip_sync_avatar_id: str = ""
+    avatar_model: str = ""
 
     @classmethod
     def load(cls):
@@ -34,7 +37,15 @@ class Settings:
             api_key=(values.get("ANAM_API_KEY") or "").strip(),
             api_base=(values.get("ANAM_API_BASE") or "https://api.anam.ai").rstrip("/"),
             persona_id=(values.get("ANAM_PERSONA_ID") or "").strip(),
+            lip_sync_avatar_id=(values.get("ANAM_AVATAR_ID") or "").strip() if values.get("ANAM_LIP_SYNC") == "1" else "",
+            avatar_model=(values.get("ANAM_AVATAR_MODEL") or "").strip(),
         )
+
+    def persona_config(self):
+        if not self.lip_sync_avatar_id:
+            return {"personaId": self.persona_id}
+        return {"avatarId": self.lip_sync_avatar_id, "enableAudioPassthrough": True,
+                **({"avatarModel": self.avatar_model} if self.avatar_model else {})}
 
     def validate(self):
         if not self.api_key or self.api_key.startswith(("<", "your-")):
@@ -44,9 +55,10 @@ class Settings:
                 or base.password or base.query or base.fragment or base.path not in ("", "/")):
             raise HTTPException(503, "ANAM_API_BASE must be an HTTPS origin, such as https://api.anam.ai.")
         try:
-            UUID(self.persona_id)
+            UUID(self.lip_sync_avatar_id or self.persona_id)
         except (ValueError, TypeError, AttributeError):
-            raise HTTPException(503, "Set a valid ANAM_PERSONA_ID in backend/.env.") from None
+            name = "ANAM_AVATAR_ID" if self.lip_sync_avatar_id else "ANAM_PERSONA_ID"
+            raise HTTPException(503, f"Set a valid {name} in backend/.env.") from None
 
 
 class SessionToken(BaseModel):
@@ -106,7 +118,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             upstream = await request.app.state.anam_http.post(
                 f"{config.api_base}/v1/auth/session-token",
                 headers={"Authorization": f"Bearer {config.api_key}"},
-                json={"personaConfig": {"personaId": config.persona_id}},
+                json={"personaConfig": config.persona_config()},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "Anam took too long to respond. Please retry.") from None

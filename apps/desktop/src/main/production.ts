@@ -27,7 +27,7 @@ import { AnamSpeaker } from "./assistant/AnamSpeaker";
 import { createAssistantWindow } from "./assistant/assistantWindow";
 import { buildAssistantInstructions } from "./assistant/instructions";
 import { mintAssistantSecret } from "./assistant/secret";
-import { describeRealtimeConfig } from "./assistant/realtimeProtocol";
+import { describeRealtimeConfig, realtimeVoice } from "./assistant/realtimeProtocol";
 import { summarizeOverlays } from "./assistant/overlaySummary";
 import { captureScreenContext, POINTER_ACTIVE_MS } from "./assistant/screenContext";
 import { realClock } from "./overlay/clock";
@@ -205,6 +205,9 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     },
     log: plog,
   });
+  const speaker = new AnamSpeaker();
+  const ownVoice = realtimeVoice() !== null;
+  if (ownVoice) assistantWin.transport.onAudio((pcm) => speaker.audio(pcm)); // the avatar lip-syncs to the voice as it plays
   const controller = new AssistantController({
     transport: assistantWin.transport,
     buildContext: (o) =>
@@ -232,7 +235,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
         ax,
         log: plog,
       }),
-    anam: new AnamSpeaker(),
+    anam: speaker,
     overlay: {
       onTurnStart: (turnId) => overlay.control.onTurnStart(turnId),
       handleTool: (name, input, o) => {
@@ -260,6 +263,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     selection: selectionStore,
     bargeIn: parseBargeIn(env.POINTY_BARGE_IN),
     greet: true,
+    ownVoice,
     // Pause ONLY the gesture session while Anam speaks (so the open hand can interrupt and the mouse is not driven by a
     // hand that is just resting). Deliberately NOT the setSessionActive wrapper above: ax.setActive(false) would cancel
     // the anchors (target_lost, the AI's drawings vanish) and the selection must survive until the answer is done.

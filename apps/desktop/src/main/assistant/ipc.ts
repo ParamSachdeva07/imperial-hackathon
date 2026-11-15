@@ -19,4 +19,6 @@ export type AssistantMessage =
   | { kind: "open"; maxMessageBytes?: number }
   | { kind: "failed"; error: string }
   | { kind: "closed"; reason: string }
-  | { kind: "server"; event: { type: string; [k: string]: unknown } };
+  | { kind: "server"; event: { type: string; [k: string]: unknown } }
+  /** The model's voice as it plays: base64 PCM (16-bit, 24 kHz, mono); null marks the end of an utterance. */
+  | { kind: "audio"; pcm: string | null };

@@ -1,6 +1,6 @@
 /**
  * AnamSpeakerClient over the Anam control server (anam-overlay/electron/control.mts, ANAM_SPEAK_ONLY=1):
- *   POST /session {action:"start"|"end"}   POST /talk {turnId,text,final}   POST /interrupt   GET /state
+ *   POST /session {action:"start"|"end"}   POST /talk {turnId,text,final}   POST /audio {pcm|null}   POST /interrupt   GET /state
  * Discovery (file, token header, stale-pid check) mirrors AnamAvatarClient. No electron import.
  */
 import { readFileSync } from "node:fs";
@@ -38,6 +38,7 @@ export class AnamSpeaker implements AnamSpeakerClient {
   private readonly readFile: (path: string) => string;
   private readonly isAlive: (pid: number) => boolean;
   private readonly timeoutMs: number;
+  private audioChain: Promise<unknown> = Promise.resolve();
 
   constructor(opts: AnamSpeakerOptions = {}) {
     this.controlFile = opts.controlFile ?? anamControlFile();
@@ -57,6 +58,14 @@ export class AnamSpeaker implements AnamSpeakerClient {
 
   async talk(t: AnamTalk): Promise<void> {
     await this.mustOk("POST", "/talk", { turnId: t.turnId, text: t.text, final: t.final });
+  }
+
+  /**
+   * Voice audio for the avatar to lip-sync to (base64 PCM, 16-bit 24 kHz mono); null ends the utterance.
+   * Sent one at a time so chunks arrive in order; a failed chunk is dropped (the voice itself plays elsewhere).
+   */
+  audio(pcm: string | null): void {
+    this.audioChain = this.audioChain.then(() => this.request("POST", "/audio", { pcm }));
   }
 
   async interrupt(): Promise<void> {

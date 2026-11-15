@@ -175,8 +175,16 @@ export function pointyEnv(base, { debug }) {
 }
 
 /** Environment for the Anam child: never leak browser-exposed or stray keys, speak-only mode on. */
+/**
+ * The model speaks in its own voice unless POINTY_VOICE=anam; the avatar then only lip-syncs to that audio.
+ * Both the avatar window and its token broker read this.
+ */
+export function lipSyncEnv(base) {
+  return base.POINTY_VOICE === "anam" ? {} : { ANAM_LIP_SYNC: "1" };
+}
+
 export function anamEnv(base) {
-  const env = { ...base, ANAM_SPEAK_ONLY: "1" };
+  const env = { ...base, ANAM_SPEAK_ONLY: "1", ...lipSyncEnv(base) };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.VITE_ANAM_API_KEY;
   return env;

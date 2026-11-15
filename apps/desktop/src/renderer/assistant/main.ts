@@ -1,7 +1,9 @@
 /**
  * Hidden production-assistant page: owns the GPT Realtime WebRTC session and the microphone.
  * Main drives it through commands (connect/disconnect/send/mic); every server event is forwarded to
- * main, where AssistantController decides what to do. Text-only output: there is no audio playback.
+ * main, where AssistantController decides what to do. When the model speaks (audio output), its voice is
+ * played here, in the page that owns the microphone, so the browser's echo cancellation removes it from
+ * what the model hears; the same audio is reported to main as PCM for the avatar to lip-sync to.
  * WebRTC flow as in the dev voice window (renderer/voice/main.tsx): ephemeral secret from main ->
  * POST https://api.openai.com/v1/realtime/calls (application/sdp) -> data channel "oai-events".
  */
@@ -29,11 +31,70 @@ function waitForIce(conn: RTCPeerConnection): Promise<void> {
   });
 }
 
+/** The model's voice: played through `el`, and tapped as PCM while the server says audio is playing. */
+interface Voice {
+  el: HTMLAudioElement;
+  ctx: AudioContext;
+  forwarding: boolean;
+  stopTimer: ReturnType<typeof setTimeout> | undefined;
+}
+const VOICE_RATE = 24_000; // the avatar's native rate
+const VOICE_TAIL_MS = 200; // audio still in the local playout buffer when the server reports the end
+
+function pcm16Base64(samples: Float32Array): string {
+  const bytes = new Uint8Array(samples.length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples.length; i++) view.setInt16(i * 2, Math.max(-1, Math.min(1, samples[i] ?? 0)) * 0x7fff, true);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+function playVoice(stream: MediaStream): Voice {
+  const el = new Audio();
+  el.srcObject = stream;
+  void el.play().catch(() => undefined);
+  const ctx = new AudioContext({ sampleRate: VOICE_RATE });
+  const tap = ctx.createScriptProcessor(2048, 1, 1); // ~85 ms chunks
+  const silent = ctx.createGain(); // the tap only runs when connected to an output; the audible copy is `el`
+  silent.gain.value = 0;
+  ctx.createMediaStreamSource(stream).connect(tap);
+  tap.connect(silent);
+  silent.connect(ctx.destination);
+  const voice: Voice = { el, ctx, forwarding: false, stopTimer: undefined };
+  tap.onaudioprocess = (e) => {
+    if (voice.forwarding) api.emit({ kind: "audio", pcm: pcm16Base64(e.inputBuffer.getChannelData(0)) });
+  };
+  return voice;
+}
+
+/** Follow the server's playback events: report the voice only while there is something to hear. */
+function trackVoice(voice: Voice, type: string): void {
+  const stop = () => {
+    voice.stopTimer = undefined;
+    if (!voice.forwarding) return;
+    voice.forwarding = false;
+    api.emit({ kind: "audio", pcm: null });
+  };
+  if (type === "output_audio_buffer.started") {
+    clearTimeout(voice.stopTimer);
+    voice.stopTimer = undefined;
+    voice.forwarding = true;
+  } else if (type === "output_audio_buffer.stopped") {
+    clearTimeout(voice.stopTimer);
+    voice.stopTimer = setTimeout(stop, VOICE_TAIL_MS);
+  } else if (type === "output_audio_buffer.cleared") {
+    clearTimeout(voice.stopTimer);
+    stop();
+  }
+}
+
 /** Everything one connect() attempt owns. A stale attempt only ever tears down its own resources. */
 interface Attempt {
   conn: RTCPeerConnection | null;
   channel: RTCDataChannel | null;
   mic: MediaStream | null;
+  voice: Voice | null;
   cancelled: boolean;
 }
 let active: Attempt | null = null;
@@ -47,6 +108,12 @@ function teardownAttempt(a: Attempt): void {
   a.cancelled = true;
   for (const t of a.mic?.getTracks() ?? []) t.stop();
   a.mic = null;
+  if (a.voice) {
+    clearTimeout(a.voice.stopTimer);
+    a.voice.el.srcObject = null;
+    void a.voice.ctx.close().catch(() => undefined);
+    a.voice = null;
+  }
   a.channel = null;
   const conn = a.conn;
   a.conn = null;
@@ -57,7 +124,7 @@ function teardownAttempt(a: Attempt): void {
 const session: RtcSession = {
   async connect() {
     if (active) teardownAttempt(active);
-    const a: Attempt = { conn: null, channel: null, mic: null, cancelled: false };
+    const a: Attempt = { conn: null, channel: null, mic: null, voice: null, cancelled: false };
     active = a;
     // After every await: if cancelled (or timed out) meanwhile, release whatever just arrived and stop.
     const alive = () => {
@@ -68,7 +135,10 @@ const session: RtcSession = {
       alive();
       const conn = new RTCPeerConnection();
       a.conn = conn;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      conn.ontrack = (e) => {
+        if (!a.cancelled && !a.voice && e.track.kind === "audio") a.voice = playVoice(e.streams[0] ?? new MediaStream([e.track]));
+      };
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }) // the voice plays in this page, so its echo is cancelled;
       a.mic = stream; // owned now, so teardownAttempt stops it even if we were cancelled meanwhile
       alive();
       applyMic(a);
@@ -77,7 +147,9 @@ const session: RtcSession = {
       a.channel = channel;
       channel.onmessage = (m) => {
         try {
-          api.emit({ kind: "server", event: JSON.parse(String(m.data)) as { type: string } });
+          const event = JSON.parse(String(m.data)) as { type: string };
+          if (a.voice) trackVoice(a.voice, event.type);
+          api.emit({ kind: "server", event });
         } catch {
           /* ignore malformed frames */
         }

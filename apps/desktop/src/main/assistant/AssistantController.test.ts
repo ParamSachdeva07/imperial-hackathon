@@ -1325,6 +1325,39 @@ describe("interrupt ordering", () => {
   });
 });
 
+describe("the model's own voice", () => {
+  it("takes the spoken transcript as the answer, sends the avatar no text, and frees the mic when playback really ends", async () => {
+    const s = setup({ ownVoice: true });
+    await openIt(s);
+    await speak(s);
+    await flushPromises(30);
+    created(s, "r1");
+    s.transport.emit({ type: "output_audio_buffer.started" });
+    s.transport.emit({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "It is on the left. " });
+    await done(s, "r1");
+    await settle(s, 400);
+    expect(s.talks).toHaveLength(0);
+    expect(s.c.status.get()).toBe("speaking");
+    await settle(s, 5_000); // well past the estimate for these few words: still speaking while the audio is
+    expect(s.c.status.get()).toBe("speaking");
+    s.transport.emit({ type: "output_audio_buffer.stopped" });
+    await flushPromises(30);
+    expect(s.c.status.get()).toBe("listening");
+  });
+
+  it("clears the playing audio on interrupt", async () => {
+    const s = setup({ ownVoice: true });
+    await openIt(s);
+    await speak(s);
+    await flushPromises(30);
+    created(s, "r1");
+    s.transport.emit({ type: "response.output_audio_transcript.delta", response_id: "r1", delta: "A long answer. " });
+    await s.c.interrupt();
+    expect(s.transport.sent.some((e) => e.type === "output_audio_buffer.clear")).toBe(true);
+    expect(s.transport.sent.some((e) => e.type === "response.cancel")).toBe(true);
+  });
+});
+
 describe("greeting", () => {
   it("asks the model to greet when a call opens, and only when enabled", async () => {
     const s = setup({ greet: true });

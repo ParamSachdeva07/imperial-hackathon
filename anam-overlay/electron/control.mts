@@ -14,7 +14,7 @@ export type ControlOptions = {
   moveTo(x: number, y: number): Rect | null;
   port?: number;
   filePath?: string;
-  /** Speak-only routes (ANAM_SPEAK_ONLY=1). Without it /session, /talk and /interrupt are 404. */
+  /** Speak-only routes (ANAM_SPEAK_ONLY=1). Without it /session, /talk, /audio and /interrupt are 404. */
   speak?: SpeakController;
 };
 export type ControlServer = { close(): Promise<void>; removeFileSync(): void; port: number };
@@ -22,6 +22,7 @@ export type ControlServer = { close(): Promise<void>; removeFileSync(): void; po
 const DEFAULT_PORT = 47630;
 const BODY_LIMIT = 4096;
 const TALK_BODY_LIMIT = 16384; // 2000 chars of text may be 4 bytes each plus JSON escapes
+const AUDIO_BODY_LIMIT = 65536; // one chunk is ~85 ms of 24 kHz PCM as base64 (about 6 kB)
 const REQUEST_TIMEOUT_MS = 5000;
 
 function send(res: http.ServerResponse, status: number, body: unknown) {
@@ -91,8 +92,8 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
         return send(res, 200, { ok: true, state });
       }
       const speak = opts.speak;
-      if (speak && req.method === 'POST' && (url.pathname === '/session' || url.pathname === '/talk' || url.pathname === '/interrupt')) {
-        const raw = await readBody(req, url.pathname === '/talk' ? TALK_BODY_LIMIT : BODY_LIMIT);
+      if (speak && req.method === 'POST' && (url.pathname === '/session' || url.pathname === '/talk' || url.pathname === '/audio' || url.pathname === '/interrupt')) {
+        const raw = await readBody(req, url.pathname === '/audio' ? AUDIO_BODY_LIMIT : url.pathname === '/talk' ? TALK_BODY_LIMIT : BODY_LIMIT);
         let parsed: unknown = null;
         try { parsed = raw === null ? null : JSON.parse(raw); } catch { parsed = null; }
         const body = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
@@ -101,6 +102,11 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
           if (!opts.getState()) return send(res, 503, { ok: false, reason: 'no_window' });
           if (body.action === 'start') speak.start(); else speak.end();
           return send(res, 200, { ok: true, state: speak.state() });
+        }
+        if (url.pathname === '/audio') {
+          if (body.pcm !== null && (typeof body.pcm !== 'string' || body.pcm.length === 0)) return send(res, 400, { ok: false, reason: 'invalid_input' });
+          speak.audio(body.pcm);
+          return send(res, 200, { ok: true });
         }
         if (url.pathname === '/interrupt') {
           speak.interrupt();

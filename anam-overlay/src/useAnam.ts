@@ -10,7 +10,9 @@ type Turn = {
   text: string; chain: Promise<void>; ended: boolean; failed: boolean; fellBack: boolean; cancelled: boolean;
 };
 type ActiveSession = { client: Client; dispose: () => void; streams: MediaStream[]; stopped?: Promise<void>;
-  turns: Map<string, Turn> };
+  turns: Map<string, Turn>;
+  /** Lip-sync mode: where voice audio played elsewhere is sent for the avatar to mouth. */
+  lips?: ReturnType<Client['createAgentAudioInputStream']> };
 const MAX_TURNS = 16;
 export type Talk = { turnId: string; text: string; final: boolean };
 class UserVisibleError extends Error {}
@@ -41,9 +43,9 @@ export function useAnam() {
   const [speaking, setSpeaking] = useState(false);
   const speakOnlyRef = useRef(false);
   // Resolved once from the main process: speak-only is decided by ANAM_SPEAK_ONLY, not by the page.
-  const modeRef = useRef<Promise<boolean> | null>(null);
-  modeRef.current ??= (window.overlay?.getMode?.() ?? Promise.resolve({ speakOnly: false }))
-    .then((mode) => mode.speakOnly, () => false);
+  const modeRef = useRef<Promise<{ speakOnly: boolean; lipSync: boolean }> | null>(null);
+  modeRef.current ??= (window.overlay?.getMode?.() ?? Promise.resolve({ speakOnly: false, lipSync: false }))
+    .then((mode) => ({ speakOnly: mode.speakOnly, lipSync: mode.lipSync }), () => ({ speakOnly: false, lipSync: false }));
 
   const stop = useCallback(async () => {
     ++generation.current;
@@ -65,7 +67,7 @@ export function useAnam() {
     if (busy.current || session.current) return;
     busy.current = true;
     const attempt = ++generation.current;
-    const speakOnly = await modeRef.current!;
+    const { speakOnly, lipSync } = await modeRef.current!;
     speakOnlyRef.current = speakOnly;
     const useMicrophone = wantMicrophone && !speakOnly; // speak-only never touches the microphone
     if (generation.current !== attempt) { busy.current = false; return; }
@@ -159,6 +161,12 @@ export function useAnam() {
         timer = setTimeout(() => reject(new UserVisibleError('Connection timed out. Check your network and retry.')), 45_000);
       })]);
       if (!current()) return;
+      if (lipSync) {
+        // The voice is heard from the app that produced it; here it only drives the lips, so the avatar's own copy is silenced.
+        active.lips = client.createAgentAudioInputStream({ encoding: 'pcm_s16le', sampleRate: 24000, channels: 1 });
+        const video = document.getElementById('persona-video') as HTMLVideoElement | null;
+        if (video) video.muted = true;
+      }
       setPhase('connected');
       setStatus(idleStatus);
     } catch (cause) {
@@ -228,11 +236,18 @@ export function useAnam() {
     });
   }, []);
 
+  /** Lip-sync: one chunk of the voice (base64 PCM), or null when the utterance is over. */
+  const audio = useCallback((pcm: string | null) => {
+    const lips = session.current?.lips;
+    if (!lips) return;
+    try { if (pcm === null) lips.endSequence(); else lips.sendAudioChunk(pcm); } catch { /* not connected */ }
+  }, []);
+
   const interrupt = useCallback(() => {
     const active = session.current;
     if (!active) return;
     active.turns.forEach((turn) => { turn.cancelled = true; });
-    try { active.client.interruptPersona(); } catch { /* not connected */ }
+    try { active.client.interruptPersona(); active.lips?.endSequence(); } catch { /* not connected */ }
     setSpeaking(false);
   }, []);
 
@@ -267,5 +282,5 @@ export function useAnam() {
     };
   }, []);
 
-  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, interrupt };
+  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, audio, interrupt };
 }
