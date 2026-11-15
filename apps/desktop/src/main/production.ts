@@ -38,6 +38,7 @@ import { loadRendererPage, PRELOAD_DIR } from "./rendererPages";
 import { startDevHarness } from "../dev/devHarness";
 import { ExecutionClient } from "./execution/ExecutionClient";
 import { EXECUTION_TOOLS, ExecutionToolHost } from "./execution/ExecutionTools";
+import { END_CALL_TOOL, closeAfterGoodbye } from "./assistant/callTools";
 
 /** Safety cap for the kept selection outline; the AssistantController removes it much earlier. */
 const SELECTION_OUTLINE_TTL_MS = 120_000;
@@ -191,6 +192,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   const tools = [
     ...exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] }),
     ...(executionOn ? EXECUTION_TOOLS : []),
+    END_CALL_TOOL,
   ];
   plog(`realtime ${describeRealtimeConfig()}`);
   const assistantWin = createAssistantWindow({
@@ -233,7 +235,14 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     anam: new AnamSpeaker(),
     overlay: {
       onTurnStart: (turnId) => overlay.control.onTurnStart(turnId),
-      handleTool: (name, input, o) => (execution.handles(name) ? (execution.handle(name, input) as ReturnType<typeof overlay.control.handleTool>) : overlay.control.handleTool(name, input, o)),
+      handleTool: (name, input, o) => {
+        if (name === END_CALL_TOOL.name) {
+          // The model said goodbye: close once it has finished saying it.
+          closeAfterGoodbye({ status: () => controller.status.get(), close: () => void controller.close("end_call"), clock: realClock });
+          return Promise.resolve({ ok: true, visible: false, note: "Say a short goodbye now. The call closes when you finish." }) as ReturnType<typeof overlay.control.handleTool>;
+        }
+        return execution.handles(name) ? (execution.handle(name, input) as ReturnType<typeof overlay.control.handleTool>) : overlay.control.handleTool(name, input, o);
+      },
     },
     backgroundWork: () => execution.isRunning(),
     gestures: {
