@@ -34,15 +34,21 @@ The two repositories are merged in this one: the voice app at the root, the exec
 - One start command: `npm run pointy` also launches the execution service, and picks the avatar's
   mode from `POINTY_VOICE_STACK`.
 
-**Still to do, all of it needing real keys**
+**Checked live (15 November 2026)**
+
+- The agent was created by the script: GPT-6.1 Sol, fast tier, low reasoning, twelve tools. Tool
+  schemas had to be folded into the subset ElevenLabs accepts (no unions or constants).
+- The avatar call opened on the ElevenLabs stack in about 3 seconds.
+- A message sent through the avatar app's `/message` route reached the agent, and the agent answered
+  it aloud. So notes from the app (a finished task) do work on this stack.
+- The agent heard the microphone and replied.
+
+**Still to do**
 
 1. Run `scripts/elevenlabs-agent.ts` to create the agent, and put its id, the ElevenLabs key and a
    Cara 4 avatar id in `anam-overlay/backend/.env`. The API paths in the script are from the
    documentation and have not been called.
 2. Phase 0's questions, now concrete:
-   - Does `sendUserMessage` reach the ElevenLabs agent? Announcing a finished task in agent mode is
-     built on it (`POST /message` on the avatar app). If it does not, the result is still returned
-     by `computer_task_status`.
    - Does the avatar's own voice trigger the agent on laptop speakers? Interruption is ElevenLabs'.
    - Can an image reach the agent? Until then the agent gets the control list as text, no picture.
 3. The spoken offer right after a selection is not built in agent mode. The selection is included
