@@ -24,6 +24,8 @@ export interface ElementSnapshot {
 export interface AxProvider extends BoundsProvider {
   listElements(): ElementInfo[];
   snapshotNow(reason: string): Promise<ElementSnapshot>;
+  /** Element under a global point, or null. Never throws. */
+  elementAt?(point: { x: number; y: number }): Promise<ElementInfo | null>;
   readonly trusted: boolean;
   onTrustedChange?(cb: (trusted: boolean) => void): () => void;
 }

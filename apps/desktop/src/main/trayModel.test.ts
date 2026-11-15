@@ -6,6 +6,7 @@ import { SETTINGS_LINKS, degradation, missing, normalizeMediaStatus, summarize, 
 const actions = (): TrayActions => ({
   openAssistant: vi.fn(),
   closeAssistant: vi.fn(),
+  stopTalking: vi.fn(),
   setMouseEnabled: vi.fn(),
   setGesturesEnabled: vi.fn(),
   checkPermissions: vi.fn(),
@@ -20,6 +21,20 @@ describe("tray model", () => {
     const act = buildMenuModel({ status: "listening", mouseEnabled: true, gesturesEnabled: true }, a);
     expect(act.some((m) => m.kind === "action" && m.label === "Close assistant")).toBe(true);
     expect(isAssistantActive("error")).toBe(false);
+  });
+  it("Close assistant has no hotkey label; Stop talking appears only while speaking or thinking", () => {
+    const a = actions();
+    const listening = buildMenuModel({ status: "listening", mouseEnabled: true, gesturesEnabled: true }, a);
+    const close = listening.find((m) => m.kind === "action" && m.label === "Close assistant");
+    expect(close).toBeDefined();
+    expect(close && "accelerator" in close ? close.accelerator : undefined).toBeUndefined();
+    expect(listening.some((m) => m.kind === "action" && m.label === "Stop talking")).toBe(false);
+    for (const status of ["speaking", "thinking"] as const) {
+      const items = buildMenuModel({ status, mouseEnabled: true, gesturesEnabled: true }, a);
+      const stop = items.find((m) => m.kind === "action" && m.label === "Stop talking");
+      if (stop?.kind === "action") stop.run();
+    }
+    expect(a.stopTalking).toHaveBeenCalledTimes(2);
   });
   it("reflects toggles and wires actions", () => {
     const a = actions();

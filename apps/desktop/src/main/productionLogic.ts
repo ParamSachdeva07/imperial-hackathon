@@ -48,3 +48,16 @@ export function createQuitGuard(opts: { close: () => Promise<void>; timeoutMs?: 
     return true;
   };
 }
+
+export interface PointXY {
+  x: number;
+  y: number;
+}
+
+/**
+ * Where the user is pointing for the [pointer] line: the gesture pointer when they pointed within the active window (the real
+ * cursor does not follow it while mouse control is off or frozen by the selection guard), else the real cursor.
+ */
+export function pickPointer(opts: { gestureActive: boolean; gesture: PointXY | null; real: PointXY }): PointXY {
+  return opts.gestureActive && opts.gesture ? { x: opts.gesture.x, y: opts.gesture.y } : opts.real;
+}

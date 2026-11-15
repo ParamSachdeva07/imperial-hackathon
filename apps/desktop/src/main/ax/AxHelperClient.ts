@@ -167,6 +167,12 @@ export class AxHelperClient {
     return (r.rects ?? {}) as Record<string, RawRect | null>;
   }
 
+  /** The element under a global point (nearest useful ancestor), or null. Throws AxHelperError on helper failure/timeout. */
+  async elementAt(x: number, y: number, excludePids: number[] = []): Promise<RawElement | null> {
+    const r = await this.request({ cmd: "elementAt", x, y, excludePids });
+    return (r.element ?? null) as RawElement | null;
+  }
+
   /** Tells the helper whether it may read/observe at all (it starts inactive). Never throws. */
   async setActive(on: boolean): Promise<void> {
     try {

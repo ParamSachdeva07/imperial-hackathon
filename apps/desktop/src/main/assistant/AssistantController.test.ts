@@ -92,6 +92,7 @@ function setup(over: Partial<AssistantDeps> = {}) {
       onSnapshot: (cb) => (snapListeners.add(cb), () => snapListeners.delete(cb)),
     },
     contextRevision: () => revision,
+    bargeIn: "off", // the legacy half-duplex tests; guarded/open have their own describe blocks
     log: (m) => log.push(m),
     ...over,
   };
@@ -158,10 +159,10 @@ describe("lifecycle", () => {
     expect(s.c.isOpen()).toBe(false);
   });
 
-  it("closes after 45 s of silence and clears overlays, selection, gestures, realtime, anam", async () => {
+  it("closes after 150 s of silence and clears overlays, selection, gestures, realtime, anam", async () => {
     const s = setup();
     await openIt(s);
-    await settle(s, 44_000);
+    await settle(s, 149_000);
     expect(s.c.isOpen()).toBe(true);
     await settle(s, 1500);
     expect(s.c.isOpen()).toBe(false);
@@ -192,27 +193,42 @@ describe("lifecycle", () => {
   it("speech resets the idle timer", async () => {
     const s = setup();
     await openIt(s);
-    await settle(s, 40_000);
+    await settle(s, 140_000);
     await speak(s);
     created(s, "r1");
     await done(s, "r1");
-    await settle(s, 44_000);
+    await settle(s, 149_000);
     expect(s.c.isOpen()).toBe(true);
     await settle(s, 2000);
     expect(s.c.isOpen()).toBe(false);
   });
 
-  it("hotkey: closed opens, listening closes, thinking interrupts", async () => {
+  it("hotkey: closed opens, a single press interrupts (never closes), a double press closes", async () => {
     const s = setup();
     await s.c.hotkey();
     await flushPromises();
     expect(s.c.isOpen()).toBe(true);
+    await settle(s, 5000);
     await speak(s);
     expect(s.c.status.get()).toBe("thinking");
     await s.c.hotkey();
     expect(s.c.isOpen()).toBe(true); // interrupted, not closed
-    await s.c.hotkey();
+    expect(s.calls).toContain("anam.interrupt");
+    await settle(s, 700);
+    await s.c.hotkey(); // idle but something was active recently: still only an interrupt
+    expect(s.c.isOpen()).toBe(true);
+    await settle(s, 300);
+    await s.c.hotkey(); // second press within 600 ms
     expect(s.c.isOpen()).toBe(false);
+  });
+
+  it("hotkey single press with nothing active and nothing spoken for 30 s does nothing", async () => {
+    const s = setup();
+    await openIt(s);
+    await settle(s, 40_000);
+    await s.c.hotkey();
+    expect(s.c.isOpen()).toBe(true);
+    expect(s.calls).not.toContain("anam.interrupt");
   });
 
   it("closes when the anam call ends or anam disappears", async () => {
@@ -273,8 +289,11 @@ describe("turn flow", () => {
     await done(s, "r1");
     s.transport.sent.length = 0;
     await speak(s);
-    expect(s.transport.types().slice(0, 2)).toEqual(["conversation.item.delete", "conversation.item.create"]);
-    expect(s.transport.sent[0]?.item_id).toBe("scr_1");
+    // a text stub takes the screen item's place (so "this" keeps a referent), then the image item is deleted, then the new screen goes in
+    expect(s.transport.types().slice(0, 3)).toEqual(["conversation.item.create", "conversation.item.delete", "conversation.item.create"]);
+    expect(s.transport.sent[0]).toMatchObject({ previous_item_id: "scr_1" });
+    expect(JSON.stringify(s.transport.sent[0])).toContain("[earlier screen");
+    expect(s.transport.sent[1]?.item_id).toBe("scr_1");
   });
 
   it("waits for a slow context, then falls back to answering without it after 1.2 s", async () => {
@@ -303,7 +322,7 @@ describe("turn flow", () => {
     await speak(s);
     await settle(s, 1300);
     expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(["scr_1"]);
-    const note = s.transport.sent.find((e) => e.type === "conversation.item.create");
+    const note = s.transport.sent.find((e) => e.type === "conversation.item.create" && JSON.stringify(e).includes("could not be captured"));
     expect(JSON.stringify(note)).toContain("could not be captured");
     expect(s.transport.count("response.create")).toBe(1);
   });
@@ -330,8 +349,9 @@ describe("turn flow", () => {
     await done(s, "r1");
     s.transport.sent.length = 0;
     await speak(s);
-    const again = s.transport.sent.filter((e) => e.type === "conversation.item.create");
+    const again = s.transport.sent.filter((e) => e.type === "conversation.item.create" && !String(e.item?.id).startsWith("stub_"));
     expect(again.length).toBe(1);
+    expect(s.transport.sent.filter((e) => String(e.item?.id).startsWith("stub_")).map((e) => JSON.stringify(e))).toEqual([expect.stringContaining("[earlier screen"), expect.stringContaining("[earlier selection: a spot the user pointed at")]);
     expect(s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id)).toEqual(["scr_1", "sel_1_1_0"]);
   });
 
@@ -382,7 +402,7 @@ describe("responses", () => {
     await openIt(s);
     await speak(s);
     created(s, "r1");
-    delta(s, "r1", "Hello there my friend. ");
+    delta(s, "r1", "Hello there my"); // under 6 words and no sentence end: nothing is spoken yet, so the mic is not gated
     // User talks again while r1 is still active (barge-in): cancel first, create only after done.
     s.transport.emit({ type: "input_audio_buffer.speech_started" });
     await flushPromises();
@@ -529,12 +549,12 @@ describe("half-duplex mic", () => {
     created(s, "r1");
     delta(s, "r1", "Click the blue button at the top of the page. ");
     await done(s, "r1");
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     expect(s.c.status.get()).toBe("speaking");
     await settle(s, 3000);
-    expect(s.transport.mic).toEqual([false]); // estimate (~700 + 10 words) not over yet
+    expect(s.transport.mic).toEqual([true, false]); // estimate (~700 + 10 words) not over yet
     await settle(s, 4000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
     expect(s.c.status.get()).toBe("listening");
   });
 
@@ -547,12 +567,12 @@ describe("half-duplex mic", () => {
     await done(s, "r1");
     s.setState({ connected: true, speaking: true, expanded: true });
     await settle(s, 3000);
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     await settle(s, 3000);
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     s.setState({ connected: true, speaking: false, expanded: true });
     await settle(s, 1000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
   });
 
   it("rebases the release deadline on playback start when anam connects late", async () => {
@@ -564,14 +584,14 @@ describe("half-duplex mic", () => {
     delta(s, "r1", "Short answer here for you. ");
     await done(s, "r1");
     await settle(s, 19_000); // past the text-based deadline, still waiting for the call
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     s.setState({ connected: true, speaking: true, expanded: true });
     await settle(s, 1000); // playback observed
     await settle(s, 5000); // would be released under the old fixed deadline
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     s.setState({ connected: true, speaking: false, expanded: true });
     await settle(s, 1000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
   });
 
   it("an in-flight anam state check from before new speech does not unmute the mic", async () => {
@@ -611,10 +631,10 @@ describe("half-duplex mic", () => {
     s.setState({ connected: false, speaking: false, expanded: true });
     await settle(s, 3000);
     await settle(s, 1500);
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     s.setState({ connected: true, speaking: false, expanded: true });
     await settle(s, 1000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
   });
 
   it("stays muted across the tool loop and releases after the final answer", async () => {
@@ -625,12 +645,12 @@ describe("half-duplex mic", () => {
     delta(s, "r1", "Let me show you where it is. ");
     await done(s, "r1", [{ type: "function_call", name: "highlight", call_id: "c1", arguments: "{}" }]);
     await settle(s, 10_000);
-    expect(s.transport.mic).toEqual([false]); // response 2 is pending: no release
+    expect(s.transport.mic).toEqual([true, false]); // response 2 is pending: no release
     created(s, "r2");
     delta(s, "r2", "It is the blue button there. ");
     await done(s, "r2");
     await settle(s, 8000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
   });
 
   it("interrupt: response.cancel, then anam interrupt, then mic back on", async () => {
@@ -640,10 +660,12 @@ describe("half-duplex mic", () => {
     created(s, "r1");
     delta(s, "r1", "A fairly long sentence that is now being spoken aloud. ");
     await flushPromises();
+    await settle(s, 1000); // past Anam's start latency: the first chunk was heard
     s.transport.sent.length = 0;
     await s.c.interrupt();
-    expect(s.transport.types()).toEqual(["response.cancel", "(anam.interrupt)"]);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.types()).toEqual(["response.cancel", "(anam.interrupt)", "conversation.item.create"]);
+    expect(JSON.stringify(s.transport.sent[2])).toContain("[interrupted] The user stopped you after: 'A fairly long sentence");
+    expect(s.transport.mic).toEqual([true, false, true]);
     expect(s.c.status.get()).toBe("listening");
     // The remaining chunks queued before the interrupt are never talked.
     delta(s, "r1", "More text that is dropped. ");
@@ -747,10 +769,10 @@ describe("review regressions", () => {
     await done(s, "r1");
     s.setState({ connected: false, speaking: false, expanded: true, starting: true });
     await settle(s, 20_000);
-    expect(s.transport.mic).toEqual([false]);
+    expect(s.transport.mic).toEqual([true, false]);
     s.setState({ connected: true, speaking: false, expanded: true });
     await settle(s, 1000);
-    expect(s.transport.mic).toEqual([false, true]);
+    expect(s.transport.mic).toEqual([true, false, true]);
   });
 
   it("a commit for speech ignored while the mic was gated does not start a turn", async () => {
@@ -781,7 +803,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     expect(s.buildOpts).toEqual([]); // no capture
     const items = s.transport.sent.filter((e) => e.type === "conversation.item.create");
     expect(items.map((e) => e.item?.id)).toEqual(["sel_1_1_0", "offer_1"]);
@@ -796,7 +819,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "That looks like a bank email. Want me to check it?");
     await done(s, "o1");
@@ -808,7 +832,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -835,7 +860,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -856,7 +882,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -874,6 +901,7 @@ describe("selection offer", () => {
     s.calls.length = 0;
     s.select(snap("a"));
     await flushPromises(40);
+    await settle(s, 1200);
     created(s, "r1"); // the stale response: cancelled on creation
     expect(s.transport.types()).toContain("response.cancel");
     expect(s.calls).not.toContain("outline.clear");
@@ -887,7 +915,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -905,7 +934,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -938,6 +968,7 @@ describe("selection offer", () => {
     s.calls.length = 0;
     s.select(snap("a"));
     await flushPromises(40);
+    await settle(s, 1200);
     expect(s.calls).toContain("anam.interrupt");
     expect(s.transport.types()).toContain("response.cancel");
     expect(creates(s)).toHaveLength(0); // never two responses at once: waits for the cancelled one
@@ -958,6 +989,7 @@ describe("selection offer", () => {
     await flushPromises();
     s.select(snap("a"));
     await flushPromises(40);
+    await settle(s, 1200);
     s.bumpRevision(); // the desktop changes while the cancelled answer winds down
     await done(s, "r1", [], "cancelled");
     created(s, "o1");
@@ -975,7 +1007,8 @@ describe("selection offer", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -983,9 +1016,10 @@ describe("selection offer", () => {
     s.transport.sent.length = 0;
     s.select(snap("b"));
     await flushPromises(40);
+    await settle(s, 1200);
     const deleted = s.transport.sent.filter((e) => e.type === "conversation.item.delete").map((e) => e.item_id);
     expect(deleted).toEqual(expect.arrayContaining(["sel_1_1_0", "offer_1"]));
-    expect(s.transport.sent.filter((e) => e.type === "conversation.item.create").map((e) => e.item?.id)).toEqual(["sel_2_2_0", "offer_2"]);
+    expect(s.transport.sent.filter((e) => e.type === "conversation.item.create").map((e) => e.item?.id).filter((i) => !String(i).startsWith("stub_"))).toEqual(["sel_2_2_0", "offer_2"]);
   });
 
   it("no offer while the user is speaking: the selection rides the user's turn instead", async () => {
@@ -995,7 +1029,8 @@ describe("selection offer", () => {
     await flushPromises();
     s.transport.sent.length = 0;
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     expect(s.transport.sent).toEqual([]);
     s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
     s.transport.emit({ type: "input_audio_buffer.committed" });
@@ -1009,11 +1044,13 @@ describe("selection offer", () => {
   it("ignores selections while closed and clears the outline on teardown", async () => {
     const s = setup();
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     expect(creates(s)).toHaveLength(0);
     await openIt(s);
     s.select(snap("b"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     s.calls.length = 0;
     await s.c.close("test");
     expect(s.calls).toContain("outline.clear");
@@ -1056,7 +1093,8 @@ describe("codex review regressions", () => {
     await flushPromises();
     s.bumpRevision(); // desktop changes, then the user selects: the selection images are from revision 1
     s.select(snap("m"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
     s.transport.emit({ type: "input_audio_buffer.committed" });
     await flushPromises();
@@ -1076,6 +1114,7 @@ describe("codex review regressions", () => {
     const first = creates(s)[0] as { event_id?: string };
     s.select(snap("a")); // the offer waits behind the not-yet-created response
     await flushPromises(40);
+    await settle(s, 1200);
     expect(creates(s)).toHaveLength(1);
     s.transport.emit({ type: "error", error: { event_id: first.event_id, message: "bad create" } });
     await flushPromises();
@@ -1087,7 +1126,8 @@ describe("codex review regressions", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -1105,7 +1145,8 @@ describe("codex review regressions", () => {
     const s = setup();
     await openIt(s);
     s.select(snap("a"));
-    await flushPromises();
+    await flushPromises(40);
+    await settle(s, 1200);
     created(s, "o1");
     delta(s, "o1", "Want me to check it?");
     await done(s, "o1");
@@ -1133,5 +1174,695 @@ describe("codex review regressions", () => {
     created(s, "r1");
     await done(s, "r1", [{ type: "function_call", name: "highlight", call_id: "c7", arguments: JSON.stringify({ target: { kind: "rect", displayId: "1", rect: { x: 0, y: 0, width: 5, height: 5 } } }) }]);
     expect(s.tools.map((t) => t.name)).toEqual(["highlight"]);
+  });
+});
+
+describe("offer wording, delay and cleanup", () => {
+  const offerText = (s: S) => JSON.stringify(s.transport.sent.find((e) => e.item?.id?.startsWith("offer_")));
+  it("the [offer] text asks a fitting open question, keeps safety conditional and forbids reusing earlier wording", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises(40);
+    await settle(s, 1200);
+    const t = offerText(s);
+    expect(t).toContain("fitting open question");
+    expect(t).toContain("want to know what it does?");
+    expect(t).toContain("want me to explain it?");
+    expect(t).toMatch(/safety check ONLY if it looks like an email, message, link, pop-up, download, login or payment/);
+    expect(t).toContain("never reuse the wording of an earlier offer");
+    expect(t).not.toContain("offer to check whether it is safe or to explain it");
+  });
+
+  it("waits ~1.2 s before offering", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises(40);
+    await settle(s, 1100);
+    expect(s.transport.count("response.create")).toBe(0);
+    await settle(s, 200);
+    expect(s.transport.count("response.create")).toBe(1);
+  });
+
+  it("skips the offer when the user starts speaking in the window; their turn carries the selection", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises(40);
+    await settle(s, 600);
+    await speak(s);
+    await settle(s, 2000);
+    expect(s.transport.sent.some((e) => e.item?.id?.startsWith("offer_"))).toBe(false);
+    expect(s.transport.sent.some((e) => e.item?.id?.startsWith("sel_"))).toBe(true); // late-attach carried it
+    expect(s.transport.sent.filter((e) => e.type === "response.create").every((e) => !e.response)).toBe(true); // a normal answer, not an offer
+  });
+
+  it("deletes the assistant's offer message after the offer turn and leaves a stub", async () => {
+    const s = setup();
+    await openIt(s);
+    s.select(snap("a"));
+    await flushPromises(40);
+    await settle(s, 1200);
+    created(s, "o1");
+    delta(s, "o1", "That looks like a button, want to know what it does?");
+    s.transport.sent.length = 0;
+    await done(s, "o1", [{ type: "message", id: "msg_offer1", role: "assistant" }]);
+    const stub = s.transport.sent.find((e) => e.type === "conversation.item.create");
+    expect(stub).toMatchObject({ previous_item_id: "msg_offer1" });
+    expect(JSON.stringify(stub)).toContain("[earlier offer about");
+    expect(s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === "msg_offer1")).toBe(true);
+  });
+});
+
+describe("conversation memory", () => {
+  const transcript = (s: S, id: string, text: string) => s.transport.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript: text });
+  const memoryItem = (s: S) => s.transport.sent.find((e) => e.item?.id === "memory_1");
+
+  it("records user transcripts and answers, and injects ONE [memory] item on the next open", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    transcript(s, "u1", "what is the green button");
+    created(s, "r1");
+    delta(s, "r1", "It sends your email. ");
+    await done(s, "r1");
+    await settle(s, 3000); // heard in full before the close
+    await s.c.close("test");
+    s.transport.sent.length = 0;
+    await openIt(s);
+    expect(s.transport.sent.filter((e) => e.item?.id === "memory_1")).toHaveLength(1);
+    const text = JSON.stringify(memoryItem(s));
+    expect(text).toContain("[memory]");
+    expect(text).toContain("User: what is the green button");
+    expect(text).toContain("You: It sends your email.");
+  });
+
+  it("includes only what was heard when interrupted", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "First part of the answer is here. ");
+    await flushPromises();
+    delta(s, "r1", "Second part comes much later on. ");
+    await settle(s, 1000);
+    await s.c.interrupt();
+    await s.c.close("test");
+    s.transport.sent.length = 0;
+    await openIt(s);
+    const text = JSON.stringify(memoryItem(s));
+    expect(text).toContain("First part of the answer is here.");
+    expect(text).not.toContain("Second part");
+    expect(text).toContain("interrupted");
+  });
+
+  it("is capped by size and age, and clearMemory empties it", async () => {
+    const s = setup({ config: { memoryMaxChars: 200 } });
+    await openIt(s);
+    for (let i = 0; i < 20; i++) transcript(s, `u${i}`, `question number ${i} about the screen`);
+    await s.c.close("test");
+    s.transport.sent.length = 0;
+    await openIt(s);
+    const text = JSON.stringify(memoryItem(s));
+    expect(text).toContain("question number 19");
+    expect(text).not.toContain("question number 0 ");
+    expect(text.length).toBeLessThan(700);
+    await s.c.close("test");
+    await settle(s, 21 * 60_000);
+    s.transport.sent.length = 0;
+    await openIt(s);
+    expect(memoryItem(s)).toBeUndefined(); // too old
+    transcript(s, "x", "fresh thing");
+    s.c.clearMemory();
+    await s.c.close("test");
+    s.transport.sent.length = 0;
+    await openIt(s);
+    expect(memoryItem(s)).toBeUndefined();
+  });
+});
+
+describe("interrupt ordering", () => {
+  it("un-mutes the mic before anam.interrupt is called and does not wait for it", async () => {
+    const order: string[] = [];
+    const s: S = setup({
+      anam: {
+        startSession: async () => undefined,
+        endSession: async () => undefined,
+        talk: async () => undefined,
+        interrupt: () => (order.push(`anam.interrupt mic=${JSON.stringify(s.transport.mic)}`), new Promise<void>(() => {})), // never resolves
+        state: async () => ({ connected: true, speaking: false, expanded: true }),
+      },
+    });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "A fairly long sentence that is now being spoken aloud. ");
+    await flushPromises();
+    await s.c.interrupt(); // resolves even though anam.interrupt never does
+    expect(order).toEqual(["anam.interrupt mic=[true,false,true]"]);
+    expect(s.c.status.get()).toBe("listening");
+  });
+});
+
+describe("open-hand interrupt hooks", () => {
+  it("reports answer speech (not the offer) and wake_requested while answering interrupts", async () => {
+    const hook: boolean[] = [];
+    const s = setup({ onAnswerSpeaking: (on) => void hook.push(on) });
+    await openIt(s);
+    // the short offer is spoken: hand stays active
+    s.select(snap("a"));
+    await flushPromises(40);
+    await settle(s, 1200);
+    created(s, "o1");
+    delta(s, "o1", "That looks like a button, want to know what it does? ");
+    await done(s, "o1");
+    expect(hook).toEqual([]);
+    await s.c.wake(); // not answering: nothing
+    expect(s.calls).not.toContain("anam.interrupt");
+    await settle(s, 5000); // offer finished
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "The button sends your message to everyone. ");
+    await flushPromises();
+    expect(hook).toEqual([true]);
+    await s.c.wake(); // open palm
+    expect(s.calls).toContain("anam.interrupt");
+    expect(hook).toEqual([true, false]);
+  });
+
+  it("reactivates when speaking ends normally", async () => {
+    const hook: boolean[] = [];
+    const s = setup({ onAnswerSpeaking: (on) => void hook.push(on) });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "The button sends your message to everyone. ");
+    await done(s, "r1");
+    await settle(s, 10_000);
+    expect(hook).toEqual([true, false]);
+  });
+});
+
+describe("echo-guarded barge-in", () => {
+  const ANSWER = "The blue button is at the top right of your window. ";
+  async function speaking(mode: "guarded" | "open" = "guarded") {
+    const s = setup({ bargeIn: mode });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", ANSWER);
+    await flushPromises();
+    return s;
+  }
+  const cand = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.speech_started", item_id: id });
+  const commit = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.committed", item_id: id });
+  const tdelta = (s: S, id: string, d: string) => s.transport.emit({ type: "conversation.item.input_audio_transcription.delta", item_id: id, delta: d });
+  const tdone = async (s: S, id: string, t: string) => {
+    s.transport.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript: t });
+    await flushPromises(30);
+  };
+
+  it("keeps the mic open while Anam speaks", async () => {
+    const s = await speaking();
+    expect(s.c.status.get()).toBe("speaking");
+    expect(s.transport.mic).toEqual([]);
+  });
+
+  it("an echo of Anam's own words is deleted and ignored (no turn, no cancel)", async () => {
+    const s = await speaking();
+    s.calls.length = 0;
+    s.transport.sent.length = 0;
+    cand(s, "echo1");
+    await flushPromises();
+    commit(s, "echo1");
+    await tdone(s, "echo1", "the blue button is at the top right");
+    expect(s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === "echo1")).toBe(true);
+    expect(s.transport.count("response.cancel")).toBe(0);
+    expect(s.calls).not.toContain("anam.interrupt");
+    expect(s.calls.some((c) => c.startsWith("turnStart"))).toBe(false);
+    expect(s.c.status.get()).toBe("speaking");
+    expect(s.transport.count("response.create")).toBe(0);
+  });
+
+  it("an echo whose transcript arrives before the commit is deleted once committed", async () => {
+    const s = await speaking();
+    s.transport.sent.length = 0;
+    cand(s, "echo2");
+    await tdone(s, "echo2", "blue button top right of your window");
+    expect(s.transport.count("conversation.item.delete")).toBe(0);
+    commit(s, "echo2");
+    expect(s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === "echo2")).toBe(true);
+  });
+
+  it("a real interjection cancels the answer, interrupts Anam and becomes the new turn", async () => {
+    const s = await speaking();
+    s.calls.length = 0;
+    s.transport.sent.length = 0;
+    cand(s, "u9");
+    await flushPromises();
+    commit(s, "u9");
+    await tdone(s, "u9", "can you show me the other one instead");
+    expect(s.transport.count("response.cancel")).toBe(1);
+    expect(s.calls).toContain("anam.interrupt");
+    expect(s.calls).toContain("turnStart.turn-2");
+    await done(s, "r1", [], "cancelled");
+    expect(s.transport.count("response.create")).toBe(1); // answers the adopted turn
+  });
+
+  it("a real interjection is recognised from the streaming transcript before the user finishes", async () => {
+    const s = await speaking();
+    s.calls.length = 0;
+    cand(s, "u8");
+    tdelta(s, "u8", "no actually I ");
+    expect(s.calls).not.toContain("anam.interrupt"); // too few words to tell yet
+    tdelta(s, "u8", "want the red one");
+    expect(s.calls).toContain("anam.interrupt");
+    expect(s.calls).toContain("turnStart.turn-2");
+    expect(s.transport.count("response.create")).toBe(1); // not yet committed: waits (the cancelled answer must finish first)
+  });
+
+  it("stop words interrupt immediately, but not when Anam just said them", async () => {
+    const s = await speaking();
+    s.calls.length = 0;
+    cand(s, "w1");
+    tdelta(s, "w1", "stop");
+    expect(s.calls).toContain("anam.interrupt");
+
+    const t = setup({ bargeIn: "guarded" });
+    await openIt(t);
+    await speak(t);
+    created(t, "r1");
+    delta(t, "r1", "You can stop the video from the pause button. ");
+    await flushPromises();
+    t.calls.length = 0;
+    cand(t, "w2");
+    tdelta(t, "w2", "stop");
+    expect(t.calls).not.toContain("anam.interrupt");
+    await tdone(t, "w2", "stop");
+    expect(t.calls).not.toContain("anam.interrupt"); // echo
+  });
+
+  it("open mode interrupts on speech_started at once", async () => {
+    const s = await speaking("open");
+    s.calls.length = 0;
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    expect(s.calls).toContain("anam.interrupt");
+    expect(s.transport.count("response.cancel")).toBe(1);
+    expect(s.calls).toContain("turnStart.turn-2");
+  });
+
+  it("off mode is half-duplex: mutes the mic and ignores speech while Anam talks", async () => {
+    const s = await speaking("guarded").then(async () => {
+      const o = setup({ bargeIn: "off" });
+      await openIt(o);
+      await speak(o);
+      created(o, "r1");
+      delta(o, "r1", ANSWER);
+      await flushPromises();
+      return o;
+    });
+    expect(s.transport.mic).toEqual([true, false]);
+    s.calls.length = 0;
+    cand(s, "z");
+    commit(s, "z");
+    await flushPromises();
+    expect(s.calls).not.toContain("anam.interrupt");
+    expect(s.calls.some((c) => c.startsWith("turnStart"))).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------- conversation fixes
+describe("conversation fixes", () => {
+  const tdone = async (s: S, id: string, t: string) => {
+    s.transport.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript: t });
+    await flushPromises(30);
+  };
+  const cand = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.speech_started", item_id: id });
+  const commit = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.committed", item_id: id });
+  const KEY = "The blue button is at the top right of your window, next to the search box. ";
+  const deleted = (s: S, id: string) => s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === id);
+
+  it("re-enables the mic on close and on open so a half-duplex mute never survives a session", async () => {
+    const s = setup();
+    await openIt(s);
+    expect(s.transport.mic[0]).toBe(true);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "Hello there my good friend. ");
+    await flushPromises();
+    expect(s.transport.mic.at(-1)).toBe(false);
+    await s.c.close("test");
+    expect(s.transport.mic.at(-1)).toBe(true);
+  });
+
+  it("echo guard still covers sentences of an answer spoken for longer than 15 s", async () => {
+    const s = setup({ bargeIn: "guarded" });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", `${Array(60).fill("word").join(" ")}. `);
+    delta(s, "r1", KEY);
+    await flushPromises();
+    await settle(s, 22_000);
+    s.calls.length = 0;
+    cand(s, "e1");
+    commit(s, "e1");
+    await tdone(s, "e1", "the blue button is at the top right of your window");
+    expect(deleted(s, "e1")).toBe(true);
+    expect(s.calls).not.toContain("anam.interrupt");
+    expect(s.calls.some((c) => c.startsWith("turnStart"))).toBe(false);
+  });
+
+  it("an interrupt during playback (after response.done) reports and remembers what was said so far", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "First part of the answer is here. ");
+    await flushPromises();
+    delta(s, "r1", "Second part comes much later on and is long. ");
+    await done(s, "r1");
+    await settle(s, 1000);
+    s.transport.sent.length = 0;
+    await s.c.interrupt();
+    const note = s.transport.sent.find((e) => e.item?.id?.startsWith("int_"));
+    expect(JSON.stringify(note)).toContain("after: 'First part of the answer is here.");
+    expect(JSON.stringify(note)).not.toContain("before you said anything");
+    await s.c.close("test");
+    s.transport.sent.length = 0;
+    await openIt(s);
+    const mem = JSON.stringify(s.transport.sent.find((e) => e.item?.id === "memory_1"));
+    expect(mem).toContain("First part of the answer is here.");
+    expect(mem).not.toContain("Second part");
+    expect(mem).toContain("interrupted");
+  });
+
+  describe("selection while opening", () => {
+    const slowConnect = (s: S) => {
+      let release!: () => void;
+      let fail!: (e: Error) => void;
+      s.transport.connect = () => new Promise<void>((res, rej) => ((release = () => ((s.transport.connected = true), res())), (fail = rej)));
+      return { release: () => release(), fail: (e: Error) => fail(e) };
+    };
+    it("is queued and offered once the assistant is open", async () => {
+      const s = setup();
+      const c = slowConnect(s);
+      void s.c.open("test");
+      await flushPromises();
+      s.select(snap("sel1"));
+      await flushPromises();
+      expect(s.transport.count("response.create")).toBe(0);
+      c.release();
+      await flushPromises();
+      await settle(s, 1300);
+      expect(s.transport.count("response.create")).toBe(1);
+      expect(s.transport.sent.some((e) => e.item?.id === "offer_1")).toBe(true);
+    });
+    it("clears the outline (mouse freeze) when the open fails", async () => {
+      const s = setup();
+      const c = slowConnect(s);
+      void s.c.open("test");
+      await flushPromises();
+      s.select(snap("sel1"));
+      await flushPromises();
+      s.calls.length = 0;
+      c.fail(new Error("boom"));
+      await flushPromises();
+      expect(s.calls).toContain("outline.clear");
+      expect(s.transport.count("response.create")).toBe(0);
+    });
+  });
+
+  describe("barge-in candidates (guarded)", () => {
+    const speaking = async () => {
+      const s = setup({ bargeIn: "guarded" });
+      await openIt(s);
+      await speak(s);
+      created(s, "r1");
+      delta(s, "r1", KEY);
+      await flushPromises();
+      return s;
+    };
+    it("waits for a late transcript instead of dropping real speech after 5 s", async () => {
+      const s = await speaking();
+      cand(s, "c1");
+      commit(s, "c1");
+      await settle(s, 6000);
+      expect(deleted(s, "c1")).toBe(false);
+      s.calls.length = 0;
+      await tdone(s, "c1", "please show me the other window instead");
+      expect(s.calls).toContain("anam.interrupt");
+      expect(s.calls.some((c) => c.startsWith("turnStart"))).toBe(true);
+    });
+    it("drops a candidate whose transcription fails, or never arrives within the cap", async () => {
+      const s = await speaking();
+      cand(s, "c2");
+      commit(s, "c2");
+      s.transport.emit({ type: "conversation.item.input_audio_transcription.failed", item_id: "c2" });
+      expect(deleted(s, "c2")).toBe(true);
+      cand(s, "c3");
+      commit(s, "c3");
+      await settle(s, 14_000);
+      expect(deleted(s, "c3")).toBe(false);
+      await settle(s, 1500);
+      expect(deleted(s, "c3")).toBe(true);
+    });
+    it("a short answer that repeats Anam's words after her speech ended is the user, not an echo", async () => {
+      const s = await speaking();
+      await settle(s, 8000); // the estimate (~5 s) is long over
+      s.calls.length = 0;
+      cand(s, "p1");
+      commit(s, "p1");
+      await tdone(s, "p1", "the blue button");
+      expect(s.calls).toContain("anam.interrupt");
+      expect(deleted(s, "p1")).toBe(false);
+    });
+    it("the same short repeat while Anam is still speaking stays an echo", async () => {
+      const s = await speaking();
+      await settle(s, 1500);
+      cand(s, "p2");
+      commit(s, "p2");
+      await tdone(s, "p2", "the blue button");
+      expect(deleted(s, "p2")).toBe(true);
+    });
+  });
+
+  it("an in-flight /talk that lands after /interrupt is interrupted again, and queued chunks are dropped", async () => {
+    let release!: () => void;
+    const talked: string[] = [];
+    let interrupts = 0;
+    const s = setup({
+      anam: {
+        startSession: async () => {},
+        endSession: async () => {},
+        talk: (t) => (talked.push(t.text), new Promise<void>((r) => (release = r))),
+        interrupt: async () => void interrupts++,
+        state: async () => ({ connected: true, speaking: false, expanded: true }),
+      },
+    });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "First sentence is right here. ");
+    delta(s, "r1", "Second sentence is here and it is long enough to be its own chunk. ");
+    await flushPromises();
+    expect(talked).toHaveLength(1);
+    await s.c.interrupt();
+    expect(interrupts).toBe(1);
+    release();
+    await flushPromises();
+    expect(interrupts).toBe(2);
+    expect(talked).toHaveLength(1);
+  });
+
+  it("an explicit interrupt while the user is mid-utterance does not block answering that turn", async () => {
+    const s = setup();
+    await openIt(s);
+    s.transport.emit({ type: "input_audio_buffer.speech_started" });
+    await flushPromises();
+    await s.c.interrupt();
+    s.transport.emit({ type: "input_audio_buffer.speech_stopped" });
+    s.transport.emit({ type: "input_audio_buffer.committed" });
+    await flushPromises();
+    expect(s.transport.count("response.create")).toBe(1);
+  });
+
+  describe("hotkey while opening", () => {
+    const slowConnect = (s: S) => {
+      let release!: () => void;
+      s.transport.connect = () => new Promise<void>((res) => (release = () => ((s.transport.connected = true), res())));
+      return () => release();
+    };
+    it("a single press is ignored; the open completes", async () => {
+      const s = setup();
+      const release = slowConnect(s);
+      void s.c.hotkey();
+      await flushPromises();
+      await settle(s, 1000);
+      await s.c.hotkey();
+      expect(s.calls).not.toContain("anam.end");
+      release();
+      await flushPromises();
+      expect(s.c.isOpen()).toBe(true);
+      expect(s.c.status.get()).toBe("listening");
+    });
+    it("a double press cancels the open", async () => {
+      const s = setup();
+      slowConnect(s);
+      void s.c.hotkey();
+      await flushPromises();
+      await settle(s, 200);
+      await s.c.hotkey();
+      await flushPromises();
+      expect(s.calls).toContain("anam.end");
+      expect(s.c.isOpen()).toBe(false);
+    });
+  });
+
+  it("keeps at most 6 text stubs in the conversation", async () => {
+    const s = setup();
+    await openIt(s);
+    for (let i = 0; i < 10; i++) {
+      await speak(s);
+      created(s, `r${i}`);
+      await done(s, `r${i}`);
+    }
+    const stubs = s.transport.sent.filter((e) => e.type === "conversation.item.create" && e.item?.id?.startsWith("stub_")).length;
+    const dropped = s.transport.sent.filter((e) => e.type === "conversation.item.delete" && e.item_id?.startsWith("stub_")).map((e) => e.item_id);
+    expect(stubs).toBeGreaterThan(6);
+    expect(dropped).toHaveLength(stubs - 6);
+    expect(dropped[0]).toBe("stub_1");
+  });
+});
+
+describe("drawing budget and overlay awareness", () => {
+  const call = (name: string, id: string, args = '{"target":{"kind":"element","elementId":"ax-1"}}') => ({ type: "function_call", name, call_id: id, arguments: args });
+  const outputs = (s: S) => s.transport.sent.filter((e) => e.item?.call_id).map((e) => ({ id: e.item?.call_id, out: JSON.parse(e.item?.output ?? "{}") as Record<string, unknown> }));
+
+  it("executes at most 2 drawing calls per answer; extras get a skip message; clear and move_avatar do not count", async () => {
+    const s = setup();
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    await done(s, "r1", [call("clear", "c0", '{"overlayId":"all"}'), call("move_avatar", "c00", '{"position":"left"}'), call("highlight", "c1"), call("point_at", "c2"), call("show_explainer", "c3", "{}"), call("label_parts", "c4", "{}")]);
+    expect(s.tools.map((t) => t.name)).toEqual(["clear", "move_avatar", "highlight", "point_at"]);
+    const outs = outputs(s);
+    expect(outs.find((o) => o.id === "c3")?.out).toMatchObject({ ok: false, visible: false, reason: "budget" });
+    expect(String(outs.find((o) => o.id === "c4")?.out.error)).toBe("skipped: drawing budget reached — explain in words or clear first");
+    expect(s.transport.count("response.create")).toBe(2); // the turn's answer + the follow-up after the tool loop
+  });
+
+  it("the budget renews for the next user turn and is configurable", async () => {
+    const s = setup({ config: { maxDrawingsPerAnswer: 1 } });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    await done(s, "r1", [call("highlight", "a1"), call("highlight", "a2")]);
+    expect(s.tools.map((t) => t.name)).toEqual(["highlight"]);
+    created(s, "r2");
+    await done(s, "r2");
+    await speak(s);
+    created(s, "r3");
+    await done(s, "r3", [call("highlight", "b1")]);
+    expect(s.tools.map((t) => t.name)).toEqual(["highlight", "highlight"]);
+  });
+
+  it("a failed draw (visible:false) does not use up the budget", async () => {
+    const s = setup({
+      overlay: { handleTool: async (name) => ({ ok: true, visible: name !== "highlight" }) as never, onTurnStart: () => {} },
+    });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    await done(s, "r1", [call("highlight", "f1"), call("highlight", "f2"), call("highlight", "f3"), call("point_at", "g1")]);
+    expect(outputs(s).map((o) => o.out.reason)).not.toContain("budget");
+  });
+
+  it("every drawing tool output carries the current [overlays] summary", async () => {
+    const s = setup({ overlayState: () => "[overlays] 1 visible: ring at 1,2,3,4" });
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    await done(s, "r1", [call("highlight", "c1"), call("clear", "c2", '{"overlayId":"all"}'), call("move_avatar", "c3", '{"position":"left"}'), call("point_at", "c4", "{bad")]);
+    const outs = outputs(s);
+    expect(outs.find((o) => o.id === "c1")?.out.overlays).toBe("[overlays] 1 visible: ring at 1,2,3,4");
+    expect(outs.find((o) => o.id === "c2")?.out.overlays).toBeDefined();
+    expect(outs.find((o) => o.id === "c3")?.out.overlays).toBeUndefined();
+  });
+
+  it("hands the selection and pointer close-up rects to the overlay for cards, and clears them on close", async () => {
+    const closeup = { x: 100, y: 100, width: 480, height: 320 };
+    const rects: unknown[][] = [];
+    const s = setup({ buildContext: async () => ctx({ pointerCloseupRect: closeup }), setTurnAvoid: (r) => void rects.push(r) });
+    await openIt(s);
+    s.setSelection(snap("sel9"));
+    await speak(s);
+    expect(rects.at(-1)).toEqual([{ x: 0, y: 0, width: 10, height: 10 }, closeup]);
+    await s.c.close("test");
+    expect(rects.at(-1)).toEqual([]);
+  });
+});
+
+describe("codex round 2", () => {
+  const cand = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.speech_started", item_id: id });
+  const commit = (s: S, id: string) => s.transport.emit({ type: "input_audio_buffer.committed", item_id: id });
+  const deleted = (s: S, id: string) => s.transport.sent.some((e) => e.type === "conversation.item.delete" && e.item_id === id);
+
+  it("a short answer whose playback is delayed by a late Anam connection is still guarded against its own echo", async () => {
+    const s = setup({ bargeIn: "guarded" });
+    await openIt(s);
+    s.setState({ connected: false, speaking: false, expanded: false, starting: true });
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "The blue button is at the top right of your window. ");
+    await done(s, "r1");
+    await settle(s, 21_000); // still queued in Anam
+    cand(s, "e1");
+    commit(s, "e1");
+    s.transport.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "e1", transcript: "the blue button is at the top right of your window" });
+    await flushPromises();
+    expect(deleted(s, "e1")).toBe(true);
+    expect(s.calls.some((c) => c.startsWith("turnStart.turn-2"))).toBe(false);
+  });
+
+  it("start over while open resets the live Realtime conversation, not just the local memory", async () => {
+    const s = setup();
+    let connects = 0;
+    const orig = s.transport.connect.bind(s.transport);
+    s.transport.connect = async () => (connects++, orig());
+    await openIt(s);
+    await speak(s);
+    created(s, "r1");
+    delta(s, "r1", "It sends your email. ");
+    await done(s, "r1");
+    expect(connects).toBe(1);
+    s.c.clearMemory();
+    await flushPromises();
+    expect(connects).toBe(2);
+    expect(s.transport.connected).toBe(true);
+    expect(s.c.isOpen()).toBe(true);
+    expect(s.c.status.get()).toBe("listening");
+    expect(s.calls).toContain("anam.interrupt");
+    expect(s.calls).not.toContain("anam.end"); // the avatar call stays
+    s.transport.sent.length = 0;
+    await s.c.close("t");
+    await openIt(s);
+    expect(s.transport.sent.some((e) => e.item?.id === "memory_1")).toBe(false);
+    // and it still works: a new turn gets answered
+    await speak(s);
+    expect(s.transport.count("response.create")).toBe(1);
+  });
+
+  it("start over when the reconnect fails closes with an error", async () => {
+    const s = setup();
+    await openIt(s);
+    s.transport.connectError = new Error("net");
+    s.c.clearMemory();
+    await flushPromises();
+    expect(s.c.isOpen()).toBe(false);
+    expect(s.c.status.get()).toBe("error");
   });
 });

@@ -25,6 +25,13 @@ export function parseGestureConfig(env: NodeJS.ProcessEnv): ParsedGestureConfig 
   const applied: string[] = [];
   const warnings: string[] = [];
 
+  // Holding one finger still only points. The dwell left-click is opt-in (POINTY_GESTURES_CLICK=1).
+  if (env.POINTY_GESTURES_CLICK === "1") applied.push("click=on");
+  else {
+    config.clickEnabled = false;
+    applied.push("click=off");
+  }
+
   const zone = env.POINTY_GESTURES_ZONE;
   if (zone) {
     const n = zone.split(",").map((v) => Number(v.trim()));
@@ -48,4 +55,12 @@ export function parseGestureConfig(env: NodeJS.ProcessEnv): ParsedGestureConfig 
     }
   }
   return { config, applied, warnings };
+}
+
+/** Options for attachSystemMouse: dwell click only when POINTY_GESTURES_CLICK=1 (belt and braces with clickEnabled). */
+export function systemMouseOptions(
+  env: NodeJS.ProcessEnv,
+  log: (msg: string) => void,
+): { log: (msg: string) => void; click: boolean } {
+  return { log, click: env.POINTY_GESTURES_CLICK === "1" };
 }

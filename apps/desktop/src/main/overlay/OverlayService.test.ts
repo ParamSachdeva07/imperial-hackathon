@@ -1287,3 +1287,59 @@ describe("OverlayService avatar (move_avatar and auto-dodge)", () => {
     expect(await svc.handleTool("move_avatar", { position: "top_left" })).toMatchObject({ reason: "avatar_unavailable" });
   });
 });
+
+describe("OverlayService turn-scoped card avoidance and visible items", () => {
+  let clock: FakeClock;
+  let bounds: FakeBoundsProvider;
+  let sink: FakeSink;
+  const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const make = (extra: Rect[]) =>
+    new OverlayService({
+      boundsProvider: bounds,
+      captureProvider: { captureRegion: async () => Buffer.from([1]) },
+      screen: new FakeScreen(),
+      sink,
+      clock,
+      cardAvoidRects: { getAvoidRects: () => extra },
+    });
+  const card = (svc: OverlayService) =>
+    svc.handleTool("show_explainer", { anchor: el("send"), title: "Likely a scam", spec: { kind: "verdict", tone: "warning", reasons: ["Urgent wording"] }, expires: "manual" });
+
+  beforeEach(() => {
+    clock = new FakeClock();
+    bounds = new FakeBoundsProvider();
+    sink = new FakeSink();
+    bounds.set("send", { rect: rect(600, 400), displayId: "1" });
+  });
+
+  it("a card keeps clear of the extra avoid rects (the user's selection), and so does a label_parts title", async () => {
+    const base = make([]);
+    const r0 = await card(base);
+    const c0 = sink.byId(r0.overlayId!);
+    if (c0?.kind !== "explainer") throw new Error();
+    base.dispose();
+    const sel = { ...c0.card }; // exactly where the card would go without the avoid rect
+    const svc = make([sel]);
+    const r = await card(svc);
+    const c = sink.byId(r.overlayId!);
+    if (c?.kind !== "explainer") throw new Error();
+    expect(overlaps(c.card, sel)).toBe(false);
+
+    bounds.set("a", { rect: rect(300, 200), displayId: "1" });
+    bounds.set("b", { rect: rect(300, 300), displayId: "1" });
+    const p0 = await svc.handleTool("label_parts", { title: "Parts", items: [{ target: el("a"), label: "Sender" }, { target: el("b"), label: "Link" }], expires: "manual" });
+    const part = sink.byId(p0.overlayId!);
+    if (part?.kind !== "parts" || !part.title) throw new Error();
+    expect(overlaps(part.title.rect, sel)).toBe(false);
+  });
+
+  it("exposes only visible items through debug.items()", async () => {
+    const svc = make([]);
+    expect(svc.createDebug().items?.()).toEqual([]);
+    const r = await svc.handleTool("highlight", { target: el("send"), label: "Here", expires: "manual" });
+    const items = svc.createDebug().items?.() ?? [];
+    expect(items.map((i) => i.id)).toEqual([r.overlayId]);
+    await svc.handleTool("clear", { overlayId: "all" });
+    expect(svc.createDebug().items?.().filter((i) => i.state === "visible")).toEqual([]);
+  });
+});

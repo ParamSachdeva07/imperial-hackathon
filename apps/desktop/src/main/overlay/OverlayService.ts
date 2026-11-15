@@ -63,6 +63,8 @@ export interface OverlayServiceDeps {
   screen: ScreenSource;
   sink: SceneSink;
   avoidRects?: AvoidRectsProvider;
+  /** Extra rects that only cards (show_explainer) and group title chips (label_parts) keep clear, read at each layout (e.g. the user's selection). */
+  cardAvoidRects?: AvoidRectsProvider;
   /** The voice avatar window, when there is one: enables `move_avatar` and auto-dodge. */
   avatar?: AvatarController;
   imageSource?: ImageSource;
@@ -269,6 +271,7 @@ export class OverlayService implements OverlayControl {
           bounds: this.primaryBounds(l) ?? null,
           steps: l.toolName === "show_steps" ? l.steps : null,
         })),
+      items: () => [...this.live.values()].filter((l) => !l.ended && l.item && l.item.state === "visible" && this.manager.get(l.id)?.state !== "pending").map((l) => l.item as RenderItem),
       anatomyImage: (id) => {
         const item = this.live.get(id)?.item;
         if (item?.kind !== "explainer" || item.body.kind !== "anatomy" || item.body.image.status !== "ready") return null;
@@ -750,6 +753,7 @@ export class OverlayService implements OverlayControl {
     const ctx: LayoutContext = {
       state: l.ended ? "exiting" : "visible",
       avoid: () => (avoid ??= this.avoidFor(l.id)),
+      extraAvoid: () => this.deps.cardAvoidRects?.getAvoidRects() ?? [],
       displayOf: (r) => this.displayOf(r),
       otherDisplayBounds: (d) => this.displays().filter((o) => o.id !== d.id).map((o) => o.bounds),
       placeLabel: (key, text, tone, around, display, rects, opts) => this.placeLabel(l, key, text, tone, around, display, rects, opts),

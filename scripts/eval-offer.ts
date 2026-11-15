@@ -18,13 +18,12 @@ import { devCall, readDevConnection } from "@pointy/shared/node/devServerFile";
 import { loadRepoEnv } from "@pointy/shared/node/env";
 import { snapshotFromFiles } from "../tools/pointy-draw/src/selection";
 import { selectionItems } from "../apps/desktop/src/renderer/voice/realtimeEvents";
+import { OFFER_TEXT } from "../apps/desktop/src/main/assistant/AssistantController";
 import { buildAssistantInstructions } from "../apps/desktop/src/main/assistant/instructions";
 import { mintAssistantSecret } from "../apps/desktop/src/main/assistant/secret";
 
 const root = resolve(fileURLToPath(import.meta.url), "../..");
 loadRepoEnv(root);
-/** Same wording as the [offer] item AssistantController sends. */
-const OFFER_TEXT = "[offer] The user just selected this on purpose and has not said anything yet. In ONE short sentence, say what it looks like and offer to check whether it is safe or to explain it. Do not draw anything and do not call any tool yet.";
 const dirArg = process.argv[2];
 if (!dirArg) throw new Error("usage: tsx scripts/eval-offer.ts <selection dir> [question]");
 const dir: string = dirArg;

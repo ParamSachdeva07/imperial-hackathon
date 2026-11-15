@@ -162,6 +162,19 @@ describe("screenItemEventWithin", () => {
   });
 });
 
+describe("screenItemEventWithin close-up", () => {
+  const ctx = { text: "t", imageDataUrl: `data:image/jpeg;base64,${"A".repeat(3000)}`, imageBytes: 2250, displayId: "1", elementIds: [], notes: [], pointerCloseupDataUrl: `data:image/jpeg;base64,${"B".repeat(3000)}` };
+  it("drops only the close-up when overview + close-up exceed the limit but the overview fits", () => {
+    const r = screenItemEventWithin(ctx, "s", 4500);
+    expect(r.droppedImage).toBe(false);
+    expect(JSON.stringify(r.event).match(/input_image/g)?.length).toBe(1);
+    expect(JSON.stringify(r.event)).toContain("AAAA");
+  });
+  it("falls back to text only when even the overview does not fit", () => {
+    expect(screenItemEventWithin(ctx, "s", 2000).droppedImage).toBe(true);
+  });
+});
+
 describe("active display", () => {
   const d = (id: string) => ({ id, bounds: { x: 0, y: 0, width: 100, height: 100 }, workArea: { x: 0, y: 0, width: 100, height: 100 }, scaleFactor: 2 });
   const onDisplay = (id: string, over: object = {}) => ({ ...el(1), displayId: id, ...over });
@@ -182,5 +195,61 @@ describe("active display", () => {
       }),
     );
     expect(asked).toEqual(["2"]);
+  });
+});
+
+describe("pointer context", () => {
+  const small: DisplayInfo = { id: "1", bounds: { x: 0, y: 0, width: 200, height: 120 }, workArea: { x: 0, y: 0, width: 200, height: 120 }, scaleFactor: 1 };
+  const mk = () => ({ data: Buffer.alloc(200 * 120 * 4), width: 200, height: 120 });
+  const pdeps = (over: Partial<ScreenContextDeps> = {}) => {
+    const image = mk();
+    return { image, d: deps({ getDisplays: () => [small], capture: async () => ({ image, display: small }), getPointer: () => ({ x: 100, y: 60, displayId: "1" }), ...over }) };
+  };
+  it("adds a [pointer] line with the control under it and draws a marker", async () => {
+    const { image, d } = pdeps({ elementAt: async () => ({ id: "ax-9", role: "button", label: "Send", window: "W" }) });
+    const ctx = await captureScreenContext(d);
+    expect(ctx.text).toContain("[pointer] The user's pointer is at (100,60) over button 'Send' (id ax-9)");
+    expect(image.data.some((v) => v !== 0)).toBe(true);
+  });
+  it("attaches a close-up only when the user pointed recently, within the image budget", async () => {
+    const quiet = await captureScreenContext(pdeps({ pointerActiveRecently: () => false }).d);
+    expect(quiet.pointerCloseupDataUrl ?? null).toBeNull();
+    expect(JSON.stringify(screenItemEvent(quiet, "x")).match(/input_image/g)?.length).toBe(1);
+    const active = await captureScreenContext(pdeps({ pointerActiveRecently: () => true }).d);
+    expect(active.pointerCloseupDataUrl).toMatch(/^data:image\/jpeg/);
+    expect(active.text).toContain("close-up");
+    expect(JSON.stringify(screenItemEvent(active, "x")).match(/input_image/g)?.length).toBe(2);
+    expect(Buffer.from(active.pointerCloseupDataUrl!.split(",")[1]!, "base64").length).toBeLessThanOrEqual(50_000);
+  });
+  it("is graceful without getPointer, elementAt or when they fail", async () => {
+    const none = await captureScreenContext(deps());
+    expect(none.text).not.toContain("[pointer]");
+    const noEl = await captureScreenContext(pdeps().d);
+    expect(noEl.text).toContain("over nothing identifiable");
+    const bad = await captureScreenContext(pdeps({ elementAt: async () => Promise.reject(new Error("x")), getPointer: () => ({ x: 1, y: 1, displayId: "2" }) }).d);
+    expect(bad.text).toContain("different display");
+  });
+  it("abandons a slow AX hit test instead of costing the whole context", async () => {
+    const { d } = pdeps({ elementAt: () => new Promise(() => {}), elementAtTimeoutMs: 20 });
+    const ctx = await captureScreenContext(d);
+    expect(ctx.text).toContain("over nothing identifiable");
+    expect(ctx.imageDataUrl).not.toBeNull();
+  });
+  it("reports the close-up rect so cards can keep clear of it", async () => {
+    const active = await captureScreenContext(pdeps({ pointerActiveRecently: () => true }).d);
+    expect(active.pointerCloseupRect).toEqual({ x: 0, y: 0, width: 200, height: 120 });
+    const quiet = await captureScreenContext(pdeps({ pointerActiveRecently: () => false }).d);
+    expect(quiet.pointerCloseupRect ?? null).toBeNull();
+  });
+});
+
+describe("overlay awareness", () => {
+  it("appends the [overlays] line to the screen text", async () => {
+    const ctx = await captureScreenContext(deps({ overlays: () => "[overlays] 1 visible: ring at 1,2,3,4" }));
+    expect(ctx.text.split("\n").at(-1)).toBe("[overlays] 1 visible: ring at 1,2,3,4");
+  });
+  it("survives a throwing overlay summary", async () => {
+    const ctx = await captureScreenContext(deps({ overlays: () => { throw new Error("x"); } }));
+    expect(ctx.text).not.toContain("[overlays]");
   });
 });

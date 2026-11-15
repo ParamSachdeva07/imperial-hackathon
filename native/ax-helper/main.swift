@@ -5,6 +5,7 @@
 //   {"id":2,"cmd":"resolve","ids":["ax-abc123"]}
 //   {"id":3,"cmd":"trusted"}
 //   {"id":4,"cmd":"active","on":true}   (default off: while off nothing is read or observed)
+//   {"id":5,"cmd":"elementAt","x":640,"y":400,"excludePids":[123]}  -> {"ok":true,"element":{id,role,label,window,x,y,w,h}|null}
 // Responses carry the same "id". Unsolicited events: {"event":"ready"|"changed", ...}.
 // Secure text field values are never read. Coordinates are global points (top-left origin,
 // same space as Electron DIP).
@@ -181,6 +182,97 @@ func doSnapshot(_ req: [String: Any]) -> [String: Any] {
           "visited": w.visited, "ms": Int(Date().timeIntervalSince(t0) * 1000)]
 }
 
+/// The accessibility element under a global point (what a pointing finger / mouse is over), walked up to the nearest
+/// useful ancestor. Ids use the snapshot scheme; when the element is in the cached refs the listed id is returned.
+func doElementAt(_ req: [String: Any]) -> [String: Any] {
+  let t0 = Date()
+  for p in (req["excludePids"] as? [Int]) ?? [] { excluded.insert(pid_t(p)) }
+  guard let x = (req["x"] as? NSNumber)?.floatValue, let y = (req["y"] as? NSNumber)?.floatValue else { return ["ok": false, "error": "bad_args"] }
+  let sys = AXUIElementCreateSystemWide()
+  AXUIElementSetMessagingTimeout(sys, 0.25)
+  // Query the frontmost non-excluded app first: Pointy's own click-through overlays would otherwise win the
+  // system-wide hit test. Fall back to the system-wide element when the app has nothing at the point.
+  var hit: AXUIElement?
+  var pid: pid_t = 0
+  if let tp = targetPid(excluded) {
+    let app = AXUIElementCreateApplication(tp)
+    AXUIElementSetMessagingTimeout(app, 0.25)
+    if !manualSet.contains(tp) {
+      manualSet.insert(tp)
+      if AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success { Thread.sleep(forTimeInterval: 0.15) }
+    }
+    var h: AXUIElement?
+    if AXUIElementCopyElementAtPosition(app, x, y, &h) == .success, let e = h { hit = e; pid = tp }
+  }
+  if hit == nil {
+    var h: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(sys, x, y, &h) == .success, let e = h else { return ["ok": true, "element": NSNull()] }
+    guard AXUIElementGetPid(e, &pid) == .success, !excluded.contains(pid) else { return ["ok": true, "element": NSNull()] }
+    hit = e
+    if !manualSet.contains(pid) {
+      manualSet.insert(pid)
+      if AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
+        Thread.sleep(forTimeInterval: 0.15)
+        var again: AXUIElement?
+        if AXUIElementCopyElementAtPosition(sys, x, y, &again) == .success, let a = again { hit = a }
+      }
+    }
+  }
+  let cur = hit!
+  AXUIElementSetMessagingTimeout(cur, 0.25)
+  let screens = screenRects()
+  func role(_ e: AXUIElement) -> String { nonEmpty(attr(e, "AXRole")) ?? "" }
+  func labelOf(_ e: AXUIElement, _ r: String) -> String {
+    var l = nonEmpty(attr(e, "AXTitle")) ?? nonEmpty(attr(e, "AXDescription")) ?? nonEmpty(attr(e, "AXPlaceholderValue")) ?? nonEmpty(attr(e, "AXHelp")) ?? ""
+    if l.isEmpty && valueRoles.contains(r) { l = nonEmpty(attr(e, "AXValue")) ?? "" }
+    return l
+  }
+  // Chain from the hit element up to the top (index 0 = hit).
+  var chain: [AXUIElement] = [cur]
+  while chain.count < 40, let p = attr(chain[chain.count - 1], "AXParent"), CFGetTypeID(p) == AXUIElementGetTypeID() { chain.append(p as! AXUIElement) }
+  var pick = -1
+  for (i, e) in chain.enumerated() {
+    let r = role(e)
+    if r == "AXWindow" || r == "AXApplication" { break }
+    guard useful.contains(r), let f = frame(e), f.width > 2, f.height > 2, screens.contains(where: { $0.intersects(f) }) else { continue }
+    if textLike.contains(r) && labelOf(e, r).isEmpty { continue }
+    pick = i; break
+  }
+  guard pick >= 0 else { return ["ok": true, "element": NSNull()] }
+  let el = chain[pick]
+  if isHiddenOrMinimized(el) { return ["ok": true, "element": NSNull()] }
+  let r = role(el), f = frame(el)!
+  let label = labelOf(el, r)
+  // Window / menu bar root of the chain.
+  var rootIdx = -1
+  for i in pick..<chain.count { let rr = role(chain[i]); if rr == "AXWindow" || rr == "AXMenuBar" { rootIdx = i; break } }
+  var winTitle = "window", winKeyS = "win0", origin = CGPoint.zero, prefix = "w"
+  if rootIdx >= 0 {
+    let root = chain[rootIdx]
+    if role(root) == "AXMenuBar" { winTitle = "MenuBar"; winKeyS = "MenuBar"; prefix = "mb" }
+    else {
+      winTitle = nonEmpty(attr(root, "AXTitle")) ?? "window"
+      let wins = (attr(AXUIElementCreateApplication(pid), "AXWindows") as? [AXUIElement]) ?? []
+      winKeyS = windowKey(root, fallbackIndex: wins.firstIndex(where: { CFEqual($0, root) }) ?? 0)
+      origin = frame(root)?.origin ?? .zero
+    }
+  }
+  // Same id as the walker: path = prefix + "/" + role of every ancestor from the root down to the parent.
+  var id: String? = nil
+  if let found = (curRefs.first { CFEqual($0.value, el) } ?? prevRefs.first { CFEqual($0.value, el) }) { id = found.key }
+  if id == nil {
+    var path = prefix
+    if rootIdx >= 0 { for i in stride(from: rootIdx, to: pick, by: -1) { path += "/" + role(chain[i]) } }
+    let bx = Int(((f.minX - origin.x) / 64).rounded(.down)), by = Int(((f.minY - origin.y) / 64).rounded(.down))
+    id = "ax-" + fnv("\(pid)|" + winKeyS + "|" + path + "|" + r + "|" + String(label.prefix(40)) + "|@\(bx),\(by)#0")
+  }
+  // The id is about to be shown to the model: keep the ref so a later resolve (highlight / point_at) finds it even if the snapshot omitted it.
+  if curRefs[id!] == nil && prevRefs[id!] == nil && prevRefs.count < 8000 { prevRefs[id!] = el }
+  let item: [String: Any] = ["id": id!, "role": String(r.dropFirst(2)), "label": String(label.prefix(80)), "window": winTitle,
+    "x": Int(f.minX.rounded()), "y": Int(f.minY.rounded()), "w": Int(f.width.rounded()), "h": Int(f.height.rounded())]
+  return ["ok": true, "element": item, "app": NSRunningApplication(processIdentifier: pid)?.localizedName ?? "", "ms": Int(Date().timeIntervalSince(t0) * 1000)]
+}
+
 func doResolve(_ ids: [String]) -> [String: Any] {
   let screens = screenRects()
   var res: [String: Any] = [:]
@@ -256,6 +348,8 @@ func handle(_ req: [String: Any]) {
     }
   case "resolve":
     resp = !active ? ["ok": false, "error": "inactive"] : AXIsProcessTrusted() ? doResolve((req["ids"] as? [String]) ?? []) : ["ok": false, "error": "not_trusted"]
+  case "elementAt":
+    resp = !active ? ["ok": false, "error": "inactive"] : AXIsProcessTrusted() ? doElementAt(req) : ["ok": false, "error": "not_trusted"]
   default: resp = ["ok": false, "error": "unknown_cmd"]
   }
   if let id = req["id"] { resp["id"] = id }

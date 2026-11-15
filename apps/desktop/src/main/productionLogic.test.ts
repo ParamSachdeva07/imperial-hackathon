@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createQuitGuard, createScrollInvalidator } from "./productionLogic";
+import { createQuitGuard, createScrollInvalidator, pickPointer } from "./productionLogic";
 
 describe("createScrollInvalidator", () => {
   it("ignores scrolls while the real mouse is not attached", () => {
@@ -40,5 +40,16 @@ describe("createQuitGuard", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(quit).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+});
+
+describe("pickPointer", () => {
+  const real = { x: 1, y: 2 };
+  it("uses the gesture pointer while the user pointed recently", () => {
+    expect(pickPointer({ gestureActive: true, gesture: { x: 50, y: 60 }, real })).toEqual({ x: 50, y: 60 });
+  });
+  it("falls back to the real cursor when not pointing or no gesture sample", () => {
+    expect(pickPointer({ gestureActive: false, gesture: { x: 50, y: 60 }, real })).toEqual(real);
+    expect(pickPointer({ gestureActive: true, gesture: null, real })).toEqual(real);
   });
 });

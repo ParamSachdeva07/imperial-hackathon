@@ -20,7 +20,7 @@ export class SentenceBatcher {
   private readonly max: number;
 
   constructor(opts: SentenceBatcherOptions = {}) {
-    this.firstMin = opts.firstMinChars ?? 24;
+    this.firstMin = opts.firstMinChars ?? 12;
     this.min = opts.minChars ?? 60;
     this.max = opts.maxChars ?? 400;
   }
@@ -69,6 +69,11 @@ export class SentenceBatcher {
     if (this.buf.length > this.max) {
       const sp = this.buf.lastIndexOf(" ", this.max - 1);
       return sp > 0 ? sp + 1 : this.max;
+    }
+    if (this.emitted === 0) {
+      // No sentence end yet: start speaking after the 6th word so the first sound is not delayed by a long first sentence.
+      const w = this.buf.match(/^\s*(?:\S+\s+){6}/);
+      if (w) return w[0].length;
     }
     return -1;
   }

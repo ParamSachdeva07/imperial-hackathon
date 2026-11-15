@@ -22,6 +22,10 @@ export interface TrayState {
 export interface TrayActions {
   openAssistant(): void;
   closeAssistant(): void;
+  /** Interrupt the current answer / speech (keeps the assistant open and the conversation). */
+  stopTalking?(): void;
+  /** Forget the rolling conversation memory. */
+  startOver?(): void;
   setMouseEnabled(on: boolean): void;
   setGesturesEnabled(on: boolean): void;
   checkPermissions(): void;
@@ -47,9 +51,12 @@ export function buildMenuModel(state: TrayState, actions: TrayActions): MenuItem
   const items: MenuItemModel[] = [
     { kind: "label", label: `Pointy: ${STATUS_LABEL[state.status]}` },
     { kind: "separator" },
+    // The hotkey interrupts (double-press closes), so Close shows no accelerator.
     active
-      ? { kind: "action", label: "Close assistant", accelerator: ASSISTANT_HOTKEY, run: actions.closeAssistant }
+      ? { kind: "action", label: "Close assistant", run: actions.closeAssistant }
       : { kind: "action", label: "Open assistant", accelerator: ASSISTANT_HOTKEY, run: actions.openAssistant },
+    ...(actions.stopTalking && (state.status === "speaking" || state.status === "thinking") ? [{ kind: "action", label: "Stop talking", accelerator: ASSISTANT_HOTKEY, run: actions.stopTalking } as MenuItemModel] : []),
+    ...(actions.startOver ? [{ kind: "action", label: "Start over (forget conversation)", run: actions.startOver } as MenuItemModel] : []),
     { kind: "separator" },
     { kind: "checkbox", label: "Mouse control (kill switch)", checked: state.mouseEnabled, run: actions.setMouseEnabled },
     { kind: "checkbox", label: "Gestures", checked: state.gesturesEnabled, run: actions.setGesturesEnabled },

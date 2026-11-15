@@ -156,4 +156,31 @@ describe("AxHelperClient", () => {
     expect(client.available).toBe(false);
     expect(client.running).toBe(false);
   });
+
+  it("elementAt sends coordinates and returns the element or null; helper errors reject", async () => {
+    const { client, procs } = setup();
+    client.start();
+    const p = procs[0]!;
+    const base = p.respond!;
+    p.respond = (m) => {
+      if (m.cmd !== "elementAt") return base(m);
+      if (m.x === 1) p.send({ id: m.id, ok: true, element: { id: "ax-1", role: "Button", label: "OK", window: "W", x: 1, y: 2, w: 3, h: 4 } });
+      else if (m.x === 2) p.send({ id: m.id, ok: true, element: null });
+      else p.send({ id: m.id, ok: false, error: "inactive" });
+    };
+    expect((await client.elementAt(1, 5, [7]))?.id).toBe("ax-1");
+    expect(p.written.at(-1)).toMatchObject({ cmd: "elementAt", x: 1, y: 5, excludePids: [7] });
+    expect(await client.elementAt(2, 5)).toBeNull();
+    await expect(client.elementAt(3, 5)).rejects.toMatchObject({ code: "inactive" });
+  });
+
+  it("elementAt times out", async () => {
+    const { client, procs } = setup();
+    client.start();
+    procs[0]!.respond = () => {};
+    const r = client.elementAt(1, 1);
+    const check = expect(r).rejects.toMatchObject({ code: "timeout" });
+    await vi.advanceTimersByTimeAsync(150);
+    await check;
+  });
 });

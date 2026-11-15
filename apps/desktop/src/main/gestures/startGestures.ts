@@ -14,10 +14,12 @@ import { GESTURE_ASSET_SCHEME, resolveAssetRequest } from "./assetResolver";
 import { DevSessionController } from "./DevSessionController";
 import type { CaptureHiding } from "./captureHiding";
 import { feedbackCaptureHiding, launchGestureFeedback } from "./feedbackHost";
-import { parseGestureConfig } from "./gestureConfig";
+import { parseGestureConfig, systemMouseOptions } from "./gestureConfig";
 import { gateMouseToSession, type MouseGateSession } from "./MouseGate";
 import { ACCESSIBILITY_HINT, createMouseOffHint, MOUSE_OFF_STARTUP } from "./MouseHint";
-import { SimGestureService } from "./SimGestureService";
+import { guardedEvents, guardMouseSource, SelectionGuard } from "./SelectionGuard";
+import { PointerTracker } from "./PointerTracker";
+import { SimGestureService, type FeedbackGestureService } from "./SimGestureService";
 import { MouseEventSink, mergeMouseSources, type MouseSource } from "./SimMouseSink";
 
 /** Session partition the gesture service uses (service default); the asset scheme is handled on it only. */
@@ -73,14 +75,30 @@ export interface GesturesHandle {
    * window and the session controller see both. Simulated events never reach `service` (so never the real mouse).
    */
   sim: SimGestureService;
+  /**
+   * `sim` filtered by the hand-down guard: after a selection, suppressed strokes and edge selections never
+   * appear. Use this (not `sim`) for attachSelection and the scroll invalidator so frozen scrolls don't expire drawings.
+   */
+  events: FeedbackGestureService;
   session: DevSessionController;
   /** The gesture package's own feedback window (user's hand drawing), or null if it failed to start. */
   feedback: GestureFeedback | null;
+  /**
+   * Temporarily close the gesture session while an answer is spoken (mouse detaches, the open hand can wake/interrupt)
+   * WITHOUT resetting the selection guard. Pass false to reopen (or false, false to only clear the flag
+   * before a real close, so that close resets the guard and clears the selection as usual).
+   */
+  setSessionPaused(on: boolean, reopen?: boolean): void;
+  readonly sessionPaused: boolean;
   /** Remove the selected point/region from the feedback window (e.g. when the controller ends the turn). */
   clearSelection(): void;
   /** Mouse kill switch: detaches the system mouse at once and blocks re-attach while off. No-op when mouse control was not enabled at start. */
   setMouseEnabled(on: boolean): void;
   readonly mouseEnabled: boolean;
+  /** Last real or simulated `mouse` start/move position (global DIP), or null if none yet. `at` is Date.now(). */
+  lastPointer(): { x: number; y: number; displayId: number; at: number } | null;
+  /** True if a pointer update arrived within the last `ms`. */
+  pointerActiveRecently(ms: number): boolean;
   /** Capture exclusion for all feedback windows, also the lazy simulation one (same contract as the overlay's getOverlayWindowIds/withOverlayHidden). */
   captureHiding: CaptureHiding;
   dispose(): void;
@@ -112,6 +130,23 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     const mouseSink = new MouseEventSink();
     const sim = new SimGestureService({ base: service, ...(mouseEnabled ? { mouseSink } : {}) });
     disposers.push(() => sim.dispose());
+    // Hand-down guard: freezes real mouse/click/scroll after a selection until clearSelection() (+1.5 s cooldown).
+    // Without a controller (dev) it releases after the outline TTL.
+    const guard = new SelectionGuard({
+      getDisplay: () => sim.display,
+      maxHoldMs: (opts.selectionTtlMs ?? 4000) + 500,
+    });
+    let sessionPaused = false;
+    disposers.push(sim.onAny((e) => void guard.allow(e)));
+    disposers.push(
+      sim.onSession((active) => {
+        // A temporary pause (setSessionPaused) keeps the guard: the selection is still being answered.
+        if (!active && !sessionPaused) guard.reset();
+      }),
+    );
+    const events = guardedEvents(sim, guard);
+    const pointer = new PointerTracker({ getBounds: () => sim.display.bounds });
+    disposers.push(sim.onAny((e) => pointer.observe(e)));
     const idleMs = Number(env.POINTY_GESTURES_IDLE_MS);
     const sessionCtl = new DevSessionController({
       service: sim,
@@ -122,7 +157,7 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     disposers.push(() => sessionCtl.dispose());
 
     // Feedback failure is logged and must not stop gestures. Disposed before the service (disposers run in reverse).
-    const feedback = await launchGestureFeedback(sim, env, log, { selectionTtlMs: opts.selectionTtlMs });
+    const feedback = await launchGestureFeedback(events, env, log, { selectionTtlMs: opts.selectionTtlMs });
     if (feedback) disposers.push(() => feedback.dispose());
 
     let mouseOn = mouseEnabled;
@@ -143,8 +178,8 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
       if (process.platform === "darwin" && !systemPreferences.isTrustedAccessibilityClient(true)) log(ACCESSIBILITY_HINT);
       // Real events plus, because the flag is on, simulated ones (dev CLI) via the sink. attachSystemMouse is
       // attached only while the session is open, and the sim forwards only while it is open, so both are session-gated.
-      const source = mergeMouseSources(service as MouseSource, mouseSink);
-      disposers.push(gateMouseToSession(gatedSession, () => attachSystemMouse(source as unknown as GestureService, { log }), log));
+      const source = guardMouseSource(mergeMouseSources(service as MouseSource, mouseSink), guard);
+      disposers.push(gateMouseToSession(gatedSession, () => attachSystemMouse(source as unknown as GestureService, systemMouseOptions(env, log)), log));
     } else {
       log(MOUSE_OFF_STARTUP);
       disposers.push(service.onAny(createMouseOffHint(log)));
@@ -153,15 +188,30 @@ export async function startGestures(opts: StartGesturesOptions): Promise<Gesture
     return {
       service,
       sim,
+      events,
       session: sessionCtl,
       feedback,
-      clearSelection: () => feedback?.clearSelection(),
+      setSessionPaused(on, reopen = true) {
+        if (on === sessionPaused) return;
+        sessionPaused = on;
+        if (on) sessionCtl.close();
+        else if (reopen && !sessionCtl.isActive()) sessionCtl.open();
+      },
+      get sessionPaused() {
+        return sessionPaused;
+      },
+      clearSelection: () => {
+        guard.clear();
+        feedback?.clearSelection();
+      },
       setMouseEnabled(on) {
         if (!mouseEnabled || on === mouseOn) return;
         mouseOn = on;
         log(`mouse control ${on ? "enabled" : "DISABLED (kill switch)"}`);
         for (const l of [...mouseListeners]) l(gatedSession.isActive());
       },
+      lastPointer: () => pointer.last(),
+      pointerActiveRecently: (ms) => pointer.activeRecently(ms),
       get mouseEnabled() {
         return mouseOn;
       },
