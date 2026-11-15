@@ -17,8 +17,13 @@ const dev = process.env.OVERLAY_DEV === '1';
 const speakOnly = process.env.ANAM_SPEAK_ONLY === '1';
 const speaker = speakOnly ? createSpeakController({
   send: sendSpeakCommand,
-  setExpanded: (value) => setExpanded(value, false),
+  // Collapsing waits for the page's closing animation; a call started again meanwhile keeps the window open.
+  setExpanded: (value) => {
+    if (value) return setExpanded(true, false);
+    setTimeout(() => { const s = speaker?.state(); if (!s?.connected && !s?.starting) setExpanded(false, false); }, CLOSE_MS);
+  },
 }) : null;
+const CLOSE_MS = 280;
 const rendererURL = dev ? 'http://127.0.0.1:5173/' : pathToFileURL(rendererFile).href;
 let overlay: BrowserWindow | null = null;
 let control: ControlServer | null = null;
@@ -44,6 +49,8 @@ function revealLauncher(visible: boolean) {
   overlay.webContents.send('overlay:launcher-visibility', next);
 }
 
+const CORNER = 56;
+
 function checkCornerHover() {
   if (!overlay || expanded) return;
   const bounds = overlay.getBounds();
@@ -51,8 +58,9 @@ function checkCornerHover() {
   const cursor = screen.getCursorScreenPoint();
   const right = display.bounds.x + display.bounds.width;
   // Include the menu bar: the cursor can start at the actual top-right pixel.
-  const inCorner = cursor.x >= right - 96 && cursor.x < right
-    && cursor.y >= display.bounds.y && cursor.y <= display.workArea.y + 96;
+  // Only a cursor that has travelled into the corner itself brings the button out (it slides in diagonally from there).
+  const inCorner = cursor.x >= right - CORNER && cursor.x < right
+    && cursor.y >= display.bounds.y && cursor.y <= display.workArea.y + CORNER;
   const onLauncher = cursor.x >= bounds.x - 12 && cursor.x <= bounds.x + bounds.width + 12
     && cursor.y >= bounds.y - 12 && cursor.y <= bounds.y + bounds.height + 12;
   if (inCorner || onLauncher || launcherFocused) {
@@ -61,7 +69,7 @@ function checkCornerHover() {
   } else if (launcherVisible) {
     outsideSince ??= Date.now();
     // Allow the pointer to cross the gap without the button disappearing.
-    if (Date.now() - outsideSince >= 650) revealLauncher(false);
+    if (Date.now() - outsideSince >= 400) revealLauncher(false);
   }
 }
 
@@ -157,10 +165,11 @@ ipcMain.handle('overlay:microphone', async (event) => {
 ipcMain.handle('anam:mode', (event) => ({ speakOnly: trusted(event) && speakOnly, lipSync: trusted(event) && speakOnly && process.env.ANAM_LIP_SYNC === '1' }));
 ipcMain.on('anam:speak-report', (event, report: unknown) => {
   if (!trusted(event) || !speaker || !report || typeof report !== 'object') return;
-  const { connected, speaking, session } = report as { connected?: unknown; speaking?: unknown; session?: unknown };
+  const { connected, speaking, muted, session } = report as { connected?: unknown; speaking?: unknown; muted?: unknown; session?: unknown };
   speaker.report({
     ...(typeof connected === 'boolean' ? { connected } : {}),
     ...(typeof speaking === 'boolean' ? { speaking } : {}),
+    ...(typeof muted === 'boolean' ? { muted } : {}),
     ...(typeof session === 'number' && Number.isInteger(session) ? { session } : {}),
   });
 });

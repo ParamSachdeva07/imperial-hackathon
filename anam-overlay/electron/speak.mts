@@ -10,8 +10,9 @@ export type SpeakCommand =
   // Lip-sync: voice audio played elsewhere (base64 PCM, 16-bit 24 kHz mono); null ends the utterance.
   | { type: 'audio'; pcm: string | null };
 // `session` echoes the start command of the call the report is about; reports for an older call are ignored.
-export type SpeakReport = { connected?: boolean; speaking?: boolean; session?: number };
-export type SpeakState = { connected: boolean; speaking: boolean; starting: boolean };
+export type SpeakReport = { connected?: boolean; speaking?: boolean; muted?: boolean; session?: number };
+// `muted`: the user pressed Mute in the avatar window; the app that owns the microphone applies it.
+export type SpeakState = { connected: boolean; speaking: boolean; starting: boolean; muted: boolean };
 export type TalkResult = 'sent' | 'queued' | 'no_call' | 'queue_full';
 
 export type SpeakDeps = {
@@ -39,6 +40,7 @@ export function createSpeakController(deps: SpeakDeps) {
   let connected = false;
   let speaking = false;
   let starting = false;
+  let muted = false;
   let session = 0; // generation of the current call, bumped on every new start
   let idle: unknown = null;
   let queue: { talk: Talk; at: number }[] = [];
@@ -52,6 +54,7 @@ export function createSpeakController(deps: SpeakDeps) {
   function start() {
     if (connected || starting) { touch(); return; }
     starting = true;
+    muted = false;
     session++;
     touch();
     deps.setExpanded(true);
@@ -96,6 +99,7 @@ export function createSpeakController(deps: SpeakDeps) {
     // A teardown report from an earlier call can land after a newer start: it must not cancel the new call.
     if (r.session !== undefined && r.session !== session) return;
     if (r.speaking !== undefined) speaking = connected && r.speaking;
+    if (r.muted !== undefined) muted = r.muted;
     if (r.connected === undefined) return;
     if (r.connected) {
       const wasConnected = connected;
@@ -114,6 +118,6 @@ export function createSpeakController(deps: SpeakDeps) {
   }
 
   return { start, end, talk, audio, interrupt, report,
-    state: (): SpeakState => ({ connected, speaking, starting }) };
+    state: (): SpeakState => ({ connected, speaking, starting, muted: connected && muted }) };
 }
 export type SpeakController = ReturnType<typeof createSpeakController>;

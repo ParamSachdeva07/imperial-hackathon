@@ -5,7 +5,7 @@ export type SpeakCommand =
   | { type: 'interrupt' }
   | { type: 'talk'; turnId: string; text: string; final: boolean }
   | { type: 'audio'; pcm: string | null };
-export type SpeakReport = { connected?: boolean; speaking?: boolean; session?: number };
+export type SpeakReport = { connected?: boolean; speaking?: boolean; muted?: boolean; session?: number };
 export interface OverlayBridge {
   /** True when launched with ANAM_SPEAK_ONLY=1: externally driven, mic-less, never sendUserMessage. */
   /** lipSync (ANAM_LIP_SYNC=1): the voice is played elsewhere; the avatar only moves its lips to the audio it is sent. */

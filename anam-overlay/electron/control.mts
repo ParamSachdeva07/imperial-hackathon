@@ -86,8 +86,7 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
         const state = opts.getState();
         if (!state) return send(res, 503, { ok: false, reason: 'no_window' });
         if (opts.speak) {
-          const { connected, speaking, starting } = opts.speak.state();
-          return send(res, 200, { ok: true, state: { ...state, connected, speaking, starting } });
+          return send(res, 200, { ok: true, state: { ...state, ...opts.speak.state() } });
         }
         return send(res, 200, { ok: true, state });
       }

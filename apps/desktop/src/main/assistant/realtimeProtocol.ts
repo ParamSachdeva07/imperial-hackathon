@@ -24,6 +24,12 @@ export function realtimeVoice(): string | null {
   return process.env.POINTY_REALTIME_VOICE || "marin";
 }
 
+/**
+ * How long the user must be silent before their turn counts as finished. Every answer waits at least this long,
+ * so it is the largest fixed part of the response delay (the API default is 500).
+ */
+export const SILENCE_MS = 350;
+
 /** One-line summary for a start log. */
 export function describeRealtimeConfig(model = realtimeModel(), effort: string | undefined = reasoningEffort()): string {
   return `model=${model}, effort=${effort ?? "default"}`;
@@ -54,7 +60,7 @@ export function assistantSessionConfig(opts: AssistantSessionOpts): Record<strin
       ...(opts.voice ? { output: { voice: opts.voice } } : {}),
       input: {
         transcription: { model: "gpt-4o-transcribe" },
-        turn_detection: { type: "server_vad", create_response: false, interrupt_response: false },
+        turn_detection: { type: "server_vad", silence_duration_ms: SILENCE_MS, create_response: false, interrupt_response: false },
       },
     },
     tools: opts.tools,

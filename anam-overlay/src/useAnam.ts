@@ -72,7 +72,8 @@ export function useAnam() {
     const useMicrophone = wantMicrophone && !speakOnly; // speak-only never touches the microphone
     if (generation.current !== attempt) { busy.current = false; return; }
     const current = () => mounted.current && generation.current === attempt;
-    setPhase('connecting'); setError(''); setMessages([]); setMuted(!useMicrophone);
+    setPhase('connecting'); setError(''); setMessages([]);
+    setMuted(!useMicrophone && !speakOnly); // speak-only: the microphone belongs to the app driving the avatar and starts live
     setStatus('Creating your session…');
     let active: ActiveSession | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -190,6 +191,7 @@ export function useAnam() {
   const toggleMute = () => {
     const client = session.current?.client;
     if (!client || phase !== 'connected') return;
+    if (speakOnlyRef.current) { setMuted((value) => !value); return; } // reported to the driving app, which owns the microphone
     const next = muted ? client.unmuteInputAudio() : client.muteInputAudio();
     setMuted(next.isMuted);
     setStatus(next.isMuted ? 'Microphone muted' : 'Listening · speak naturally');

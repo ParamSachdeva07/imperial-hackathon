@@ -29,7 +29,9 @@ button:active:not(:disabled) { transform: scale(.94); }
 .launcher:focus-visible { outline-offset: 0; }
 .launcher-dot { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: #fff; background: linear-gradient(180deg, #5fe07a 0%, #34c759 55%, #28b44c 100%); box-shadow: 0 1px 0 #ffffff55 inset, 0 3px 10px #0006; transition: transform .16s ease, box-shadow .16s ease; }
 .launcher:hover .launcher-dot { transform: scale(1.1); box-shadow: 0 1px 0 #ffffff66 inset, 0 5px 14px #0007; }
-.call { width: 100%; height: 100%; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; transform-origin: calc(100% - 28px) 28px; animation: unfold 240ms cubic-bezier(.2,.8,.2,1) both; }
+.call { width: 100%; height: 100%; padding: 12px; display: flex; flex-direction: column; align-items: center; gap: 12px; animation: reveal 360ms cubic-bezier(.2,.8,.2,1) both; }
+/* Opening and closing: a circle grows out of the dot (and shrinks back into it) over the call, which stays at full size underneath. */
+.call.leaving { animation: conceal 260ms cubic-bezier(.6,0,.8,.2) both; }
 .avatar { width: 100%; aspect-ratio: 1; position: relative; flex-shrink: 0; overflow: hidden; isolation: isolate; border-radius: 50%; background: #111720; border: 2px solid var(--border); box-shadow: 0 4px 10px #0005; cursor: grab; touch-action: none; }
 .avatar:active { cursor: grabbing; }
 .avatar video { width: 100%; height: 100%; display: block; object-fit: cover; object-position: 50% 35%; opacity: 0; pointer-events: none; }
@@ -56,6 +58,7 @@ button:active:not(:disabled) { transform: scale(.94); }
 .retry-button { display: inline-flex; gap: 7px; align-items: center; justify-content: center; margin-top: 12px; padding: 8px 12px; border: 1px solid #6dbbff; background: var(--ios-blue); color: #07192a; border-radius: 20px; font-size: 12px; font-weight: 600; letter-spacing: -.15px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @keyframes orbit { to { transform: rotate(360deg); } }
-@keyframes unfold { from { opacity: 0; transform: scale(.18); } to { opacity: 1; transform: scale(1); } }
+@keyframes reveal { from { clip-path: circle(17px at calc(100% - 28px) 28px); } to { clip-path: circle(150% at calc(100% - 28px) 28px); } }
+@keyframes conceal { from { clip-path: circle(150% at calc(100% - 28px) 28px); } to { clip-path: circle(0 at calc(100% - 28px) 28px); } }
 @media (max-width: 260px) { .failed .avatar-placeholder { padding: 24px 20px 35px; } .failed .placeholder-name { display: none; } .failed .avatar-placeholder p { font-size: 10px; } .failed .avatar-label { bottom: 10px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

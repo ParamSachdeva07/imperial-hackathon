@@ -1,6 +1,7 @@
 /**
  * Drawing for the feedback overlay page: call `startFeedbackRenderer()` from its script.
- * Big, high-contrast, calm (older users): a large cursor, the rectangle being dragged out, wide hold rings,
+ * Light and calm: a short thin trace behind the mouse finger, a plain rectangle while dragging a selection
+ * (like a mouse drag: no cursor, no trail), thin hold rings,
  * selections that fade out by themselves.
  */
 import type { GestureEvent } from "../events";
@@ -12,6 +13,9 @@ export interface FeedbackRendererOptions {
 }
 
 type Selection = Extract<GestureEvent, { type: "point_selected" | "region_selected" }>;
+
+/** How long the mouse finger's trace stays (ms): short, so it reads as motion, not as a drawing. */
+const TRACE_MS = 220;
 
 const C = {
   cursor: "#ffffff",
@@ -42,6 +46,8 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
   let anchor: { x: number; y: number } | null = null;
   let dwell = 0;
   let mouse: { x: number; y: number } | null = null;
+  /** Where the mouse finger just was: a short trace that follows the movement and fades within TRACE_MS. */
+  let trace: { x: number; y: number; t: number }[] = [];
   let clickProgress = 0;
   let clickFlash: { x: number; y: number; at: number } | null = null;
   let selection: { s: Selection; at: number } | null = null;
@@ -53,6 +59,7 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
     anchor = null;
     dwell = 0;
     mouse = null;
+    trace = [];
     clickProgress = 0;
   };
 
@@ -85,7 +92,10 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
         break;
       case "mouse":
         mouse = e.phase === "end" ? null : { x: e.x, y: e.y };
-        if (e.phase === "end") clickProgress = 0;
+        if (e.phase === "end") {
+          clickProgress = 0;
+          trace = [];
+        } else trace.push({ x: e.x, y: e.y, t: now });
         break;
       case "click_progress":
         clickProgress = e.progress;
@@ -114,12 +124,12 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
   const ring = (x: number, y: number, r: number, progress: number, color: string) => {
     g.lineCap = "round";
     g.strokeStyle = C.outline;
-    g.lineWidth = 12;
+    g.lineWidth = 5;
     g.beginPath();
     g.arc(x, y, r, 0, 2 * Math.PI);
     g.stroke();
     g.strokeStyle = color;
-    g.lineWidth = 8;
+    g.lineWidth = 3;
     g.beginPath();
     g.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + progress * 2 * Math.PI);
     g.stroke();
@@ -165,52 +175,68 @@ export function startFeedbackRenderer(opts: FeedbackRendererOptions = {}): void 
             g.fillStyle = "rgba(47, 155, 255, 0.18)";
             g.fill();
             g.strokeStyle = C.outline;
-            g.lineWidth = 9;
+            g.lineWidth = 4;
             g.stroke();
             g.strokeStyle = C.region;
-            g.lineWidth = 5;
+            g.lineWidth = 2;
             g.stroke();
           } else {
-            ring(s.x, s.y, 40, 1, C.dwell);
+            ring(s.x, s.y, 24, 1, C.dwell);
           }
           g.globalAlpha = 1;
         }
       }
 
-      // The rectangle being dragged out, from where the drag began to the cursor.
-      if (cursor && anchor) {
+      // Dragging a selection: just the rectangle, from where the drag began to the finger, like a mouse drag.
+      const dragging = !!cursor && !!anchor && Math.max(Math.abs(cursor.x - anchor.x), Math.abs(cursor.y - anchor.y)) >= 8;
+      if (cursor && anchor && dragging) {
         const x = Math.min(anchor.x, cursor.x), y = Math.min(anchor.y, cursor.y);
         const rw = Math.abs(cursor.x - anchor.x), rh = Math.abs(cursor.y - anchor.y);
-        g.fillStyle = "rgba(47, 155, 255, 0.10)";
+        g.fillStyle = "rgba(47, 155, 255, 0.12)";
         g.fillRect(x, y, rw, rh);
-        g.lineJoin = "round";
-        for (const [color, width] of [[C.outline, 5], [C.region, 2.5]] as const) {
-          g.strokeStyle = color;
-          g.lineWidth = width;
-          g.strokeRect(x, y, rw, rh);
-        }
+        g.strokeStyle = C.region;
+        g.lineWidth = 1;
+        g.strokeRect(x + 0.5, y + 0.5, rw, rh);
       }
 
-      // Drawing cursor + selection hold ring.
-      if (cursor) {
+      // Two fingers up but not dragging yet: a small dot where the drag will start, and the hold ring.
+      if (cursor && !dragging) {
         g.fillStyle = C.cursor;
         g.strokeStyle = C.outline;
-        g.lineWidth = 4;
+        g.lineWidth = 2;
         g.beginPath();
-        g.arc(cursor.x, cursor.y, 14, 0, 2 * Math.PI);
+        g.arc(cursor.x, cursor.y, 6, 0, 2 * Math.PI);
         g.fill();
         g.stroke();
-        if (dwell > 0) ring(cursor.x, cursor.y, 34, dwell, C.dwell);
+        if (dwell > 0) ring(cursor.x, cursor.y, 22, dwell, C.dwell);
       }
 
+      // Mouse finger: a short thin trace behind the pointer, fading towards its tail.
+      trace = trace.filter((p) => now - p.t < TRACE_MS);
+      g.lineCap = "round";
+      for (let i = 1; i < trace.length; i++) {
+        const a = trace[i - 1]!, b = trace[i]!;
+        const fresh = 1 - (now - b.t) / TRACE_MS;
+        for (const [color, width] of [[C.outline, 3.5], [C.cursor, 1.75]] as const) {
+          g.globalAlpha = fresh * (color === C.outline ? 0.5 : 1);
+          g.strokeStyle = color;
+          g.lineWidth = width;
+          g.beginPath();
+          g.moveTo(a.x, a.y);
+          g.lineTo(b.x, b.y);
+          g.stroke();
+        }
+      }
+      g.globalAlpha = 1;
+
       // Dwell-click ring around the real mouse pointer, and a click confirmation.
-      if (mouse && clickProgress > 0) ring(mouse.x, mouse.y, 30, clickProgress, C.click);
+      if (mouse && clickProgress > 0) ring(mouse.x, mouse.y, 20, clickProgress, C.click);
       if (clickFlash) {
         const age = (now - clickFlash.at) / 500;
         if (age >= 1) clickFlash = null;
         else {
           g.globalAlpha = 1 - age;
-          ring(clickFlash.x, clickFlash.y, 30 + 30 * age, 1, C.click);
+          ring(clickFlash.x, clickFlash.y, 20 + 20 * age, 1, C.click);
           g.globalAlpha = 1;
         }
       }

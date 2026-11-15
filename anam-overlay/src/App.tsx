@@ -3,6 +3,9 @@ import type { KeyboardEvent, PointerEvent } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, RotateCcw } from 'lucide-react';
 import { useAnam } from './useAnam';
 
+/** Length of the closing animation (styles.css `conceal`). */
+const CLOSE_MS = 260;
+
 export function App() {
   const anam = useAnam();
   const [expanded, setExpanded] = useState(false);
@@ -58,7 +61,8 @@ export function App() {
     restoreLauncherFocus.current = restoreFocus;
     closingRef.current = true;
     setClosing(true);
-    await anam.stop();
+    // The window closes over the call while the call is still there, then the call is torn down.
+    await Promise.all([anam.stop(), new Promise((resolve) => setTimeout(resolve, CLOSE_MS))]);
     try {
       // Shrink the actual native window, not just the content inside it.
       await window.overlay?.setExpanded(false);
@@ -146,6 +150,7 @@ export function App() {
     }
   }, [anam.phase, anam.error]);
   useEffect(() => { window.overlay?.reportSpeak?.({ speaking: anam.speaking, session: phaseSession.current }); }, [anam.speaking]);
+  useEffect(() => { window.overlay?.reportSpeak?.({ muted: anam.muted, session: phaseSession.current }); }, [anam.muted]);
 
   function keyDown(event: KeyboardEvent) {
     if (event.key === 'Escape' && expanded) { event.preventDefault(); void endCall(true); return; }
@@ -189,7 +194,7 @@ export function App() {
       <span className="launcher-dot" aria-hidden="true"><Phone size={17} strokeWidth={0} fill="currentColor" /></span>
     </button>
 
-    <section id="anam-call" className="call" hidden={!expanded} aria-label="Anam call">
+    <section id="anam-call" className={`call ${closing ? 'leaving' : ''}`} hidden={!expanded} aria-label="Anam call">
       <div className={`avatar ${connected ? 'live' : ''} ${failed ? 'failed' : ''}`} {...dragProps}>
         <video id="persona-video" autoPlay playsInline aria-label="Your Anam AI persona" />
         {!connected && <div className="avatar-placeholder">

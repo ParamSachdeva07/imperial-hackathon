@@ -11,6 +11,8 @@ export interface AnamSpeakerState {
   expanded: boolean;
   /** A start was issued and the call is not connected yet (false + !connected = the call is over). */
   starting?: boolean;
+  /** The user pressed Mute in the avatar window. */
+  muted?: boolean;
 }
 
 /** Speak-only Anam control API client (HTTP, implemented by T2). */

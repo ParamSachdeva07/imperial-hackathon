@@ -15,6 +15,7 @@
 import type { OverlayControl, Rect } from "@pointy/shared/overlay";
 import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import type { Clock, TimerHandle } from "../overlay/clock";
+import { SILENCE_MS } from "./realtimeProtocol";
 import { selectionItems } from "../../renderer/voice/realtimeEvents";
 import { screenItemEventWithin, type ScreenContext } from "./screenContext";
 import { SentenceBatcher } from "./sentenceBatcher";
@@ -108,7 +109,7 @@ export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
   contextTimeoutMs: 1200,
   speechMarginMs: 350,
   speechStartLatencyMs: 700,
-  anamPollMs: 4000,
+  anamPollMs: 1000,
   speechPollMs: 400,
   maxSpeechExtendMs: 10_000,
   selectionMaxAgeMs: 60_000,
@@ -279,6 +280,13 @@ export class AssistantController {
   private releaseGen = 0;
   private idleTimer: TimerHandle | null = null;
   private pollTimer: TimerHandle | null = null;
+  private micWanted = true;
+  /** For the latency log: when the user stopped talking, and when the answer was requested. */
+  private speechStoppedAt: number | null = null;
+  private requestedAt: number | null = null;
+  private micApplied = true;
+  /** The Mute button in the avatar window. */
+  private userMuted = false;
   /** ownVoice: the model's audio is being heard right now (output_audio_buffer.started .. stopped/cleared). */
   private audioPlaying = false;
   private prevItemIds: string[] = [];
@@ -416,6 +424,7 @@ export class AssistantController {
     this.openedAt = this.deps.clock.now();
     this.sawAnamConnected = false;
     this.anamMisses = 0;
+    this.userMuted = false; // every call starts with the microphone live
     this.deps.gestures.setSessionActive(true);
     this.setMic(true); // a previous half-duplex mute must not survive into the new session (the renderer re-applies its flag on connect)
     try {
@@ -608,6 +617,7 @@ export class AssistantController {
       case "input_audio_buffer.speech_started":
         return this.onSpeechStarted(ev);
       case "input_audio_buffer.speech_stopped":
+        this.speechStoppedAt = this.deps.clock.now() - SILENCE_MS; // the event arrives once the silence has lasted this long
         if (this.turn) this.turn.speaking = false;
         // A barge-in that never commits (cough / VAD false positive) must not leave the offer without its no-answer timer.
         if (!this.busy()) {
@@ -624,6 +634,14 @@ export class AssistantController {
       }
       case "output_audio_buffer.started":
         this.audioPlaying = true;
+        if (this.requestedAt !== null) {
+          // Where the wait after the user stops talking goes: detecting the silence and gathering context, then the model.
+          const now = this.deps.clock.now();
+          const before = this.speechStoppedAt === null ? "" : `end of speech -> request ${Math.round(this.requestedAt - this.speechStoppedAt)} ms, `;
+          this.log(`latency: ${before}request -> first audio ${Math.round(now - this.requestedAt)} ms`);
+          this.requestedAt = null;
+          this.speechStoppedAt = null;
+        }
         return;
       case "output_audio_buffer.stopped":
       case "output_audio_buffer.cleared":
@@ -1016,6 +1034,7 @@ export class AssistantController {
 
   /** The single place response.create is sent; never while a response is active or pending. */
   private requestResponse(opts?: { offer?: boolean }): void {
+    this.requestedAt = this.deps.clock.now();
     if (opts?.offer) this.pendingOfferCreate = true;
     if (this.responseRequested || this.activeResponseId) {
       this.pendingCreate = true;
@@ -1479,8 +1498,13 @@ export class AssistantController {
   }
 
   /** Only half-duplex (off) actually mutes the mic; guarded/open keep it open so the user can talk over Anam. */
+  /** Half-duplex (barge-in off) closes the mic while the assistant speaks; the user's own Mute closes it in every mode. */
   private setMic(on: boolean): void {
-    if (this.bargeIn === "off") this.deps.transport.setMicEnabled(on);
+    if (this.bargeIn === "off") this.micWanted = on;
+    const enabled = this.micWanted && !this.userMuted;
+    if (this.bargeIn !== "off" && enabled === this.micApplied) return; // nothing changed: only half-duplex re-sends its state
+    this.micApplied = enabled;
+    this.deps.transport.setMicEnabled(enabled);
   }
 
   private setAnswerSpeaking(on: boolean): void {
@@ -1580,6 +1604,11 @@ export class AssistantController {
           if (++this.anamMisses >= 3) return void this.close("anam unreachable");
         } else {
           this.anamMisses = 0;
+          if ((st.muted === true) !== this.userMuted) {
+            this.userMuted = st.muted === true;
+            this.log(this.userMuted ? "microphone muted by the user" : "microphone unmuted by the user");
+            this.setMic(this.micWanted);
+          }
           if (st.connected) this.sawAnamConnected = true;
           else if (this.sawAnamConnected || st.starting === false) return void this.close("anam call ended"); // starting:false = hung up before we ever saw it connected
           else if (this.deps.clock.now() - this.openedAt > this.cfg.anamConnectGraceMs) return void this.close("anam call never connected");
