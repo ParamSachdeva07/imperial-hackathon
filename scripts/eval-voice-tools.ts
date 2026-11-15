@@ -6,15 +6,21 @@
  *
  *   npm run app            # in another terminal (overlay + fake mail app must be running)
  *   npx tsx scripts/eval-voice-tools.ts ["custom request" ...]
+ *   npx tsx scripts/eval-voice-tools.ts --selection <dir from `pointy-draw selection` (selection.json + full.jpg + focus.jpg) | snapshot.json> --ask "Is this safe?"
+ *     (sends the selection exactly as production does, then prints the model's text answer)
  *
  * Needs OPENAI_API_KEY in the repo-root .env. Dev-only.
  */
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DisplayInfo, ElementRect } from "@pointy/shared/overlay";
 import { devCall, readDevConnection } from "@pointy/shared/node/devServerFile";
 import { delay, loadRepoEnv } from "@pointy/shared/node/env";
 import { readManifestPrompts } from "../apps/desktop/src/main/overlay/explainer/manifest";
+import type { SelectionSnapshot, SelectionSnapshotMeta } from "@pointy/shared/context/selection";
+import { snapshotFromFiles } from "../tools/pointy-draw/src/selection";
+import { selectionItems } from "../apps/desktop/src/renderer/voice/realtimeEvents";
 import { mintClientSecret, REALTIME_MODEL, type HarnessContext } from "../apps/desktop/src/dev/realtime/realtimeSession";
 
 const root = resolve(fileURLToPath(import.meta.url), "../..");
@@ -22,7 +28,45 @@ loadRepoEnv(root);
 const conn = readDevConnection();
 const dev = <T = unknown>(method: "GET" | "POST", path: string, body?: unknown) => devCall<T>(conn, method, path, body);
 
-const REQUESTS = process.argv.slice(2).length
+function flag(name: string): string | undefined {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+const selectionArg = flag("--selection");
+const askArg = flag("--ask") ?? "What is this?";
+
+/** A snapshot json, or a dir with selection.json (+ full.jpg & focus.jpg) as `pointy-draw selection` writes it, or a dir with only the jpgs. */
+function loadSelection(path: string): SelectionSnapshot {
+  const p = resolve(path);
+  const isDir = statSync(p).isDirectory();
+  const dir = isDir ? p : dirname(p);
+  const metaPath = isDir ? join(p, "selection.json") : p;
+  if (existsSync(metaPath)) {
+    const json = JSON.parse(readFileSync(metaPath, "utf8")) as SelectionSnapshot | SelectionSnapshotMeta;
+    if ("dataUrl" in json.full) return json as SelectionSnapshot; // a full snapshot dump
+    return snapshotFromFiles(json as SelectionSnapshotMeta, readFileSync(join(dir, "full.jpg")), readFileSync(join(dir, "focus.jpg")));
+  }
+  const snapshotPath = join(p, "snapshot.json");
+  if (isDir && existsSync(snapshotPath)) return JSON.parse(readFileSync(snapshotPath, "utf8")) as SelectionSnapshot;
+  // Bare images without metadata: geometry is unknown, so say so instead of passing it off as real.
+  console.warn("No selection.json: using placeholder geometry (480x320 at 0,0 on display 1); the model's pointing will not match the real screen.");
+  const url = (f: string) => `data:image/jpeg;base64,${readFileSync(join(p, f)).toString("base64")}`;
+  const img = (f: string, w: number) => ({ mime: "image/jpeg" as const, dataUrl: url(f), width: w, height: Math.round(w * 0.625) });
+  return {
+    id: "eval-selection",
+    kind: "region",
+    capturedAt: Date.now(),
+    displayId: "1",
+    regionGlobal: { x: 0, y: 0, width: 480, height: 320 },
+    polygonGlobal: [{ x: 0, y: 0 }, { x: 480, y: 0 }, { x: 480, y: 320 }, { x: 0, y: 320 }],
+    full: { ...img("full.jpg", 1280), markedRegion: { x: 0, y: 0, width: 0.3, height: 0.3 } },
+    focus: img("focus.jpg", 768),
+  };
+}
+
+const REQUESTS = selectionArg
+  ? [askArg]
+  : process.argv.slice(2).length
   ? process.argv.slice(2)
   : [
       "Where is the Send button?",
@@ -108,6 +152,11 @@ async function main() {
   let drawnTurns = 0;
   for (const [i, request] of REQUESTS.entries()) {
     await dev("POST", "/control", { op: "turnStart", arg: `eval-${i}` });
+    if (selectionArg) {
+      const { events, note } = selectionItems(loadSelection(selectionArg), { maxMessageBytes: 256 * 1024 });
+      console.log(`selection: ${note}`);
+      for (const e of events) send(e);
+    }
     send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: request }] } });
     send({ type: "response.create" });
     const calls: Call[] = [];

@@ -2,10 +2,11 @@
  * pointy-draw: dev CLI that posts JSON to the overlay's localhost dev server (spec §8.1).
  * Connection details come from ~/.pointy/dev-server.json, written by the running app.
  */
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { DEV_TOKEN_HEADER, devCall, readDevConnection, type DevConnection } from "@pointy/shared/node/devServerFile";
 import { fileURLToPath } from "node:url";
+import { selectionFiles } from "./selection";
 import { parseCommand, UsageError, wantsWaitShown, type Request } from "./args";
 
 type Conn = DevConnection;
@@ -74,6 +75,21 @@ async function run(argv: string[]): Promise<number> {
       }
       console.log(JSON.stringify(await call(conn, "GET", req.path), null, 2));
       return 0;
+    case "selection": {
+      const files = selectionFiles(await call(conn, "GET", "/debug/selection"));
+      if (!files) {
+        console.log(JSON.stringify({ snapshot: null }));
+        return 1;
+      }
+      const dir = resolve(process.cwd(), req.outDir);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(resolve(dir, "full.jpg"), files.fullJpg);
+      writeFileSync(resolve(dir, "focus.jpg"), files.focusJpg);
+      writeFileSync(resolve(dir, "selection.json"), JSON.stringify(files.meta, null, 2));
+      console.log(JSON.stringify(files.meta, null, 2));
+      console.log(`wrote ${dir}/{full.jpg,focus.jpg,selection.json}`);
+      return 0;
+    }
     case "post":
       console.log(JSON.stringify(await call(conn, "POST", req.path, req.body)));
       return 0;

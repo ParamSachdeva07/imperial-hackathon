@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand, UsageError } from "./args";
+import { DEFAULT_SELECTION_DIR, parseCommand, UsageError } from "./args";
+import { decodeDataUrl, selectionFiles, snapshotFromFiles } from "./selection";
 import { circleEvents, dwellEvents, wakeEvents } from "./gesture";
 
 const ctx = { primaryDisplayId: "1", readJsonFile: () => ({ title: "t", spec: { kind: "sequence", steps: [] } }) };
@@ -145,5 +146,38 @@ describe("pointy-draw args (spec §8.1 commands)", () => {
       expect(circleEvents({ x: 0, y: 0 }, 10, 1)).toEqual(circleEvents({ x: 0, y: 0 }, 10, 1));
       expect(dwellEvents({ x: 0, y: 0 }, 1, 330).filter((e) => e.type === "dwell_progress")).toHaveLength(11);
     });
+  });
+});
+
+describe("selection", () => {
+  it("parses the command with default and custom out dir", () => {
+    expect(p(["selection"])).toEqual({ kind: "selection", outDir: DEFAULT_SELECTION_DIR });
+    expect(p(["selection", "--out", "tmp/x"])).toEqual({ kind: "selection", outDir: "tmp/x" });
+  });
+  it("decodes a snapshot response into jpg bytes and meta without data urls", () => {
+    const url = (s: string) => `data:image/jpeg;base64,${Buffer.from(s).toString("base64")}`;
+    const snapshot = {
+      id: "a",
+      kind: "point",
+      capturedAt: 1,
+      displayId: "1",
+      regionGlobal: { x: 0, y: 0, width: 1, height: 1 },
+      full: { mime: "image/jpeg", dataUrl: url("FULL"), width: 2, height: 2, markedRegion: { x: 0, y: 0, width: 0, height: 0 } },
+      focus: { mime: "image/jpeg", dataUrl: url("FOCUS"), width: 1, height: 1 },
+    };
+    const f = selectionFiles({ snapshot });
+    expect(f?.fullJpg.toString()).toBe("FULL");
+    expect(f?.focusJpg.toString()).toBe("FOCUS");
+    expect(JSON.stringify(f?.meta)).not.toContain("base64");
+    expect(f?.meta.focus.bytes).toBe(5);
+    expect(selectionFiles({ snapshot: null })).toBeNull();
+    expect(() => decodeDataUrl("data:image/png;base64,AA")).toThrow();
+    // Round trip keeps the real geometry (kind, display, point) instead of inventing it.
+    const back = snapshotFromFiles({ ...f!.meta, kind: "point", displayId: "987", pointGlobal: { x: 5, y: 6 } }, f!.fullJpg, f!.focusJpg);
+    expect(back.kind).toBe("point");
+    expect(back.displayId).toBe("987");
+    expect(back.pointGlobal).toEqual({ x: 5, y: 6 });
+    expect(back.full.dataUrl).toBe(snapshot.full.dataUrl);
+    expect("bytes" in back.focus).toBe(false);
   });
 });

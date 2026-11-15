@@ -1,5 +1,6 @@
 /** DEV-ONLY preload for the GPT Realtime test window. */
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import type { OverlayEvent, ToolResult } from "@pointy/shared/overlay/schemas";
 
 const api = {
@@ -8,10 +9,16 @@ const api = {
   turnStart: (turnId: string): Promise<void> => ipcRenderer.invoke("voice:turn", turnId),
   instructions: (): Promise<string> => ipcRenderer.invoke("voice:instructions"),
   openFixture: (): Promise<number> => ipcRenderer.invoke("voice:fixture"),
+  latestSelection: (): Promise<SelectionSnapshot | null> => ipcRenderer.invoke("voice:selection-latest"),
   onOverlayEvent(cb: (e: OverlayEvent) => void): () => void {
     const l = (_e: IpcRendererEvent, ev: OverlayEvent) => cb(ev);
     ipcRenderer.on("voice:overlay-event", l);
     return () => ipcRenderer.removeListener("voice:overlay-event", l);
+  },
+  onSelection(cb: (s: SelectionSnapshot) => void): () => void {
+    const l = (_e: IpcRendererEvent, s: SelectionSnapshot) => cb(s);
+    ipcRenderer.on("voice:selection", l);
+    return () => ipcRenderer.removeListener("voice:selection", l);
   },
 };
 

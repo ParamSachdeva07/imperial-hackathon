@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { BrowserWindow, ipcMain, screen, session, type IpcMainInvokeEvent } from "electron";
 import { VOICE_WINDOW_WIDTH } from "../fixtureWindow";
 import type { OverlayControl } from "@pointy/shared/overlay";
+import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import { buildInstructions, mintClientSecret, type HarnessContext } from "./realtimeSession";
 
 export const VOICE_IPC = {
@@ -18,6 +19,10 @@ export const VOICE_IPC = {
   instructions: "voice:instructions",
   fixture: "voice:fixture",
   event: "voice:overlay-event",
+  /** main → voice window: a SelectionSnapshot from a gesture. */
+  selection: "voice:selection",
+  /** voice window -> main: the current (session-bound) selection, asked for when the channel opens. */
+  latestSelection: "voice:selection-latest",
 } as const;
 
 export function openVoiceWindow(opts: {
@@ -28,6 +33,8 @@ export function openVoiceWindow(opts: {
   /** Open (or show) the fake mail app the AI points at, and wait until its buttons are reported. */
   ensureFixture: () => Promise<void>;
   loadPage: (win: BrowserWindow) => Promise<void>;
+  /** Gesture selections to hand to the model; each snapshot is pushed to this window only. */
+  selectionSource?: { onSnapshot(cb: (s: SelectionSnapshot) => void): () => void; latest(): SelectionSnapshot | null };
 }): BrowserWindow {
   // Top-right of the primary screen, beside (not on top of) the fake mail app.
   const wa = screen.getPrimaryDisplay().workArea;
@@ -71,12 +78,22 @@ export function openVoiceWindow(opts: {
     if (!fromWin(e) || typeof turnId !== "string") throw new Error("forbidden");
     opts.control.onTurnStart(turnId);
   });
+  // Pull model: the store is cleared when the gesture session closes, so a selection is never held
+  // (and never replayed) in the renderer beyond its session.
+  ipcMain.handle(VOICE_IPC.latestSelection, async (e) => {
+    if (!fromWin(e)) throw new Error("forbidden");
+    return opts.selectionSource?.latest() ?? null;
+  });
   const off = opts.control.onEvent((ev) => {
     if (!win.isDestroyed()) win.webContents.send(VOICE_IPC.event, ev);
   });
+  const offSelection = opts.selectionSource?.onSnapshot((s) => {
+    if (!win.isDestroyed()) win.webContents.send(VOICE_IPC.selection, s);
+  });
   win.on("closed", () => {
     off();
-    for (const ch of [VOICE_IPC.secret, VOICE_IPC.tool, VOICE_IPC.turn, VOICE_IPC.instructions, VOICE_IPC.fixture]) {
+    offSelection?.();
+    for (const ch of [VOICE_IPC.secret, VOICE_IPC.tool, VOICE_IPC.turn, VOICE_IPC.instructions, VOICE_IPC.fixture, VOICE_IPC.latestSelection]) {
       ipcMain.removeHandler(ch);
     }
   });

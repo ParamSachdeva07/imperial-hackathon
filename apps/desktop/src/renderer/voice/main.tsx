@@ -6,7 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { OverlayEvent, ToolResult } from "@pointy/shared/overlay/schemas";
-import { handleServerEvent } from "./realtimeEvents";
+import type { SelectionSnapshot } from "@pointy/shared/context/selection";
+import { handleServerEvent, selectionItems } from "./realtimeEvents";
 import "./voice.css";
 
 interface VoiceApi {
@@ -16,6 +17,8 @@ interface VoiceApi {
   instructions(): Promise<string>;
   openFixture(): Promise<number>;
   onOverlayEvent(cb: (e: OverlayEvent) => void): () => void;
+  onSelection(cb: (s: SelectionSnapshot) => void): () => void;
+  latestSelection(): Promise<SelectionSnapshot | null>;
 }
 const voice = (window as unknown as { pointyVoice: VoiceApi }).pointyVoice;
 
@@ -28,6 +31,8 @@ function App() {
   const pc = useRef<RTCPeerConnection | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   const turn = useRef(0);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const lastSentSelection = useRef<string | null>(null);
   const logEnd = useRef<HTMLDivElement | null>(null);
 
   const log = (kind: Line["kind"], text: string) => setLines((l) => [...l.slice(-200), { kind, text, at: Date.now() }]);
@@ -36,6 +41,28 @@ function App() {
     const off = voice.onOverlayEvent((e) => log("event", JSON.stringify(e)));
     return () => off();
   }, []);
+  function deliverSelection(s: SelectionSnapshot) {
+    const dc = dcRef.current;
+    if (!dc || dc.readyState !== "open") {
+      // Not held here: main keeps the session-bound latest and we pull it when the channel opens.
+      log("info", "selection received; will send once connected");
+      return;
+    }
+    if (lastSentSelection.current === s.id) return;
+    const max = pc.current?.sctp?.maxMessageSize;
+    const { events, note } = selectionItems(s, { maxMessageBytes: max && Number.isFinite(max) ? max : undefined });
+    try {
+      for (const e of events) dc.send(JSON.stringify(e));
+    } catch (err) {
+      log("error", `selection send failed (will retry on the next connection): ${String(err)}`);
+      return;
+    }
+    lastSentSelection.current = s.id;
+    log("info", `selection sent: ${note}`);
+  }
+  const deliverRef = useRef(deliverSelection);
+  deliverRef.current = deliverSelection;
+  useEffect(() => voice.onSelection((s) => deliverRef.current(s)), []);
   useEffect(() => {
     // Block body on purpose: newer Chromium returns a Promise from scrollIntoView, and an effect
     // must never return anything but a cleanup function.
@@ -55,6 +82,7 @@ function App() {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
       for (const track of mic.getTracks()) conn.addTrack(track, mic);
       const dc = conn.createDataChannel("oai-events");
+      dcRef.current = dc;
       const deps = {
         send: (e: object) => dc.readyState === "open" && dc.send(JSON.stringify(e)),
         callTool: (name: string, args: unknown) => voice.callTool(name, args),
@@ -76,6 +104,9 @@ function App() {
         void voice.instructions().then((instructions) =>
           deps.send({ type: "session.update", session: { type: "realtime", instructions } }),
         );
+        void voice.latestSelection().then((queued) => {
+          if (queued) deliverRef.current(queued);
+        });
         log("info", "connected — say something like “where is the Send button?”");
       };
       await conn.setLocalDescription(await conn.createOffer());
@@ -97,6 +128,8 @@ function App() {
   function disconnect() {
     const conn = pc.current;
     pc.current = null;
+    dcRef.current = null;
+    lastSentSelection.current = null; // a new connection is a new conversation: it needs the image again
     if (conn) {
       for (const s of conn.getSenders()) s.track?.stop();
       conn.close();

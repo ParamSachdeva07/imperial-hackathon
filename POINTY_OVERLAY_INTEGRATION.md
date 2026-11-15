@@ -177,6 +177,9 @@ request/response models, see §6.
 
 ### 5.4 Implement `ScreenCaptureProvider` (capture teammate)
 
+> For gesture selections the app uses `DesktopCapturerProvider` (throws instead of returning a placeholder, checks
+> Screen Recording permission); see `INTEGRATION.md` §9. `MockScreenCaptureProvider` remains the anatomy-crop mock.
+
 ```ts
 captureRegion(displayId: string, rectDip: Rect /* GLOBAL DIP */): Promise<Buffer /* PNG, physical px */>
 ```
@@ -360,6 +363,9 @@ followed by `{ "type": "response.create" }` only when you want Pointy to speak. 
 
 ### 5.10 Your own screenshots (vision input for the model)
 
+> Gesture selections already have a ready-made capture path (hiding included): `INTEGRATION.md` §9, seam
+> `SelectionStore` in `apps/desktop/src/main/capture/`.
+
 Exclude the overlay so the model never sees its own drawings:
 - **Preferred:** `control.getOverlayWindowIds()` **at each capture**, excluded in your
   ScreenCaptureKit `SCContentFilter`.
@@ -487,6 +493,10 @@ hand** (cursor, trail, hold rings, wake ring, selected point/region) in their ow
 the overlay API has no gesture feedback entry points. The desktop app starts that window next to the gesture
 service (`apps/desktop/src/main/gestures/startGestures.ts`). `GesturesHandle.clearSelection()` removes the shown
 selection when the controller ends a turn.
+
+**Selections as AI input:** the app also captures each gesture selection as two JPEGs (full display marked +
+focus close-up). The brain reads them from `SelectionStore` (`latest()` / `consume()` / `onSnapshot`), contract
+`@pointy/shared/context/selection`; see `INTEGRATION.md` §9.
 
 Dev env flags (see the header of `apps/desktop/src/main/index.ts`): `POINTY_GESTURES=1` starts the camera
 layer (`npm run gestures:assets` once, then `npm run app:gestures`), `POINTY_GESTURES_SHOW=1` shows the
