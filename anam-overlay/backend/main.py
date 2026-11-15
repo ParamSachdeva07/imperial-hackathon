@@ -211,6 +211,41 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(502, "Anam returned no session token.")
         return SessionToken(sessionToken=token)
 
+    async def interactive_avatar_id(request: Request, config: Settings) -> str:
+        """The id sessions are started with. An interactive id (av_...) is used as it is; a Studio avatar id is
+        converted once by Synthesia, which takes a while the first time, and remembered until the backend restarts."""
+        configured = config.synthesia_avatar_id
+        if configured.startswith("av_"):
+            return configured
+        known = getattr(request.app.state, "interactive_avatar", None)
+        if known and known[0] == configured:
+            return known[1]
+        try:
+            upstream = await request.app.state.anam_http.post(
+                f"{config.synthesia_api_base}/api/interactive-avatars/avatars",
+                headers={"Authorization": f"Bearer {config.synthesia_api_key}"}, json={"sourceId": configured},
+            )
+        except httpx.HTTPError:
+            raise HTTPException(502, "Cannot reach Synthesia. Check your internet connection.") from None
+        try:
+            data = upstream.json()
+        except ValueError:
+            data = {}
+        if not upstream.is_success:
+            by_code = {"no_credit": "The Synthesia workspace has no interactive avatar credits.",
+                       "insufficient_scope": "The Synthesia API key needs the Interactive Avatars (write) scope."}
+            by_status = {401: "Synthesia rejected the API key. Check backend/.env.",
+                         404: "Synthesia could not find that avatar, or it cannot be made interactive (stock actor avatars cannot). Check SYNTHESIA_AVATAR_ID."}
+            raise HTTPException(502, by_code.get(data.get("code") if isinstance(data, dict) else None)
+                                or by_status.get(upstream.status_code) or "Synthesia could not prepare the avatar.")
+        status, avatar_id = data.get("status"), data.get("id")
+        if status == "completed" and isinstance(avatar_id, str) and avatar_id:
+            request.app.state.interactive_avatar = (configured, avatar_id)
+            return avatar_id
+        if data.get("done"):
+            raise HTTPException(502, "Synthesia could not turn that avatar into an interactive one. Choose another avatar.")
+        raise HTTPException(503, "Synthesia is still preparing the interactive avatar. Try again in a minute.")
+
     @application.post("/api/avatar-session")
     async def avatar_session(request: Request):
         """Start the Synthesia avatar in the room the last session token was issued for. Answers once it is live."""
@@ -223,13 +258,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         room = getattr(request.app.state, "room", None)
         if not room:
             raise HTTPException(409, "No call is open.")
+        avatar_id = await interactive_avatar_id(request, config)
         token = livekit_token(config, room=room, identity=AVATAR_IDENTITY, name="Synthesia avatar",
                               attributes={"lk.publish_on_behalf": DRIVER_IDENTITY})
         try:
             upstream = await request.app.state.anam_http.post(
                 f"{config.synthesia_api_base}/api/interactive-avatars/sessions",
                 headers={"Authorization": f"Bearer {config.synthesia_api_key}"},
-                json={"avatarIds": [config.synthesia_avatar_id], "livekitUrl": config.livekit_ws_url(), "livekitToken": token},
+                json={"avatarIds": [avatar_id], "livekitUrl": config.livekit_ws_url(), "livekitToken": token},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "The Synthesia avatar took too long to join. Please retry.") from None
