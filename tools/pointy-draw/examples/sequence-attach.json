@@ -1,0 +1,12 @@
+{
+  "anchor": { "kind": "element", "elementId": "fixture.composeAttach" },
+  "title": "How to attach a photo",
+  "spec": {
+    "kind": "sequence",
+    "steps": [
+      { "icon": "attach", "caption": "Press Attach photo" },
+      { "icon": "photo", "caption": "Pick your photo" },
+      { "icon": "send", "caption": "Press Send" }
+    ]
+  }
+}

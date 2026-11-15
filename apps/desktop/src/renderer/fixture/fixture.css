@@ -1,0 +1,138 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font: 15px/1.4 system-ui, -apple-system, sans-serif;
+}
+.app {
+  --bg: #ffffff;
+  --panel: #f3f4f6;
+  --text: #111827;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --sel: #dbeafe;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+.app.dark {
+  --bg: #111827;
+  --panel: #1f2937;
+  --text: #f9fafb;
+  --muted: #9ca3af;
+  --line: #374151;
+  --sel: #1e3a8a;
+}
+.toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  align-items: center;
+}
+.spacer {
+  flex: 1;
+}
+button,
+input,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+button.primary {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+button.danger {
+  color: #b91c1c;
+}
+.body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 140px 260px 1fr 220px;
+  min-height: 0;
+}
+.sidebar {
+  background: var(--panel);
+  padding: 8px;
+  border-right: 1px solid var(--line);
+}
+.folder {
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.folder.active {
+  background: var(--sel);
+}
+.list {
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+.row {
+  display: grid;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: default;
+}
+.row.selected {
+  background: var(--sel);
+}
+.row time {
+  color: var(--muted);
+  font-size: 12px;
+}
+.reader {
+  padding: 16px 20px;
+  overflow: auto;
+}
+.reader h1 {
+  font-size: 20px;
+  margin: 0 0 6px;
+}
+.sender {
+  color: var(--muted);
+}
+.compose {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  background: var(--panel);
+}
+.compose label {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+}
+.compose textarea {
+  min-height: 70px;
+}
+.compose-actions {
+  display: flex;
+  justify-content: space-between;
+}
+.files {
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  padding: 8px;
+  background: var(--panel);
+}
+.files h2 {
+  font-size: 14px;
+  margin: 4px 4px 8px;
+}
+.file {
+  padding: 8px 6px;
+  border-radius: 6px;
+}

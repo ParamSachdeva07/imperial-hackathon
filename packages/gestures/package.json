@@ -1,0 +1,44 @@
+{
+  "name": "@pointy/gestures",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hand-gesture layer for Pointy: MediaPipe landmarks -> wake / mouse + dwell click / draw-select / scroll events",
+  "main": "out/main/index.cjs",
+  "exports": {
+    ".": "./src/index.ts",
+    "./detector": "./src/detector.ts",
+    "./electron": "./src/electron/service.ts",
+    "./electron/mouse": "./src/electron/mouse.ts",
+    "./electron/preload": "./src/electron/preload.ts",
+    "./electron/renderer": "./src/electron/renderer.ts",
+    "./electron/feedback": "./src/electron/feedback.ts",
+    "./electron/feedback-preload": "./src/electron/feedbackPreload.ts",
+    "./electron/feedback-renderer": "./src/electron/feedbackRenderer.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "predev": "node scripts/copy-wasm.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/copy-wasm.mjs",
+    "build": "vite build",
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "mouse-bridge": "node scripts/mouse-bridge.mjs",
+    "preelectron": "node scripts/copy-wasm.mjs",
+    "electron": "electron-vite dev",
+    "electron:selftest": "node scripts/copy-wasm.mjs && electron-vite build && node scripts/run-selftest.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2",
+    "electron": "45.3.2",
+    "electron-vite": "6.0.0",
+    "vite": "8.3.8",
+    "ws": "8.23.0"
+  },
+  "optionalDependencies": {
+    "@nut-tree-fork/nut-js": "4.2.6"
+  }
+}

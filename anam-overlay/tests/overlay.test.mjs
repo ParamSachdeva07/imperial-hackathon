@@ -1,0 +1,382 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { _electron as electron } from 'playwright';
+import { createServer } from 'vite';
+import react from '@vitejs/plugin-react';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const results = path.join(root, 'test-results');
+const env = { ...process.env };
+delete env.ELECTRON_RUN_AS_NODE;
+delete env.ANAM_API_KEY;
+delete env.VITE_ANAM_API_KEY;
+delete env.OVERLAY_DEV;
+delete env.ANAM_SPEAK_ONLY;
+
+// Tests never touch the real ~/.pointy/anam-control.json: every launch gets a temp control file
+// and an ephemeral control port (so a running overlay's port 47630 is never contested).
+const tempDirs = [];
+async function launch(dev = false, extraEnv = {}) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'anam-overlay-test-'));
+  tempDirs.push(dir);
+  const controlFile = path.join(dir, 'anam-control.json');
+  const application = await electron.launch({ args: [path.join(root, 'dist-electron/main.mjs')],
+    cwd: root, env: { ...env, ANAM_CONTROL_FILE: controlFile, ANAM_CONTROL_PORT: '0',
+      ...(dev ? { OVERLAY_DEV: '1' } : {}), ...extraEnv }, timeout: 20_000 });
+  const page = await application.firstWindow();
+  await page.locator('.launcher').waitFor({ state: 'attached' });
+  await application.evaluate(({ BrowserWindow, screen }) => {
+    const area = screen.getPrimaryDisplay().workArea;
+    globalThis.__testPointer = { x: area.x + 200, y: area.y + 200 };
+    screen.getCursorScreenPoint = () => globalThis.__testPointer;
+    const win = BrowserWindow.getAllWindows()[0];
+    const original = win.setIgnoreMouseEvents.bind(win);
+    win.setIgnoreMouseEvents = (ignore, options) => {
+      globalThis.__testIgnoringMouse = ignore; original(ignore, options);
+    };
+  });
+  await revealDot(application, page);
+  return { application, page, controlFile };
+}
+
+async function revealDot(application, page) {
+  await application.evaluate(({ BrowserWindow, screen }) => {
+    const display = screen.getDisplayMatching(BrowserWindow.getAllWindows()[0].getBounds());
+    globalThis.__testPointer = { x: display.bounds.x + display.bounds.width - 1, y: display.bounds.y + 1 };
+  });
+  await page.waitForFunction(() => document.querySelector('.launcher').classList.contains('is-revealed'));
+}
+
+async function leaveCorner(application, page) {
+  await page.evaluate(() => {
+    document.activeElement?.blur();
+    window.overlay.setLauncherFocused(false);
+  });
+  await application.evaluate(({ screen }) => {
+    const area = screen.getPrimaryDisplay().workArea;
+    globalThis.__testPointer = { x: area.x + 200, y: area.y + 200 };
+  });
+}
+
+test('hidden corner launcher reveals on hover, passes through clicks, and docks after closing', { timeout: 40_000 }, async () => {
+  await mkdir(results, { recursive: true });
+  const { application, page } = await launch();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  try {
+    const state = await application.evaluate(async ({ BrowserWindow, screen }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      const preferences = win.webContents.getLastWebPreferences();
+      const capture = await win.webContents.capturePage();
+      return { top: win.isAlwaysOnTop(), cornerAlpha: capture.toBitmap()[3], bounds: win.getBounds(),
+        area: screen.getPrimaryDisplay().workArea, isolated: preferences.contextIsolation,
+        sandbox: preferences.sandbox, node: preferences.nodeIntegration };
+    });
+    assert.equal(state.top, true);
+    assert.equal(state.cornerAlpha, 0);
+    assert.equal(state.isolated, true);
+    assert.equal(state.sandbox, true);
+    assert.equal(state.node, false);
+    assert.equal(state.bounds.width, 56);
+    assert.equal(state.bounds.height, 56);
+    assert.equal(state.bounds.x + state.bounds.width, state.area.x + state.area.width - 16);
+    assert.equal(state.bounds.y, state.area.y + 16);
+    assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
+    assert.equal(await page.getByRole('button').count(), 1);
+    await leaveCorner(application, page);
+    await page.waitForFunction(() => !document.querySelector('.launcher').classList.contains('is-revealed'));
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.launcher')).opacity === '0');
+    assert.equal(await application.evaluate(() => globalThis.__testIgnoringMouse), true);
+    await page.screenshot({ path: path.join(results, 'overlay-hidden.png'), omitBackground: true });
+    await revealDot(application, page);
+    assert.equal(await application.evaluate(() => globalThis.__testIgnoringMouse), false);
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.launcher')).opacity === '1');
+    await page.screenshot({ path: path.join(results, 'overlay-dot.png'), omitBackground: true });
+    // A keyboard user can also reveal the launcher without hovering.
+    await leaveCorner(application, page);
+    await page.waitForFunction(() => !document.querySelector('.launcher').classList.contains('is-revealed'));
+    await page.locator('.launcher').focus();
+    await page.waitForFunction(() => document.querySelector('.launcher').classList.contains('is-revealed'));
+    await revealDot(application, page);
+    const moved = state.bounds;
+    await page.evaluate(() => window.overlay.setExpanded('invalid'));
+    assert.equal(await page.evaluate(() => window.innerWidth), 56);
+
+    // Exercise the real IPC/token request, without contacting Anam or requesting a microphone.
+    await application.evaluate(() => {
+      globalThis.fetch = async () => { throw new Error('test network unavailable'); };
+    });
+    await page.getByRole('button', { name: 'Open Anam and start a call' }).click();
+    await page.getByRole('alert').filter({ hasText: 'Cannot reach the local backend' }).waitFor();
+    await page.waitForFunction(() => window.innerWidth === 320 && window.innerHeight === 400);
+    const expandedBounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+    assert.equal(expandedBounds.x + expandedBounds.width, moved.x + moved.width);
+    assert.equal(expandedBounds.y, moved.y);
+    await page.screenshot({ path: path.join(results, 'overlay-error.png'), omitBackground: true });
+
+    await page.evaluate(() => window.overlay.resizeBy(-80));
+    await page.waitForFunction(() => window.innerWidth === 240 && window.innerHeight === 320);
+    await page.screenshot({ path: path.join(results, 'overlay-small-circle.png'), omitBackground: true });
+    const layout = await page.evaluate(() => {
+      const circle = document.querySelector('.avatar').getBoundingClientRect();
+      const controls = document.querySelector('.call-controls').getBoundingClientRect();
+      return { width: circle.width, height: circle.height, controlsBottom: controls.bottom };
+    });
+    assert.equal(layout.width, layout.height);
+    assert.ok(layout.controlsBottom <= 320);
+    await page.evaluate(() => window.overlay.resizeBy(Number.NaN));
+    assert.equal(await page.evaluate(() => window.innerWidth), 240);
+    await leaveCorner(application, page);
+    await page.getByRole('button', { name: 'End call and return to dot' }).click();
+    await page.waitForFunction(() => window.innerWidth === 56 && window.innerHeight === 56);
+    await page.waitForFunction(() => !document.querySelector('.launcher').classList.contains('is-revealed'));
+    assert.equal(await application.evaluate(() => globalThis.__testIgnoringMouse), true);
+    const collapsedBounds = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
+    assert.deepEqual(collapsedBounds, moved);
+    assert.deepEqual(errors, []);
+  } finally { await application.close(); }
+});
+
+test('dot-to-call lifecycle, mute, hangup, reconnect and cancellation', { timeout: 60_000 }, async (t) => {
+  const server = await createServer({ configFile: false, root, plugins: [react()],
+    resolve: { alias: [{ find: '@anam-ai/js-sdk', replacement: path.join(root, 'tests/fake-sdk.mjs') }] },
+    server: { host: '127.0.0.1', port: 5173, strictPort: true } });
+  let application;
+  try {
+    await server.listen();
+    const launched = await launch(true);
+    application = launched.application;
+    const page = launched.page;
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await application.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('overlay:microphone');
+      ipcMain.handle('overlay:microphone', () => true);
+      globalThis.fetch = async (url, options) => {
+        if (url !== 'http://127.0.0.1:8765/api/session-token' || options.method !== 'POST'
+          || options.headers['X-Anam-Overlay'] !== '1') throw new Error('Incorrect backend request');
+        return new Response(JSON.stringify({ sessionToken: 'test-ephemeral-token' }), { status: 200 });
+      };
+    });
+    const dot = () => page.getByRole('button', { name: 'Open Anam and start a call' });
+    const end = () => page.getByRole('button', { name: 'End call and return to dot' });
+    const connected = () => page.waitForFunction(() => !document.querySelector('.mute-button').disabled);
+    const collapsed = () => page.waitForFunction(() => window.innerWidth === 56 && !document.querySelector('.launcher').hidden);
+
+    await t.test('one click starts voice with exactly two controls; hangup stops audio and returns to dot', async () => {
+      await dot().click();
+      await connected();
+      assert.equal(await page.evaluate(() => window.__anamFixture.clients.length), 1);
+      assert.equal(await page.evaluate(() => window.__anamFixture.clients[0].options.disableInputAudio), false);
+      assert.equal(await page.getByRole('button').count(), 2);
+      const circle = await page.locator('.avatar').boundingBox();
+      assert.ok(Math.abs(circle.width - circle.height) < 0.1);
+      assert.equal(await page.locator('.avatar').evaluate((element) => getComputedStyle(element).borderRadius), '50%');
+      assert.equal(await page.locator('.avatar').evaluate((element) => getComputedStyle(element).borderColor), 'rgb(0, 136, 255)');
+      await page.mouse.move(4, 4);
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.mute-button')).backgroundColor === 'rgb(52, 199, 89)');
+      assert.equal(await page.locator('.end-button').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(255, 56, 60)');
+      await leaveCorner(application, page);
+      assert.equal(await page.evaluate(() => window.innerWidth), 320);
+      assert.equal(await application.evaluate(() => globalThis.__testIgnoringMouse), false);
+      await application.evaluate(({ screen }) => {
+        const bounds = screen.getPrimaryDisplay().bounds;
+        globalThis.__testPointer = { x: bounds.x + bounds.width - 1, y: bounds.y + 1 };
+      });
+      await page.getByRole('button', { name: 'Mute microphone', exact: true }).click();
+      assert.equal(await page.getByRole('button', { name: 'Unmute microphone' }).getAttribute('aria-pressed'), 'true');
+      await page.mouse.move(4, 4);
+      await page.screenshot({ path: path.join(results, 'overlay-circle-muted.png'), omitBackground: true, animations: 'disabled' });
+      await page.getByRole('button', { name: 'Unmute microphone' }).click();
+      await page.mouse.move(4, 4);
+      await page.screenshot({ path: path.join(results, 'overlay-circle.png'), omitBackground: true, animations: 'disabled' });
+      await end().click();
+      await collapsed();
+      const cleanup = await page.evaluate(() => ({ stops: window.__anamFixture.clients[0].stopCount,
+        listeners: window.__anamFixture.clients[0].listenerCount(), tracks: window.__anamFixture.trackStops }));
+      assert.equal(cleanup.stops, 1);
+      assert.equal(cleanup.listeners, 0);
+      assert.equal(cleanup.tracks, 1);
+      assert.equal(await page.getByRole('button').count(), 1);
+    });
+
+    await t.test('reopens after hangup and Escape returns to the same dot', async () => {
+      await dot().press('Enter');
+      await connected();
+      assert.equal(await page.evaluate(() => window.__anamFixture.clients.length), 2);
+      await page.keyboard.press('Escape');
+      await collapsed();
+    });
+
+    await t.test('a dropped session offers retry inside the circle', async () => {
+      await dot().click();
+      await connected();
+      await page.evaluate(() => window.__anamFixture.clients.at(-1).disconnect());
+      await page.getByRole('alert').filter({ hasText: 'disconnected' }).waitFor();
+      await page.getByRole('button', { name: 'Try again' }).click();
+      await connected();
+      await end().click();
+      await collapsed();
+    });
+
+    await t.test('cancel during connection stops late media without reopening the circle', async () => {
+      await page.evaluate(() => { window.__anamFixture.delay = 600; });
+      await dot().click();
+      await page.getByRole('status').filter({ hasText: 'Connecting to your persona' }).waitFor();
+      await end().click();
+      await collapsed();
+      await page.waitForFunction(() => window.__anamFixture.clients.at(-1).stopCount >= 2);
+      assert.equal(await page.evaluate(() => window.__anamFixture.clients.at(-1).listenerCount()), 0);
+      assert.equal(await end().count(), 0);
+    });
+
+    await t.test('SDK failures are safe and the user can collapse without a connection', async () => {
+      await page.evaluate(() => { window.__anamFixture.delay = 1; window.__anamFixture.fail = true; });
+      await dot().click();
+      await page.getByRole('button', { name: 'Try again' }).waitFor();
+      assert.doesNotMatch(await page.locator('body').innerText(), /secret-upstream-debug-details/);
+      await end().click();
+      await collapsed();
+      await page.evaluate(() => { window.__anamFixture.fail = false; });
+    });
+
+    await t.test('microphone denial does not start a session and still returns to dot', async () => {
+      await application.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('overlay:microphone');
+        ipcMain.handle('overlay:microphone', () => false);
+      });
+      const count = await page.evaluate(() => window.__anamFixture.clients.length);
+      await dot().click();
+      await page.getByRole('alert').filter({ hasText: 'Microphone access is off' }).waitFor();
+      assert.equal(await page.evaluate(() => window.__anamFixture.clients.length), count);
+      await end().click();
+      await collapsed();
+    });
+    assert.deepEqual(errors, []);
+  } finally { if (application) await application.close(); await server.close(); }
+});
+
+test('speak-only: control API drives a mic-less call, queues talk, streams per turn, falls back', { timeout: 60_000 }, async () => {
+  const server = await createServer({ configFile: false, root, plugins: [react()],
+    resolve: { alias: [{ find: '@anam-ai/js-sdk', replacement: path.join(root, 'tests/fake-sdk.mjs') }] },
+    server: { host: '127.0.0.1', port: 5173, strictPort: true } });
+  let application;
+  try {
+    await server.listen();
+    const launched = await launch(true, { ANAM_SPEAK_ONLY: '1' });
+    application = launched.application;
+    const page = launched.page;
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await application.evaluate(() => {
+      globalThis.fetch = async () => new Response(JSON.stringify({ sessionToken: 'test-ephemeral-token' }), { status: 200 });
+    });
+    let info;
+    for (let i = 0; i < 50 && !info; i++) {
+      try { info = JSON.parse(await readFile(launched.controlFile, 'utf8')); } catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    assert.ok(info, 'control file written to the temp path');
+    const call = (route, body, method = 'POST') => fetch(`http://127.0.0.1:${info.port}${route}`, { method,
+      headers: { 'x-anam-control-token': info.token }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const fixture = (fn) => page.evaluate(fn);
+
+    assert.equal((await call('/talk', { turnId: 't0', text: 'hi', final: true })).status, 503);
+    // start, then talk while connecting: queued, flushed on connect
+    await page.evaluate(() => { window.__anamFixture.delay = 400; });
+    assert.equal((await call('/session', { action: 'start' })).status, 200);
+    const queued = await call('/talk', { turnId: 't1', text: 'Hello ', final: false });
+    assert.equal((await queued.json()).queued, true);
+    await page.waitForFunction(() => window.__anamFixture.clients.length === 1);
+    await page.waitForFunction(() => window.__anamFixture.clients[0].streams.length === 1);
+    assert.equal(await fixture(() => window.__anamFixture.clients[0].options.disableInputAudio), true);
+    assert.equal(await fixture(() => window.__anamFixture.trackStops), 0);
+    await call('/talk', { turnId: 't1', text: 'world.', final: true });
+    await page.waitForFunction(() => window.__anamFixture.clients[0].streams[0].ended);
+    assert.deepEqual(await fixture(() => window.__anamFixture.clients[0].streams[0].chunks), [['Hello ', false], ['world.', true]]);
+    assert.equal(await fixture(() => window.__anamFixture.clients[0].streams[0].correlationId), 't1');
+    const state = (await (await call('/state', undefined, 'GET')).json()).state;
+    assert.equal(state.connected, true);
+    assert.equal(state.expanded, true);
+
+    // delivery failure -> one talk() fallback with the full text, no double speak
+    await page.evaluate(() => {
+      const client = window.__anamFixture.clients[0];
+      client.createTalkMessageStream = (id) => { const s = { isActive: () => false, streamMessageChunk: async () => { throw new Error('x'); }, endMessage: async () => {} }; return s; };
+    });
+    await call('/talk', { turnId: 't2', text: 'First. ', final: false });
+    await call('/talk', { turnId: 't2', text: 'Second.', final: true });
+    await page.waitForFunction(() => window.__anamFixture.clients[0].talks.length === 1);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(await fixture(() => window.__anamFixture.clients[0].talks), ['First. Second.']);
+
+    // interrupt
+    assert.equal((await call('/interrupt', {})).status, 200);
+    await page.waitForFunction(() => window.__anamFixture.clients[0].interrupts === 1);
+
+    // user clicks End call: reported through /state, window collapses
+    await page.getByRole('button', { name: 'End call and return to dot' }).click();
+    await page.waitForFunction(() => window.innerWidth === 56);
+    let after;
+    for (let i = 0; i < 30; i++) {
+      after = (await (await call('/state', undefined, 'GET')).json()).state;
+      if (!after.connected) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(after.connected, false);
+    assert.equal(after.expanded, false);
+    assert.equal(await fixture(() => window.__anamFixture.clients[0].stopCount), 1);
+
+    // session end via API stops the call and collapses
+    assert.equal((await call('/session', { action: 'start' })).status, 200);
+    await page.waitForFunction(() => window.__anamFixture.clients.length === 2 && document.querySelector('.avatar.live'));
+    assert.equal((await call('/session', { action: 'end' })).status, 200);
+    await page.waitForFunction(() => window.innerWidth === 56);
+    await page.waitForFunction(() => window.__anamFixture.clients[1].stopCount >= 1);
+    assert.equal((await call('/talk', { turnId: 't9', text: 'late', final: true })).status, 503);
+    assert.deepEqual(errors, []);
+  } finally { if (application) await application.close(); await server.close(); }
+});
+
+test('speak-only: a failed manual call restores the dot so a later control-API start works', { timeout: 60_000 }, async () => {
+  const server = await createServer({ configFile: false, root, plugins: [react()],
+    resolve: { alias: [{ find: '@anam-ai/js-sdk', replacement: path.join(root, 'tests/fake-sdk.mjs') }] },
+    server: { host: '127.0.0.1', port: 5173, strictPort: true } });
+  let application;
+  try {
+    await server.listen();
+    const launched = await launch(true, { ANAM_SPEAK_ONLY: '1' });
+    application = launched.application;
+    const page = launched.page;
+    await application.evaluate(() => {
+      globalThis.fetch = async () => new Response(JSON.stringify({ sessionToken: 'test-ephemeral-token' }), { status: 200 });
+    });
+    let info;
+    for (let i = 0; i < 50 && !info; i++) {
+      try { info = JSON.parse(await readFile(launched.controlFile, 'utf8')); } catch { await new Promise((r) => setTimeout(r, 100)); }
+    }
+    assert.ok(info, 'control file written to the temp path');
+    await page.evaluate(() => { window.__anamFixture.delay = 1; window.__anamFixture.fail = true; });
+    await page.locator('.launcher').click();
+    // the failed manual call collapses back to the dot instead of staying expanded
+    await page.waitForFunction(() => window.innerWidth === 56);
+    assert.equal(await page.locator('.launcher').isVisible(), true);
+    await page.evaluate(() => { window.__anamFixture.fail = false; });
+    const res = await fetch(`http://127.0.0.1:${info.port}/session`, { method: 'POST',
+      headers: { 'x-anam-control-token': info.token }, body: JSON.stringify({ action: 'start' }) });
+    assert.equal(res.status, 200);
+    await page.waitForFunction(() => document.querySelector('.avatar.live'));
+  } finally { if (application) await application.close(); await server.close(); }
+});
+
+test('renderer build contains no backend configuration', async () => {
+  const html = await readFile(path.join(root, 'dist/index.html'), 'utf8');
+  const scriptPath = html.match(/src="(.+?\.js)"/)[1];
+  const script = await readFile(path.resolve(root, 'dist', scriptPath), 'utf8');
+  assert.doesNotMatch(script, /ANAM_API_KEY|ec3b8e17-2ff7-517d-92e5-c13a3a865023/);
+});
+
+after(async () => { await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))); });

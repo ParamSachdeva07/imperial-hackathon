@@ -1,0 +1,437 @@
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+
+.overlay-root,
+.overlay-root * {
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.overlay-root {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  font-family: var(--font);
+  color: var(--label-text);
+}
+
+/* ---------- items ---------- */
+.item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+}
+/* Opacity TRANSITIONS (not keyframes): an item cleared mid-entrance fades out from wherever it is,
+   never jumping back to full brightness first (no flash). @starting-style gives the fade-in. */
+.item.visible {
+  opacity: 1;
+  transition: opacity var(--enter-ms) var(--easing);
+}
+@starting-style {
+  .item.visible { opacity: 0; }
+}
+.item.exiting {
+  opacity: 0;
+  transition: opacity var(--exit-ms) var(--easing);
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+
+.tone-info { --tone: var(--info); }
+.tone-warning { --tone: var(--warning); }
+.tone-success { --tone: var(--success); }
+
+/* ---------- shapes ---------- */
+.shape-outline,
+.shape-stroke,
+.ring-halo {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: d var(--move-ms) linear;
+}
+.shape-outline {
+  stroke: var(--outline-color);
+  stroke-width: calc(var(--stroke) + 2 * var(--outline));
+}
+.shape-stroke {
+  stroke: var(--tone);
+  stroke-width: var(--stroke);
+}
+.ring-halo {
+  stroke: var(--tone);
+  stroke-width: var(--stroke);
+  opacity: 0;
+  animation: halo var(--pulse-ms) var(--enter-ms) ease-out var(--pulse-count) both;
+}
+@keyframes halo {
+  0% { opacity: 0.75; stroke-width: 6px; }
+  100% { opacity: 0; stroke-width: 30px; }
+}
+.spotlight-dim {
+  fill: var(--spotlight-dim);
+  fill-rule: evenodd;
+  transition: d var(--move-ms) linear;
+}
+
+/* ---------- tone glyphs ---------- */
+.tone-glyph {
+  display: inline-flex;
+  flex: none;
+}
+.tone-glyph svg { display: block; }
+.glyph-shape {
+  fill: var(--tone);
+  stroke: var(--outline-color);
+  stroke-width: 2;
+}
+.glyph-mark {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tone-warning .glyph-mark { stroke: var(--label-bg); stroke: #111827; }
+.glyph-badge {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: left var(--move-ms) linear, top var(--move-ms) linear;
+}
+
+/* ---------- labels ---------- */
+.label {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--label-pad-y) var(--label-pad-x);
+  background: var(--label-bg);
+  color: var(--label-text);
+  border: var(--outline) solid var(--outline-color);
+  border-radius: 14px;
+  font-family: var(--font);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  line-height: var(--line-height);
+  transition: left var(--move-ms) linear, top var(--move-ms) linear, width var(--move-ms) linear, height var(--move-ms) linear;
+}
+.label-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.label-late {
+  animation: fade-in var(--enter-ms) var(--enter-ms) var(--easing) both;
+}
+
+/* ---------- connector ---------- */
+.connector-outline {
+  stroke: var(--outline-color);
+  stroke-width: calc(4px + 2 * var(--outline));
+  stroke-linecap: round;
+}
+.connector-line {
+  stroke: var(--label-bg);
+  stroke: #111827;
+  stroke-width: 4px;
+  stroke-linecap: round;
+}
+.connector-dot-outline { fill: var(--outline-color); }
+.connector-dot { fill: #111827; }
+
+/* ---------- pointer ---------- */
+/* Registered so a moved target's resting position glides over theme moveMs (150 ms), not jumps. */
+@property --p-rest-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-rest-y { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-tap-x { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --p-tap-y { syntax: "<length>"; inherits: true; initial-value: 0px; }
+.ptr {
+  transition: --p-rest-x var(--move-ms, 150ms) ease-out, --p-rest-y var(--move-ms, 150ms) ease-out,
+    --p-tap-x var(--move-ms, 150ms) ease-out, --p-tap-y var(--move-ms, 150ms) ease-out;
+}
+.ptr {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform: translate(var(--p-rest-x), var(--p-rest-y)) rotate(var(--p-angle));
+  animation: ptr-pos-tap var(--ptr-total) linear both, ptr-fade-tap var(--ptr-total) linear both;
+}
+.ptr.motion-double_tap { animation-name: ptr-pos-double_tap, ptr-fade-double_tap; }
+.ptr.motion-drag_to { animation-name: ptr-pos-drag_to, ptr-fade-drag_to; }
+.ptr-body {
+  position: absolute;
+  left: calc(var(--pointer-size) * -1 + 2px);
+  top: calc(var(--pointer-size) * -0.5);
+  width: var(--pointer-size);
+  height: var(--pointer-size);
+  transform-origin: 100% 50%;
+  animation: ptr-press-tap var(--ptr-total) linear both;
+}
+.ptr.motion-double_tap .ptr-body { animation-name: ptr-press-double_tap; }
+.ptr.motion-drag_to .ptr-body { animation-name: ptr-press-drag_to; }
+.ptr-svg { display: block; overflow: visible; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35)); }
+.ptr-hand-outline {
+  fill: var(--outline-color);
+  stroke: var(--outline-color);
+  stroke-width: calc(2 * var(--outline) + 2px);
+  stroke-linejoin: round;
+}
+/* Info blue fill + thin dark edge: reads on light and dark wallpapers alike. */
+.ptr-hand {
+  fill: var(--info);
+  stroke: #111827;
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
+
+/* ---------- steps ---------- */
+/* One step at a time: the current step's ring and label glide to the next control (calm,
+   ease-in-out); the halo pulses again only after the glide has landed. */
+.item-steps .step-ring .shape-outline,
+.item-steps .step-ring .shape-stroke {
+  transition: d var(--step-glide-ms) ease-in-out, stroke var(--step-glide-ms) ease-in-out;
+}
+.item-steps .step-halo .ring-halo {
+  animation-delay: var(--step-glide-ms);
+}
+.item-steps .step-label .label {
+  transition: left var(--step-glide-ms) ease-in-out, top var(--step-glide-ms) ease-in-out,
+    width var(--step-glide-ms) ease-in-out, height var(--step-glide-ms) ease-in-out;
+}
+/* Small, faint hint of the NEXT step (number + white outline, never a strong colour). */
+.step-hint {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--outline-color);
+  background: #111827;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.45;
+  transition: left var(--step-glide-ms) ease-in-out, top var(--step-glide-ms) ease-in-out;
+}
+
+/* ---------- explainer card ---------- */
+.card-wrap {
+  position: absolute;
+  transition: left var(--move-ms) linear, top var(--move-ms) linear;
+  animation: card-in var(--enter-ms) var(--easing) both;
+}
+@keyframes card-in {
+  from { opacity: 0; transform: scale(var(--card-enter-scale)); }
+  to { opacity: 1; transform: scale(1); }
+}
+.card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  padding: var(--card-pad);
+  background: var(--card-bg);
+  color: var(--card-text);
+  border-radius: 24px;
+  box-shadow: 0 0 0 var(--outline) var(--outline-color), 0 12px 36px rgba(0, 0, 0, 0.4);
+  font-size: var(--card-body-size);
+  line-height: var(--line-height);
+  font-weight: var(--label-weight);
+  overflow: hidden;
+}
+/* verdict: a tone accent bar down the card's left edge (inset, so measured sizes don't change) */
+.card.tone-warning, .card.tone-success, .card.tone-info {
+  box-shadow: inset 10px 0 0 var(--tone), 0 0 0 var(--outline) var(--outline-color), 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+.verdict-head { display: flex; align-items: flex-start; }
+.verdict-head-glyph { flex: none; display: flex; }
+.verdict-head .card-title { flex: 1 1 0; min-width: 0; }
+.verdict-reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--card-row-gap); }
+.card-flow { display: flex; flex-direction: column; gap: var(--card-gap); }
+.card-title {
+  margin: 0;
+  font-size: var(--card-title-size);
+  line-height: var(--card-title-lh);
+  font-weight: var(--title-weight);
+  overflow-wrap: anywhere;
+}
+.card-body { min-width: 0; }
+
+/* numbered list rows (sequence captions, anatomy legend) */
+.seq-captions,
+.ana-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-row-gap);
+}
+.cap-row { display: flex; align-items: flex-start; gap: var(--card-num-gap); }
+.num {
+  flex: none;
+  width: var(--card-num);
+  height: var(--card-num);
+  border-radius: 50%;
+  background: var(--info);
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: 24px; /* numbers are the non-colour cue: never below fontMin */
+  font-weight: 700;
+  line-height: calc(var(--card-num) - 4px);
+  text-align: center;
+}
+.cap-text { flex: 1; min-width: 0; line-height: var(--card-body-lh); overflow-wrap: anywhere; }
+
+.seq-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--card-tile);
+  margin-bottom: var(--card-gap);
+}
+.seq-cell { display: contents; }
+.seq-arrow { flex: 1; display: flex; justify-content: center; color: var(--card-muted); }
+.seq-tile {
+  position: relative;
+  flex: none;
+  width: var(--card-tile);
+  height: var(--card-tile);
+  border-radius: 18px;
+  background: var(--card-panel-bg);
+  border: 3px solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.seq-n {
+  position: absolute;
+  left: -10px;
+  top: -10px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--info);
+  border: 2px solid #fff;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 30px;
+  text-align: center;
+}
+
+/* compare */
+.cmp { display: grid; grid-template-columns: var(--compare-col) var(--compare-col); column-gap: var(--card-gap); align-items: start; }
+.cmp-col { min-width: 0; display: flex; flex-direction: column; }
+.cmp-col > .slot { margin-bottom: var(--card-gap); }
+.cmp-head { font-weight: 700; font-size: var(--card-body-size); line-height: var(--card-body-lh); overflow-wrap: anywhere; }
+.cmp-success .cmp-head { color: #86efac; }
+.cmp-warning .cmp-head { color: #fcd34d; }
+.cmp-points { list-style: none; margin: var(--card-row-gap) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--card-row-gap); }
+.bullet-row { display: flex; align-items: flex-start; gap: var(--card-bullet-gap); }
+.bullet-row .tone-glyph { margin-top: 1px; }
+.bullet-text { flex: 1; min-width: 0; line-height: var(--card-body-lh); overflow-wrap: anywhere; }
+
+/* image slots */
+.slot {
+  position: relative;
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card-panel-bg);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+}
+.slot-img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.fit-cover { object-fit: cover; }
+.fit-contain { object-fit: contain; }
+.slot-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.45);
+}
+/* Failed image: the nearest icon, large and clear (spec §7.3 fallback), never a "broken" look. */
+.slot-failed .slot-icon { color: #ffffff; }
+.shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.12) 50%, transparent 80%);
+  background-size: 250% 100%;
+  animation: shimmer 2.6s ease-in-out infinite;
+}
+@keyframes shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
+
+/* anatomy */
+.ana-box {
+  position: absolute;
+  border: 3px solid var(--info);
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px #fff, inset 0 0 0 2px #fff;
+}
+.ana-dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--info);
+  border: 3px solid #fff;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ana-legend { margin-top: var(--card-gap); }
+
+/* concept */
+.concept { display: flex; flex-direction: column; gap: var(--card-gap); }
+.concept-caption { margin-top: var(--card-row-gap); line-height: var(--card-body-lh); overflow-wrap: anywhere; }
+
+/* ---------- reduced motion: fades only ---------- */
+.reduce .ptr { animation: fade-in var(--enter-ms) var(--easing) both; }
+.reduce .ptr-body,
+.reduce .ring-halo { animation: none; }
+.reduce .ring-halo { display: none; }
+.reduce .shimmer { animation: none; background: rgba(255, 255, 255, 0.06); }
+.reduce .card-wrap { animation: fade-in var(--enter-ms) var(--easing) both; }
+.reduce .label-late { animation: fade-in var(--enter-ms) var(--easing) both; }
+.reduce *,
+.reduce *::before { transition-duration: 0s !important; }
+/* …except the fades themselves: reduce-motion still fades in and out (spec §3). */
+.reduce .item.visible { transition-duration: var(--enter-ms) !important; }
+.reduce .item.exiting { transition-duration: var(--exit-ms) !important; }
+@media (prefers-reduced-motion: reduce) {
+  .overlay-root:not(.reduce) .ptr-body { animation: none; }
+}

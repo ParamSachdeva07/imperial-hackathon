@@ -1,0 +1,498 @@
+# Integration record (for humans and agents)
+
+This file says what has been merged into `main` and how, and how the pieces talk to each other. It also covers how to keep re-merging the feature branches as their owners push fixes. **Read this before touching an integration.**
+
+Last updated: 2026-11-14. Integration branches:
+- `integration/overlay-anam` (stage 1, merged in PR #2);
+- `integration/gestures` (stage 2).
+
+---
+
+## 1. Branch map
+
+| Branch | What it is | Status |
+|---|---|---|
+| `main` | Integration target. Work lands via PRs. | Has stage 1 (PR #2). Receives `integration/gestures` |
+| `feat/overlay-tools` | **Pointy overlay**: the Electron app `apps/desktop`, the tool contract `packages/shared`, the explainer broker `backend/explainer-broker` and the dev CLI `tools/pointy-draw`. | ✅ Merged (stage 1) |
+| `feat/anam-overlay` | **Anam avatar**: the standalone Electron app in `anam-overlay/` (React and Vite) plus a FastAPI token broker on :8765. Its single commit sits on top of overlay-tools and adds only `anam-overlay/`. | ✅ Merged (stage 1) |
+| `feat/gestures-integration` | `packages/gestures`: camera hand tracking that becomes events, plus an Electron gesture service. Based on overlay-tools@2d3c0b5. It touches only `packages/gestures/`, root `vitest.config.ts` (adds a `gestures` project) and `package-lock.json`. Owner: Alexandre. | ✅ Merged and wired (stage 2, §8) |
+| `feat/gestures` | An older, standalone version of the gestures package with unrelated history. | ❌ Superseded by `feat/gestures-integration`; do not merge |
+| (later) Jev AI / brain | The controller and model brain. | ⏳ Not started; see §7 |
+
+## 2. What was done in stage 1
+
+Commits on `integration/overlay-anam`, oldest first:
+1. `Merge feat/overlay-tools`: `--no-ff`, no conflicts. `main` was empty.
+2. `Merge feat/anam-overlay`: `--no-ff`, no conflicts. It adds only `anam-overlay/`.
+3. `chore(integration)`:
+   - Root `eslint.config.js` ignores `anam-overlay/**`, which has its own toolchain: TypeScript 7, `node --test`, its own lockfile.
+   - `apps/desktop/electron.vite.config.ts` pins the Pointy renderer dev server to port **5180**. Anam's Vite is hardcoded to 5173 with `strictPort`, so this keeps them from colliding.
+4. `feat(anam-overlay)`: adds a localhost **control server** to the Anam app. See §4.
+5. `feat(overlay)`: adds the **`move_avatar` tool and auto-dodge** in Pointy. See §5.
+
+`anam-overlay/` deliberately stays **outside** the npm workspaces (`packages/*`, `apps/*`, `tools/*`, `backend/*`), for three reasons:
+- Its tests import SDK internals by relative `node_modules` path.
+- Hoisting would break those imports.
+- Its TypeScript major version differs from the root's.
+
+Keep it standalone.
+
+## 3. Runtime layout (processes and ports)
+
+| Process | Start | Port / IPC |
+|---|---|---|
+| Pointy app (`apps/desktop`) | `npm run app` (root); `npm run voice` adds the realtime voice test window | Dev server **47615** (`~/.pointy/dev-server.json`); renderer dev **5180** |
+| Explainer broker (fal images) | `npm run broker` | **47620** |
+| Anam app (`anam-overlay`) | `cd anam-overlay && npm start` (or `npm run dev`) | Control server **47630**, falling back to an ephemeral port (`~/.pointy/anam-control.json`); Vite dev **5173** |
+| Anam token broker (FastAPI) | `cd anam-overlay && backend/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765` | **8765** |
+
+Secrets:
+- Root `.env` holds `FAL_KEY` and similar. `FAL_KEY` (and the explainer broker) is only needed with `POINTY_IMAGES=1`: explainer pictures (fal.ai broker + pre-generated assets) are **off by default**, so concept/compare cards show icons and the model is told to prefer verdict, sequence, anatomy and label_parts. `npm run pointy` never needs `FAL_KEY` or the broker.
+- `anam-overlay/backend/.env` holds `ANAM_API_KEY` and `ANAM_PERSONA_ID`.
+- Never put the Anam key in the root `.env`. See `anam-overlay/README.md`.
+
+### Production: one command
+`npm run pointy` starts everything (backend, Anam in speak-only mode, Pointy in production mode). See section 10. The
+manual steps below are the older dev way and still work.
+
+### Run both together
+1. Start the Anam backend: the uvicorn command above.
+2. Run `cd anam-overlay && npm install && npm run build && npm start`. The avatar dot appears top-right. Hover the corner and click to start a call; the avatar expands.
+3. Run `npm install && npm run app` at the root. Pointy finds Anam automatically through `~/.pointy/anam-control.json`. Set `POINTY_AVATAR=anam` to force it.
+4. Drive it:
+   - `npx pointy-draw move-avatar bottom_left`
+   - `npx pointy-draw highlight …` on something under the avatar; the avatar dodges.
+
+## 4. Anam control API (added in `anam-overlay/electron/control.mts`)
+
+Files and setup:
+- `control.mts` does not import `electron`.
+- `main.mts` has about 17 lines of hooks: an import, `startControlServer({ getState, moveTo })` after `createWindow()`, and `close()` on `before-quit` / `will-quit`.
+- A failure to start is logged and does not break the app.
+
+Server:
+- Binds `127.0.0.1`. Port is `ANAM_CONTROL_PORT`, default 47630, or an ephemeral port if that one is taken.
+- Discovery file: `ANAM_CONTROL_FILE`, default `~/.pointy/anam-control.json`, containing `{port, token, pid}`.
+  - The directory is mode 0700 and the file mode 0600, written atomically.
+  - It is removed on close, but only if it is still ours.
+
+Every request:
+- needs the `x-anam-control-token` header (401 without it);
+- needs Host `127.0.0.1:<port>` or `localhost:<port>` (403 otherwise);
+- must carry no `Origin` header (403 otherwise).
+
+Bodies are limited to 4 KB.
+
+| Route | Response |
+|---|---|
+| `GET /state` | `200 {ok:true, state:{expanded, dragging, bounds, workArea, displayId}}` · `503 {ok:false, reason:"no_window"}` |
+| `POST /move` `{x,y}` (window top-left, global DIP) | `200 {ok:true, bounds}` (clamped to the work area by `placeWindow`) · `409 collapsed / dragging` · `400 invalid_input` |
+
+The avatar moves **only while expanded** (in a call). The collapsed 56px dot always stays docked top-right, where its hover launcher lives. Collapsing still re-docks it.
+
+## 5. `move_avatar` tool and auto-dodge (Pointy side)
+
+**Contract** (`packages/shared/src/overlay/schemas.ts`, additive change 6):
+- Input: `MoveAvatarInput = { position?: "auto"|"top_left"|"top_right"|"bottom_left"|"bottom_right" (default auto), avoid?: Target, displayId?: string, turnId?: string }`.
+- New `ToolResult.reason`: `"avatar_unavailable"`. It covers no avatar running, collapsed, being dragged, and a failed move.
+- Success returns `{ok:true, visible:true, resolvedBounds: <new avatar bounds>}`.
+- The tool is in `MVP_TOOL_NAMES`, so it is exported to the model. The generated JSON in `packages/shared/generated/` is regenerated.
+
+**Code:**
+- `AvatarController` port: `packages/shared/src/overlay/interfaces.ts`.
+- `apps/desktop/src/main/overlay/avatar/AnamAvatarClient.ts`:
+  - polls `GET /state` every 500 ms, with a 1 s request timeout;
+  - re-reads the discovery file when a request fails, so it survives an Anam restart;
+  - implements both `AvatarController` and `AvoidRectsProvider`, so labels and cards avoid the **real** avatar while it is expanded.
+- `apps/desktop/src/main/overlay/avatar/avatarPlacement.ts` is the pure corner chooser. It uses a 24 px inset. `auto` stays put if the current spot is clear, and otherwise picks the corner with the least overlap.
+- `OverlayService.ts`:
+  - `case "move_avatar"`;
+  - **auto-dodge**: after a drawing shows, if its target inflated by 16 px overlaps the movable avatar, the avatar moves to the `auto` corner;
+  - auto-dodge is fire-and-forget, serialized, and limited to one dodge per 1.5 s;
+  - the tool result is never changed or delayed.
+- Wiring: `apps/desktop/src/main/index.ts` always starts `AnamAvatarClient` (unless `POINTY_AVATAR=mock`), so start order doesn't matter.
+  - `avoidRects` is `CompositeAvoidRects`: the real avatar's rects while Anam answers, otherwise `MockAvoidRects` (so `POINTY_AVATAR_RECT` and `none` behave as before).
+  - `scripts/e2e-cli.ts` pins `POINTY_AVATAR=mock`, so a running Anam can't skew the e2e layout.
+- Client robustness:
+  - It re-reads the discovery file on network errors **and** 401/403, so it reconnects after an Anam restart on the same port with a new token.
+  - It ignores a discovery file whose `pid` is dead.
+  - It keeps the last good state for 2 s across failed polls, so rects don't flicker. Definitive answers (collapsed, `no_window`) apply immediately.
+  - Start and dispose are idempotent.
+- Auto-dodge:
+  - It runs on `show()`, on step-guide advance (the `advance_step` tool and target selection), and when a previously unresolved target appears.
+  - Each check recomputes overlap from the drawings live **at execution time**.
+  - The 1.5 s limit counts only moves that actually happened. A check requested inside the window gets one trailing re-check.
+  - `dispose()` cancels pending moves.
+- Anam quit removes the discovery file synchronously. A start that resolves after quit is closed. The control server has 5 s request and header timeouts.
+- Other surfaces:
+  - the `pointy-draw move-avatar [position] [target]` CLI;
+  - the realtime instructions;
+  - an eval request;
+  - docs in `POINTY_OVERLAY_INTEGRATION.md`, the overlay `README.md` and `POINTY_OVERLAY_SPEC.md`.
+
+## 6. Re-syncing when a feature branch gets fixes
+
+Owners keep pushing to their `feat/*` branches. To pull their fixes in:
+```bash
+git fetch origin
+git switch integration/overlay-anam        # or a fresh branch off main once this has landed
+git merge --no-ff origin/feat/overlay-tools
+git merge --no-ff origin/feat/anam-overlay
+npm install && npm run typecheck && npm run lint && npm test
+(cd anam-overlay && npm install && npm run build && npm test)
+```
+
+Conflict hot spots:
+- **`anam-overlay/electron/main.mts`**: only our small hook block, marked by `startControlServer`, `control`, `stopControl`. Keep it when resolving.
+  - If the owner renames `placeWindow`, `expanded` or `move`, update `getState` / `moveTo` there.
+  - `control.mts` and `tests/control.test.mjs` are integration-owned files; the owner's branch doesn't have them.
+- **`packages/shared/src/overlay/schemas.ts` and `tools.ts`**: the contract. If overlay-tools adds tools or reasons, take both sides and rerun `npm run gen:tools`. Never hand-merge `generated/*.json`.
+- **`OverlayService.ts`**: the `move_avatar` case and the auto-dodge hook after `show()`.
+- **`package-lock.json`**: regenerate it with `npm install` rather than hand-merging.
+
+Better still: ask the owners to merge `main` back into their branches once this PR lands. Then future merges are pure fast-forwards of their own work.
+
+## 7. Known gaps / next steps
+
+- **Gestures (stage 2 open items; see §8.6).** These still need a person to check:
+  - packaged-app camera and Accessibility permissions, including `NSCameraUsageDescription`;
+  - `electron-vite dev` with the gestures page;
+  - the real nut-js mouse;
+  - thresholds tuned for older users;
+  - multi-display.
+  The camera doesn't clash with Anam, because Anam only asks for audio.
+- **Jev AI / brain:** not integrated. The controller should use `exportToolDefinitions()` (which now includes `move_avatar`) and `createOverlayControl({ avatar })`. It should also decide whether to keep Pointy's own `POINTY_VOICE` realtime loop or let Anam be the only voice.
+- **Flaky upstream test:** `anam-overlay/tests/overlay.test.mjs:120` (`layout.width === layout.height` on the avatar circle) fails about 1 in 5 runs, off by roughly 1e-5 px mid-transition. It reproduces on the untouched `feat/anam-overlay` code, so it is not caused by this integration. Report it to the anam owner; a tolerance compare would fix it.
+- **Real home dir in anam's Playwright tests:** they launch the real app, which writes, then removes, `~/.pointy/anam-control.json`. Don't run them while a real Anam session is open, or set `ANAM_CONTROL_FILE` to a temp path.
+- **Constants live on both sides:** port 47630, `~/.pointy/anam-control.json` and the `ANAM_CONTROL_*` env names are defined in both `anam-overlay/electron/control.mts` and `AnamAvatarClient.ts`. Change them together.
+- **Other limits:**
+  - The control API can't start or end a call, or expand or collapse the avatar.
+  - No packaging: both apps run unpackaged.
+  - macOS only (`apps/desktop` platform layer).
+- PR #1 (`feat/overlay-tools` → `main`) is superseded by the integration PR.
+
+## 8. Stage 2: gestures (`feat/gestures-integration`)
+
+### 8.1 What landed (branch `integration/gestures`)
+1. `Merge feat/gestures-integration`: `--no-ff`, no conflicts. `packages/gestures` is a workspace package.
+2. `chore(integration)`:
+   - `npm install` reverted the branch's unrelated lockfile churn.
+   - `apps/desktop` now depends on `@pointy/gestures`.
+3. `feat(desktop)`: the gesture **service wired into the app** (§8.2).
+4. `feat(dev)`: camera-free **simulation**, CLI and docs (§8.4).
+5. `Merge` of Alexandre's 6 new commits (his own feedback window, wake ring, fist scroll, latency).
+6. Follow-up: the in-overlay feedback layer from the first iteration (`overlay:gesture`, `GestureFeedbackBridge`, `GestureLayer`) was **removed** in favour of his window, per the agreed split (§8.3). The AI overlay is identical to `origin/main`.
+
+Nothing under `packages/gestures/` was modified. Alexandre owns it.
+
+### 8.2 Wiring (opt-in)
+**Flags:**
+- `POINTY_GESTURES=1`: starts the hidden camera window plus MediaPipe.
+- `POINTY_GESTURES_SHOW=1`: shows the vision/debug window.
+- `POINTY_GESTURES_MOUSE=1`: the real OS mouse/clicks via nut-js, **only while a session is open**. This needs the macOS Accessibility permission.
+- `POINTY_GESTURES_IDLE_MS`: the session idle timeout (default 20000).
+- Tunables passed through `startGestureService({ config })` (invalid values are logged and ignored; see `gestureConfig.ts`): `POINTY_GESTURES_ZONE=x0,y0,x1,y1` (camera area mapped to the screen; the app used to ignore it, only the package launcher honoured it), `POINTY_GESTURES_FINGER_EXTEND_RATIO`, `POINTY_GESTURES_POSE_STABLE_MS`, `POINTY_GESTURES_SCROLL_GAIN`, `POINTY_GESTURES_SCROLL_DEADZONE`, `POINTY_GESTURES_DEADBAND`.
+
+**Which gesture needs what (the "one finger does nothing" report):**
+
+| Gesture | What it does | Needs |
+|---|---|---|
+| Two fingers (index + middle) | drawing / point / region, drawn in the gestures feedback window | `npm run app:gestures` is enough |
+| One finger (index) | moves the REAL OS cursor, dwell click | `npm run app:gestures:mouse` (`POINTY_GESTURES_MOUSE=1`), an open session (wake first) and macOS Accessibility for the launching terminal/Electron |
+| Closed fist, dragged | real wheel scroll of the window under the pointer | same as one finger (place the pointer with one finger first) |
+
+`npm run app:gestures` keeps the mouse OFF by default (deliberate: it never takes over the user's cursor unasked). The feedback window draws no cursor for one finger, so with the mouse off it looks dead; the app now logs `mouse=OFF ...` at startup and a one-time hint on the first one-finger/fist event. With the flag on and Accessibility missing, startup logs the permission hint (and macOS shows its prompt) because nut-js silently does nothing without it.
+
+**Performing the poses reliably (MacBook camera):** wake with a raised open palm, steady about 1 s. One finger: curl middle, ring and pinky fully, keep the thumb tucked, point the index straight UP (not at the camera), keep the fingertip in the middle band of the image (default zone y 20-65 %, x 15-85 %; move at least 1-2 cm to clear the 8 pt deadband; hold still about 1 s to click, only after moving 40 pt). Fist: close all four fingers tightly, hold 0.2 s, then drag the whole hand several cm. Run with `POINTY_GESTURES_SHOW=1` to see the camera and the log for `mouse start` / `scroll start`; if those lines never appear it is pose classification (Alexandre), if they appear and nothing moves it is permissions.
+
+**One-time setup:** `npm run gestures:assets` copies the MediaPipe wasm and downloads the ~8 MB model into `packages/gestures/.cache/public` (gitignored). Then `npm run app:gestures` builds and runs.
+
+**Code:**
+- `apps/desktop/src/main/gestures/startGestures.ts` calls `startGestureService(...)`. It never throws, and returns `null` when the flag is off or on failure.
+- **Assets:** a privileged scheme, `pointy-gestures-assets://assets/{mediapipe-wasm,models}/…`.
+  - It is registered before ready and handled on the `pointy-gestures` session partition.
+  - It is read-only, GET/HEAD, and traversal- and symlink-safe (`assetResolver.ts`).
+  - It works from both `file://` (the built app) and the dev server.
+  - The Google model URL stays as a fallback.
+- The gestures page CSP adds `'wasm-unsafe-eval'` and `blob:` workers for MediaPipe.
+- **Session seam:** `DevSessionController.ts`.
+  - Open palm opens the session; idle or `close()` ends it.
+  - It subscribes right after `startGestureService` resolves (the service never queues events).
+  - **The brain replaces this**: subscribe to `service.on("point_selected"|"region_selected"|…)` and call `service.setSessionActive`.
+- `MouseGate.ts` attaches and detaches `attachSystemMouse` (move, click and wheel scroll) with the session, so all of it is session-gated; race-safe.
+
+### 8.3 Feedback: the agreed split and his window
+**Split** (recorded in `packages/gestures/GESTURES_HANDOFF.md`): gestures draw only what the user is doing with their hand (cursor, trail, rings, wake ring, selection) in **their own** click-through window; the AI overlay (`apps/desktop/src/main/overlay`) draws only what the AI shows. Neither draws the other's content. The overlay code is therefore untouched (identical to `origin/main`).
+
+**Wiring:**
+- `startGestures.ts` calls `startGestureFeedback(...)` (via `feedbackHost.ts`) after the session controller is subscribed. A feedback failure is logged and never stops gestures. It is disposed before the service.
+- `src/preload/gestureFeedback.ts` imports `@pointy/gestures/electron/feedback-preload`; `src/renderer/gestureFeedback/{index.html,main.ts}` call `startFeedbackRenderer()` (strict CSP, transparent body). Registered in `electron.vite.config.ts` and `rendererPages.ts`.
+- **Flag:** `contentProtection` follows `POINTY_CAPTURABLE` (default protected, so the AI never sees the drawings; `POINTY_CAPTURABLE=1` for screenshots).
+- `GesturesHandle.feedback` / `.clearSelection()`: the future brain calls it when a turn ends.
+- `GesturesHandle.captureHiding` (`getWindowIds()` / `withHidden(fn)`, pure `captureHiding.ts`) is the feedback window's counterpart of `getOverlayWindowIds()` / `withOverlayHidden()`; a capture path that ignores content protection should combine both (`combineCaptureHiding`). The window is also content-protected unless `POINTY_CAPTURABLE=1`. With `POINTY_HIDE_DURING_CAPTURE=1`, main/index.ts wraps the overlay's `captureProvider` (`hideFeedbackDuringCapture`) so every capture also hides all feedback windows (`feedbackCaptureHiding` registry, includes the lazily started simulation window). `POST /gesture` rejects events whose `displayId` is not the gesture display (the feedback window covers one display).
+
+**Simulation drives his window:** `SimGestureService` (pure) implements the `GestureService` subset the feedback window and `DevSessionController` use (`onAny`, `onSession`, `setSessionActive`, `sessionActive`, `display`).
+- With `POINTY_GESTURES=1` it **merges** the real service and the simulated events (one adapter, one window); session changes go to the real service. Simulated events never reach the real service, so they never move the real mouse.
+- Without it, the feedback window starts **lazily** on the first `/gesture` or `/gesture/session` call (no extra window in normal dev runs or e2e).
+
+### 8.4 Simulate without a camera (dev)
+- Dev server: `POST /gesture { events, intervalMs? }` takes real `@pointy/gestures` event shapes, display-relative and validated by `src/dev/gestureSchema.ts`. `POST /gesture/session { active }`.
+- CLI:
+  - `npx pointy-draw gesture wake 700,450` (wake ring, then `wake_requested`)
+  - `npx pointy-draw gesture session on`
+  - `npx pointy-draw gesture circle --center 700,450 --radius 150`
+  - `gesture dwell X,Y`, `gesture point X,Y`, `gesture lost`
+  - `gesture mouse X,Y` (one finger), `gesture click X,Y [--ms]` (dwell click), `gesture scroll [--dy N | --dy -N]` (fist drag, dy>0 scrolls up). These reach the **real OS mouse** only when the app runs with `POINTY_GESTURES_MOUSE=1` AND the session is open (`SimMouseSink.ts`: the sim forwards them to `attachSystemMouse` only under both conditions; otherwise they stay in the feedback window / are dropped). They never go through the real service.
+- Verified live on macOS with screenshots (`POINTY_CAPTURABLE=1`): wake ring, cursor, trail, dwell ring and region in his window; the AI overlay draws none of it.
+
+### 8.5 Re-sync hot spots (when Alexandre pushes fixes)
+- `git merge --no-ff origin/feat/gestures-integration`, then `npm install` (regenerate the lockfile, don't hand-merge it).
+- If `events.ts` changes: `src/dev/gestureSchema.ts` (its compile-time check is bidirectional, so typecheck fails until the schema equals the package union), then `tools/pointy-draw/src/gesture.ts` if a new event needs a CLI generator.
+- If the feedback exports change (`startGestureFeedback` options, `feedback-preload`, `feedback-renderer`, or which `GestureService` members it uses): `main/gestures/feedbackHost.ts`, `SimGestureService.ts`, `src/preload/gestureFeedback.ts`, `src/renderer/gestureFeedback/main.ts`.
+- If `startGestureService` options, `attachSystemMouse` options or the vision preload/renderer exports change: `startGestures.ts`, `MouseGate.ts`, `src/preload/gestures.ts`, `src/renderer/gestures/main.ts`.
+- If `copy-wasm.mjs` or `fetch-model.mjs` output paths change: `assetResolver.ts` and the root `gestures:assets` script.
+
+### 8.6 Verified / not verified
+- **Verified on macOS:**
+  - `npm run electron:selftest -w @pointy/gestures` reports SELFTEST PASSED, including the real mouse click position and fist scrolling (Accessibility granted to Electron).
+  - The built app with `POINTY_GESTURES=1`:
+    - the wasm and model load over the custom scheme;
+    - vision reaches `running` at about 30–60 fps with hands detected;
+    - his feedback window starts with `contentProtection=true`.
+  - Sim screenshots: wake ring, trail, region and dwell ring are drawn by **his** window at the right positions, and the AI overlay draws nothing.
+  - `npm run e2e`.
+- **Verified live (camera-free, macOS):** with `POINTY_GESTURES_MOUSE=1`, `gesture session on` then `gesture mouse 400,300` moved the real cursor to 400,300 and `800,500` to 800,500 (read via CGEventGetLocation); `gesture scroll --dy=-600` scrolled a TextEdit window under the pointer (line 1 to 43 at top); after `session off` `gesture mouse` did not move the cursor; without the flag, the same sim did not move it either.
+- **Not verified:**
+  - real-hand one-finger/fist (camera) pose rules on a MacBook (see 8.7);
+  - `electron-vite dev` with the gesture pages;
+  - real-camera use with `POINTY_GESTURES_MOUSE=1`;
+  - packaged-app permissions (`NSCameraUsageDescription`, Accessibility);
+  - multi-display (v1 maps the primary display only; `/gesture` rejects other display ids);
+  - thresholds with older users.
+
+### 8.7 Issues to raise with Alexandre (inside `packages/gestures`; not patched here)
+Found by review. The fixes belong in his package, so we did not work around them:
+1. **`startGestureFeedback` doesn't replay the session after the feedback page reloads.** `startFeedbackRenderer` resets its `active` flag on load, but main only sends the session state at creation and on changes. After a reload during an open session, nothing draws until the session toggles. In practice this happens only on a dev hot-reload or a renderer crash. Fix: re-send the session state on `did-finish-load`, or add a renderer `ready` handshake as the vision window has.
+2. **`startGestureFeedback` leaks on a failed load.** If `loadPage` rejects (for example, the dev server is down), the window and the service/screen listeners stay alive and no disposer is returned. Fix: try/catch with cleanup.
+3. **No reduced-motion support in `startFeedbackRenderer`.** Its canvas animations ignore `prefers-reduced-motion`, unlike the AI overlay. Fix: an option or a media-query check.
+4. **Mouse-mode feedback is missing.** `feedbackRenderer` draws no cursor for `mouse` events (only the click ring) and nothing for `scroll`, so one-finger / fist look dead whenever the real mouse is not attached (the default). Fix: draw a small cursor dot at `mouse` x/y and a scroll glyph, independent of `attachSystemMouse`; ideally also let the host learn whether a consumer is attached.
+5. **One-finger pose has no hysteresis and the recogniser label can veto the rules.** Two-finger has sticky hysteresis; pointing does not. `RECOGNIZER_MAP` sends Thumb_Up / ILoveYou / Victory / Thumb_Down to `other`, which beats the rule result, so a thumb-out point or a slightly parted second finger emits no `mouse`. The 3D wrist-to-tip ratio (1.15) also degrades when the finger points at the camera. Suggested: sticky pointing, prefer the rules over an `other` label when they say pointing/fist, an angle-based curl test.
+6. **Expose a debug event** (raw pose, label, score) so a host can render a "why is nothing happening" HUD; and consider scrolling the focused/last-mouse window when the pointer was never moved.
+
+
+## 9. Selection -> AI (gesture selections as screenshots)
+
+When the user selects with a gesture (circle = `region_selected`, held finger = `point_selected`; display-relative
+DIP on the primary display), the app captures the screen instantly and hands the AI two images.
+
+### 9.1 Flow
+
+`gestures.sim.onAny` (real + simulated events merged; the camera-free sim in `devHarness` `ensureSim` is attached
+the same way) -> `attachSelectionCapture` (`apps/desktop/src/main/capture/SelectionCapture.ts`) -> `SelectionStore`
+-> consumers (`store.onSnapshot`): the voice window (`POINTY_VOICE=1`, IPC `voice:selection`, never sent to other
+windows) and the dev SSE stream. Composition is in `main/index.ts`; it is wrapped in try/catch so a capture problem
+never stops the app. The feedback selection fades by itself; capture does not clear it. The store is cleared when the
+gesture session closes.
+
+### 9.2 The two images (`SelectionSnapshot`)
+
+| | `full` | `focus` |
+|---|---|---|
+| Content | whole display, downscaled to <= 1280 px wide, selection outlined, rest dimmed (brightness 0.65) | close-up of the selection, unmarked |
+| Region | polygon outlined | bbox padded 15% (min 120x80 DIP) |
+| Point | ring + dot; only the focus box left undimmed | ~480x320 DIP box around the point |
+| Size / quality | JPEG q70 | <= 768 px, JPEG q80 |
+
+`full.markedRegion` is the selection bbox as 0..1 fractions of the full image. All geometry is global DIP.
+
+### 9.3 Budget
+
+Total decoded JPEG bytes <= 180,000 (`DEFAULT_BUDGET_BYTES`), so the base64 payload (~240 KB) fits one 256 KB data-channel message. Steps: quality 70/80, 55/65, 40/50, then image scale
+0.8, 0.64, 0.5, until it fits; if nothing fits the smallest attempt is kept and a warning is logged. The voice
+renderer additionally fits the data-channel message limit (`selectionItems`: text+both images, else focus then full
+as two messages, else focus only, else geometry text only; it logs `selection sent: ...`).
+
+### 9.4 Hiding
+
+Content protection is unreliable on macOS 26 / Electron 45, so every capture runs inside
+`combineCaptureHiding(overlay {getOverlayWindowIds, withOverlayHidden}, feedbackCaptureHiding)`: AI overlay and the
+gesture feedback windows are hidden for the capture, so neither the user's drawing nor the AI's drawings appear.
+
+### 9.5 Screen Recording permission (macOS)
+
+`DesktopCapturerProvider` throws `ScreenPermissionError` when screen access is not "granted" (and on missing source
+or empty thumbnail) instead of returning a grey placeholder. `SelectionCapture` logs it once per session
+(`[selection] ...`) and produces no snapshot. Grant Screen Recording to the app that runs Electron (Terminal /
+iTerm / the Electron binary) in System Settings -> Privacy & Security, then restart it.
+
+### 9.6 Dev route and CLI
+
+- `GET /debug/selection` (dev server, same token + host checks): latest `SelectionSnapshot` as full JSON including
+  data URLs, or `{"snapshot":null}`.
+- SSE `/events` carries `{type:"selection.captured", selection: SelectionSnapshotMeta}` (no base64).
+- `pointy-draw selection [--out DIR]` (default `artifacts/selection`, gitignored) writes `full.jpg`, `focus.jpg`,
+  `selection.json` (meta) and prints the meta. Camera-free: `pointy-draw gesture session on`, then
+  `pointy-draw gesture circle --center 700,450 --radius 150` or `pointy-draw gesture point 700,450`, then
+  `pointy-draw selection`.
+- Offline model check: `npx tsx scripts/eval-voice-tools.ts --selection DIR --ask "Is this safe?"`.
+
+### 9.7 Voice wiring
+
+`openVoiceWindow({ selectionSource: store })`. The renderer adds the images as a conversation item on the `oai-events`
+data channel (queued until the channel opens) and never sends `response.create`; the instructions tell the model to
+use the selection when the user says "this/here". `OPENAI_API_KEY` / `OPENAI_REALTIME_MODEL` in `.env`.
+
+### 9.8 Seam for the brain
+
+Import `SelectionSnapshot`, `snapshotMeta`, `dataUrlBytes` from `@pointy/shared/context/selection`. In main, hold the
+`SelectionStore` from `main/index.ts` and use `store.latest()` (peek), `store.consume()` (take once) or
+`store.onSnapshot(cb)`; `store.onClear(cb)` fires when the session closes. Log with `snapshotMeta()`, never the raw
+snapshot.
+
+## 10. Production mode (`npm run pointy`)
+
+The real macOS desktop instead of the fake mail app: raise an open hand (or press Cmd+Option+P) and the Anam avatar
+opens and listens; GPT sees a screenshot plus the real on-screen controls, explains, and labels or points at real UI;
+Anam speaks GPT's answer. macOS only. Runs from the repo (no packaged app).
+
+### 10.1 Architecture
+
+```
+ mic ──> hidden assistant window (WebRTC) ── data channel ──> GPT Realtime (text output only)
+              ^  apps/desktop/src/renderer/assistant                |  response.output_text.delta
+              |                                                     v
+   AssistantController (main/assistant) ── sentence batches ──> AnamSpeaker ── POST /talk ──> Anam app (ANAM_SPEAK_ONLY=1)
+      |   |   |                                                                               speaks, mic-less call
+      |   |   +-- tool calls ──> OverlayControl.handleTool ──> overlay windows (labels, arrows, steps, explainers)
+      |   +------ per turn: captureScreenContext = 1 screenshot (<=1280 px, <=150 KB) + AX element list (<=150)
+      |                          ^ DesktopCapturerProvider        ^ AxBoundsProvider -> pointy-ax (Swift helper, stdio JSON)
+      +---------- gesture session open only while the assistant is open (wake_requested / Cmd+Option+P / tray opens)
+ menu bar tray (status, open/close, mouse kill switch, gestures, permissions, quit) + Cmd+Option+P
+```
+
+- Composition: `apps/desktop/src/main/production.ts`, selected by `resolveMode` (`main/mode.ts`). The dev composition in
+  `main/index.ts` is unchanged.
+- The overlay uses `AxBoundsProvider` as its `BoundsProvider`, so element ids in tool calls are real AX ids
+  (`ax-` + hash, stable between snapshots). Production instructions are `assistant/instructions.ts` (the dev-only
+  `buildInstructions` is not used); the tools are the unchanged `exportToolDefinitions`.
+- Interaction rules: the mic is **half-duplex** (muted while Anam speaks, re-enabled from an estimate refined by Anam
+  `/state.speaking`). **Interrupt** (Cmd+Option+P while thinking or speaking, or the tray) cancels the response and the
+  speech. A barge-in cannot happen while the avatar talks, because the mic is muted. Closing: 45 s of silence,
+  Cmd+Option+P, the tray, Anam's end-call button, or Anam becoming unreachable.
+
+### 10.2 Run it
+
+`npm run pointy` (flags: `--no-anam`, `--rebuild`, `--debug`, `--check`, `--help`). Preflight checks Node >= 22, the keys
+(presence only), the backend venv, gesture assets, port 8765 and stale builds, then starts uvicorn, waits for `/health`,
+starts Anam (`ANAM_SPEAK_ONLY=1`), then Pointy (`POINTY_MODE=production`, gestures and mouse on). Ctrl+C stops all.
+
+| Flag (env) | Meaning |
+|---|---|
+| `POINTY_MODE=production` | Production composition (set by the launcher) |
+| `POINTY_DEV_SERVER=1` | Also start the localhost dev server, so `pointy-draw` works against real AX ids (`--debug` sets it) |
+| `POINTY_GESTURES=0` / `POINTY_GESTURES_MOUSE=0` | Production defaults both to on; set 0 for hotkey-only / no real mouse |
+| `ANAM_SPEAK_ONLY=1` | Anam: no persona LLM, no mic, control routes `/session`, `/talk`, `/interrupt` (anam-overlay README) |
+| `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL` | Root `.env` (model optional) |
+
+Dev mode, the fake mail fixture, `pointy-draw` and `npm run e2e` are unchanged.
+
+### 10.3 Permissions (and where they apply)
+
+Camera (gestures), Microphone (assistant window), Accessibility (element list and real mouse), Screen Recording
+(screenshots). At start the app prints one line, for example `Permissions: Camera ok, Microphone ok, Accessibility ok,
+Screen Recording ok`, and opens System Settings for anything missing. In dev the grants apply to the **launching terminal**
+(cmux, Terminal, iTerm), not to Electron, and need a terminal restart after granting. Degraded modes: no Accessibility
+means screenshot only; no Screen Recording means the element list only; no camera means hotkey and tray only. The
+`pointy-ax` helper is spawned by the app and inherits the terminal's Accessibility grant.
+
+### 10.4 Anam Lab setup
+
+In Anam Lab, **disable the persona LLM** for the persona in `ANAM_PERSONA_ID`; the avatar must only speak text sent through
+`talk()`. Anam bills per session-minute: calls are ended on close, with a 3-minute idle safety stop in the Anam app.
+
+### 10.5 Costs
+
+- Anam: per session-minute while the avatar is open.
+- OpenAI Realtime: audio input plus a text answer, plus one screenshot (about 150 KB JPEG) and an element list per spoken
+  turn. The previous turn's screen items are deleted, so context does not grow. Selection images ride along only when
+  fresh.
+
+### 10.6 Privacy
+
+- Every spoken turn sends a screenshot of the display and the element labels to OpenAI. Nothing is sent while the
+  assistant is closed.
+- Secure text fields are never read by the AX helper, and field values are not read (only static text and headings).
+  Screen text is fenced as untrusted in the prompt and the model is told never to read out secrets.
+- The OpenAI key stays in main; the assistant window only gets a short-lived client secret. The Anam key stays in its
+  own backend `.env`.
+- The mouse is session-gated and has a menu-bar kill switch. The gestures toggle stops wake and session control; the camera
+  keeps running until Pointy quits.
+
+### 10.7 Open items
+
+- **Alexandre (gestures):** `wake_requested` fires only while the gesture session is closed. Worked around in Pointy: the
+  session is paused while an answer is spoken (section 10.9), so the open hand interrupts then. A native "palm while session
+  open" event would still be cleaner (it would also allow open-hand close while listening). No pause API either, so the
+  gestures toggle cannot stop the camera.
+- **Anam teammate:** please review the speak-only mode in `anam-overlay` (behind `ANAM_SPEAK_ONLY=1`; default behaviour
+  and its tests unchanged). `speaking` is inferred from persona stream events and not yet confirmed against a live session.
+- Tune the half-duplex timing (`speechMarginMs`, `speechStartLatencyMs`) after a live test; the overlay blinks about 80 ms
+  per turn while the screenshot is taken.
+- Not exercised live in this repo state: the real WebRTC path and a full spoken turn end to end.
+- **Verified live (2026-11-15):**
+  - Anam speak-only opened over a full-screen app and spoke `/talk` text. `speaking` was reported, and it collapsed to the hidden dot on `/session end`.
+  - With production + `POINTY_DEV_SERVER=1`, AX listed 35 real elements, and a highlight landed on TextEdit's real Bold button.
+  - An offline eval with a TextEdit screenshot + AX list produced `point_at` on the right AX id.
+- **Known limitations (from review):**
+  - Trackpad or mouse-wheel scrolling is not observed, so coordinate drawings stay until the next turn. Only gesture scrolling invalidates them.
+  - Fixed in the selection-offer change: answers generated before an app switch no longer draw coordinates from the old
+    screenshot (coordinate-target tool calls are skipped with `stale_context`; element ids still run), and a failed manual
+    speak-only call now collapses the avatar. Still open: a control-API start during a connected manual speak-only call is ignored.
+  - If an offer reply is cancelled, or the user speaks with no response following, the outline stays until the next response or the 120 s cap.
+
+### 10.8 Selection -> offer -> explain
+
+1. **Select.** The user circles/selects something with gestures. The outline now lives 120 s in production
+   (`selectionTtlMs` -> feedback page `?selectionTtlMs=`; dev keeps 4 s).
+2. **Offer.** `AssistantController` subscribes to `selection.onSnapshot` while open. If the user is not mid-utterance it
+   (interrupting first if busy) sends the selection images plus an `[offer]` note and `response.create` with
+   `response: { tool_choice: "none" }` (spoken only, no screen capture). Mid-utterance, the existing late-attach path carries the selection.
+   The model briefly offers to explain it or check whether it is safe.
+3. **Answer.** Decline: the model says okay and the outline clears. Safe/scam check: `label_parts` on the suspicious parts
+   (<=5, tone `warning`), then `show_explainer` with the `verdict` template (tone + 1-3 reasons), then a spoken summary.
+   Explain: `label_parts` and/or an explainer plus speech. Follow-up turns keep the offer items and skip the screenshot (AX list only).
+4. **Clear.** The first user response clears the outline via `gestures.clearSelection`. If the user stays silent for 15 s
+   after the offer finished (mic released), the offer items and outline are dropped. A newer selection replaces a pending offer.
+
+Tools: `label_parts` (MVP tool, items `{target,label<=40,tone}`), `show_explainer` `{kind:"verdict",tone,reasons}`. Stale-context
+guard: `AssistantDeps.contextRevision` is bumped by AX context events and the scroll invalidator.
+
+How to test: `npm test` (AssistantController offer/stale tests, toolTargets, overlay tests); `npm run pointy`, select an email, listen for the offer;
+gallery scenes `parts-scam`, `explainer-verdict`; `pointy-draw label-parts ID:"Label" --tone warning`.
+
+### 10.9 Conversation fixes (barge-in, memory, interrupt, guard, pointer)
+
+- **Barge-in** (`POINTY_BARGE_IN`): `guarded` (default) keeps the mic open while Anam speaks and treats speech as a candidate
+  until its transcript is not an echo of Anam; `open` interrupts on any speech (use headphones); `off` is half-duplex (mic muted
+  while speaking, no talking over).
+- **Memory:** a rolling in-RAM conversation memory is injected as `[memory]` when the assistant opens. It survives close/open,
+  is never persisted, and is cleared by the tray item "Start over (forget conversation)" (and dies on quit). Images are stubbed in memory.
+- **Hotkey (Cmd+Option+P):** single press = interrupt when something is active or was recently (30 s); double press (within 600 ms) = close;
+  closed = open. Tray "Stop talking" = interrupt. Idle auto-close is 150 s.
+- **Open-hand interrupt:** `wake_requested` only fires while the gesture session is closed, so while an answer is spoken
+  (`onAnswerSpeaking`) production pauses ONLY the gesture session (`gestures.setSessionPaused`). The open hand then arrives as
+  `wake_requested` and `controller.wake()` interrupts. The pause deliberately bypasses the `setSessionActive` wrapper: it does not call
+  `ax.setActive(false)` (that would cancel anchors, `target_lost`, and the AI's `label_parts`/highlight drawings would vanish while Anam
+  talks), it does not reset the selection guard, and `attachSelection` ignores that session-close for `clearOnSessionClose`, so the
+  SelectionStore survives. Cost: while paused the real mouse is detached and a new selection is not captured. A real open/close
+  (controller teardown, gestures toggle) clears the pause flag first.
+- **Selection guard:** after a selection the real mouse, click and scroll are frozen (and clamped edge selections dropped) until the
+  selection is answered/dismissed (`clearSelection`) plus a 1.5 s cooldown, or at most `selectionTtlMs + 500` (120.5 s in production,
+  so the controller's 15 s silence timeout always fires first). Use `gestures.events` (the guarded view), not `.sim`, for selection and scroll consumers; wake events are not filtered.
+- **Dwell-click is off by default** (one finger only points). `POINTY_GESTURES_CLICK=1` enables it.
+- **Pointer questions** ("what am I pointing at / explain this"): each turn's context gets a `[pointer]` line (position, the AX element under it via
+  `AxBoundsProvider.elementAt`, which skips Pointy and Anam pids), a pointer marker on the screenshot and a close-up crop when the pointer
+  moved within 10 s. The model answers verbally without drawing.
+- **Model / effort:** `POINTY_REALTIME_MODEL` (default `gpt-realtime-2.1-mini`) and `POINTY_REASONING_EFFORT` (default `minimal`, auto
+  fallback to `low` if the API rejects it). Start log: `[pointy] realtime model=..., effort=...` and the effective values after minting.
+

@@ -1,0 +1,15 @@
+node_modules/
+out/
+dist/
+.cache/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+backend/explainer-broker/.cache/
+artifacts/
+.claude/
+
+apps/desktop/resources/bin/
