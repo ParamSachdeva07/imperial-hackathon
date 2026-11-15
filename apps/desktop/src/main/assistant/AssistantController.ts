@@ -113,7 +113,7 @@ export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
   speechPollMs: 400,
   maxSpeechExtendMs: 10_000,
   selectionMaxAgeMs: 60_000,
-  anamConnectGraceMs: 25_000,
+  anamConnectGraceMs: 120_000, // a Synthesia avatar can take about a minute to join; the voice works meanwhile
   anamQueueMaxAgeMs: 30_000,
   offerNoAnswerMs: 15_000,
   offerDelayMs: 1200,

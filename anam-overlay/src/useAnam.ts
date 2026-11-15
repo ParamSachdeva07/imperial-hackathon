@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnamEvent, ConnectionClosedCode, createClient } from '@anam-ai/js-sdk';
 import type { MessageDeliveryFailure } from '@anam-ai/js-sdk';
+import { SYNTHESIA_JOIN_MS, createSynthesiaClient } from './synthesiaClient';
 
 type Client = ReturnType<typeof createClient>;
 type Phase = 'idle' | 'connecting' | 'connected' | 'stopping' | 'error';
@@ -76,6 +77,7 @@ export function useAnam() {
     setMuted(!useMicrophone && !speakOnly); // speak-only: the microphone belongs to the app driving the avatar and starts live
     setStatus('Creating your session…');
     let active: ActiveSession | null = null;
+    let avatarError = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await window.overlay.getSessionToken();
@@ -88,7 +90,16 @@ export function useAnam() {
         }
       }
       if (!current()) return;
-      const client = createClient(result.sessionToken, { disableInputAudio: !useMicrophone });
+      // A Synthesia avatar (the backend decides) is driven through the same surface as the Anam client.
+      const synthesia = result.livekit;
+      const client = synthesia
+        ? createSynthesiaClient({ url: synthesia.url, token: result.sessionToken, avatarIdentity: synthesia.avatarIdentity,
+          startAvatar: async () => {
+            const started = await window.overlay.startAvatar();
+            if (!started.ok) avatarError = started.error;
+            return started;
+          } }) as unknown as Client
+        : createClient(result.sessionToken, { disableInputAudio: !useMicrophone });
       const disposers: (() => void)[] = [];
       active = { client, streams: [], turns: new Map(), dispose: () => disposers.splice(0).forEach((dispose) => dispose()) };
       session.current = active;
@@ -159,10 +170,10 @@ export function useAnam() {
       // If setup completes after a timeout/cancel, stop the newly created connection too.
       void starting.then(() => { if (!current()) void client.stopStreaming().catch(() => undefined); }, () => undefined);
       await Promise.race([starting, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new UserVisibleError('Connection timed out. Check your network and retry.')), 45_000);
+        timer = setTimeout(() => reject(new UserVisibleError('Connection timed out. Check your network and retry.')), synthesia ? SYNTHESIA_JOIN_MS : 45_000);
       })]);
       if (!current()) return;
-      if (lipSync) {
+      if (lipSync || synthesia) {
         // The voice is heard from the app that produced it; here it only drives the lips, so the avatar's own copy is silenced.
         active.lips = client.createAgentAudioInputStream({ encoding: 'pcm_s16le', sampleRate: 24000, channels: 1 });
         const video = document.getElementById('persona-video') as HTMLVideoElement | null;
@@ -179,6 +190,7 @@ export function useAnam() {
           setPhase('error'); setStatus('Unable to connect');
           // SDK exceptions can contain server details. Only our explicit errors are shown.
           setError(cause instanceof UserVisibleError ? cause.message
+            : avatarError ? avatarError // our own backend's wording
             : 'The avatar could not connect. Check your network and microphone permissions, then retry.');
         }
       }

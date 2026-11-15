@@ -1,14 +1,18 @@
 """Loopback-only Anam token broker. The API key never leaves this process."""
 
 import asyncio
+import base64
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import hashlib
+import hmac
+import json
 import os
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dotenv import dotenv_values
 from fastapi import FastAPI, HTTPException, Request
@@ -28,6 +32,14 @@ class Settings:
     # Lip-sync (ANAM_LIP_SYNC=1 with ANAM_AVATAR_ID): the avatar mouths audio it is sent; Anam runs no voice or model.
     lip_sync_avatar_id: str = ""
     avatar_model: str = ""
+    # Synthesia interactive avatar (used when SYNTHESIA_API_KEY is set, unless AVATAR_PROVIDER=anam). Synthesia
+    # renders the avatar into a LiveKit room of ours, so it needs that project's URL, key and secret too.
+    synthesia_api_key: str = field(default="", repr=False)
+    synthesia_api_base: str = "https://developers.synthesia.io"
+    synthesia_avatar_id: str = ""
+    livekit_url: str = ""
+    livekit_api_key: str = field(default="", repr=False)
+    livekit_api_secret: str = field(default="", repr=False)
 
     @classmethod
     def load(cls):
@@ -39,7 +51,30 @@ class Settings:
             persona_id=(values.get("ANAM_PERSONA_ID") or "").strip(),
             lip_sync_avatar_id=(values.get("ANAM_AVATAR_ID") or "").strip() if values.get("ANAM_LIP_SYNC") == "1" else "",
             avatar_model=(values.get("ANAM_AVATAR_MODEL") or "").strip(),
+            synthesia_api_key=("" if values.get("AVATAR_PROVIDER") == "anam" else (values.get("SYNTHESIA_API_KEY") or "").strip()),
+            synthesia_api_base=(values.get("SYNTHESIA_API_URL") or "https://developers.synthesia.io").rstrip("/"),
+            synthesia_avatar_id=(values.get("SYNTHESIA_AVATAR_ID") or "").strip(),
+            livekit_url=(values.get("LIVEKIT_URL") or "").strip(),
+            livekit_api_key=(values.get("LIVEKIT_API_KEY") or "").strip(),
+            livekit_api_secret=(values.get("LIVEKIT_API_SECRET") or "").strip(),
         )
+
+    @property
+    def synthesia(self):
+        return bool(self.synthesia_api_key)
+
+    def validate_synthesia(self):
+        missing = [name for name, value in (
+            ("SYNTHESIA_AVATAR_ID", self.synthesia_avatar_id), ("LIVEKIT_URL", self.livekit_url),
+            ("LIVEKIT_API_KEY", self.livekit_api_key), ("LIVEKIT_API_SECRET", self.livekit_api_secret),
+        ) if not value or value.startswith(("<", "your-"))]
+        if missing:
+            raise HTTPException(503, f"Add {', '.join(missing)} to backend/.env, then retry.")
+        if not self.livekit_url.startswith(("wss://", "ws://", "https://")):
+            raise HTTPException(503, "LIVEKIT_URL must be your LiveKit project's wss:// address.")
+
+    def livekit_ws_url(self):
+        return "wss://" + self.livekit_url[len("https://"):] if self.livekit_url.startswith("https://") else self.livekit_url
 
     def persona_config(self):
         if not self.lip_sync_avatar_id:
@@ -48,6 +83,8 @@ class Settings:
                 **({"avatarModel": self.avatar_model} if self.avatar_model else {})}
 
     def validate(self):
+        if self.synthesia:
+            return self.validate_synthesia()
         if not self.api_key or self.api_key.startswith(("<", "your-")):
             raise HTTPException(503, "Add ANAM_API_KEY to backend/.env, then retry.")
         base = urlsplit(self.api_base)
@@ -63,6 +100,29 @@ class Settings:
 
 class SessionToken(BaseModel):
     sessionToken: str
+    # Synthesia only: the LiveKit room to join with sessionToken, and the identity the avatar will join under.
+    livekitUrl: str | None = None
+    avatarIdentity: str | None = None
+
+
+AVATAR_IDENTITY = "synthesia-avatar-agent"
+DRIVER_IDENTITY = "avatar-window"
+
+
+def livekit_token(config: Settings, *, room: str, identity: str, name: str, attributes: dict[str, str] | None = None) -> str:
+    """A LiveKit access token (HS256 JWT) for one participant of one room. Both participants are agents:
+    the window sends the voice audio, the avatar publishes video on the window's behalf."""
+    def part(value: dict) -> bytes:
+        return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=")
+    now = int(time())
+    claims = {
+        "iss": config.livekit_api_key, "sub": identity, "name": name, "nbf": now - 10, "exp": now + 3600, "kind": "agent",
+        "video": {"roomJoin": True, "room": room, "canPublish": True, "canSubscribe": True, "canPublishData": True},
+        **({"attributes": attributes} if attributes else {}),
+    }
+    signed = part({"alg": "HS256", "typ": "JWT"}) + b"." + part(claims)
+    signature = hmac.new(config.livekit_api_secret.encode(), signed, hashlib.sha256).digest()
+    return (signed + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")).decode()
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None):
@@ -72,7 +132,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(12.0, connect=5.0), follow_redirects=False,
+            # Starting a Synthesia avatar only answers once the avatar is live in the room (they allow 75 s).
+            timeout=httpx.Timeout(85.0, connect=5.0), follow_redirects=False,
             trust_env=False, transport=transport,
         ) as client:
             application.state.anam_http = client
@@ -114,9 +175,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             if len(attempts) >= 6:
                 raise HTTPException(429, "Too many connection attempts. Retry in a minute.", headers={"Retry-After": "60"})
             attempts.append(now)
+        if config.synthesia:
+            # The window joins this room first; POST /api/avatar-session then brings the avatar into it.
+            room = f"call-{uuid4().hex}"
+            request.app.state.room = room
+            return SessionToken(
+                sessionToken=livekit_token(config, room=room, identity=DRIVER_IDENTITY, name="Avatar window"),
+                livekitUrl=config.livekit_ws_url(), avatarIdentity=AVATAR_IDENTITY)
         try:
             upstream = await request.app.state.anam_http.post(
-                f"{config.api_base}/v1/auth/session-token",
+                f"{config.api_base}/v1/auth/session-token", timeout=12.0,
                 headers={"Authorization": f"Bearer {config.api_key}"},
                 json={"personaConfig": config.persona_config()},
             )
@@ -142,6 +210,50 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if not isinstance(token, str) or not token.strip():
             raise HTTPException(502, "Anam returned no session token.")
         return SessionToken(sessionToken=token)
+
+    @application.post("/api/avatar-session")
+    async def avatar_session(request: Request):
+        """Start the Synthesia avatar in the room the last session token was issued for. Answers once it is live."""
+        if request.headers.get("x-anam-overlay") != "1":
+            raise HTTPException(403, "Use the desktop application to start a session.")
+        config = settings or Settings.load()
+        if not config.synthesia:
+            raise HTTPException(404, "No Synthesia avatar is configured.")
+        config.validate()
+        room = getattr(request.app.state, "room", None)
+        if not room:
+            raise HTTPException(409, "No call is open.")
+        token = livekit_token(config, room=room, identity=AVATAR_IDENTITY, name="Synthesia avatar",
+                              attributes={"lk.publish_on_behalf": DRIVER_IDENTITY})
+        try:
+            upstream = await request.app.state.anam_http.post(
+                f"{config.synthesia_api_base}/api/interactive-avatars/sessions",
+                headers={"Authorization": f"Bearer {config.synthesia_api_key}"},
+                json={"avatarIds": [config.synthesia_avatar_id], "livekitUrl": config.livekit_ws_url(), "livekitToken": token},
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(504, "The Synthesia avatar took too long to join. Please retry.") from None
+        except httpx.HTTPError:
+            raise HTTPException(502, "Cannot reach Synthesia. Check your internet connection.") from None
+        if not upstream.is_success:
+            try:
+                code = upstream.json().get("code")
+            except (ValueError, AttributeError):
+                code = None
+            messages = {
+                "feature_not_in_plan": "Your Synthesia plan does not include interactive avatars.",
+                "quota_exceeded": "Your Synthesia interactive avatar quota is used up.",
+                "concurrency_limit": "Another Synthesia avatar session is still running. End it or wait, then retry.",
+                "insufficient_scope": "The Synthesia API key needs the Interactive Avatars (write) scope.",
+            }
+            by_status = {401: "Synthesia rejected the API key. Check backend/.env.",
+                         404: "Synthesia could not find that avatar. Check SYNTHESIA_AVATAR_ID (it starts with av_).",
+                         409: "The call closed while the avatar was joining."}
+            # Never relay upstream bodies; they can include credentials or internal details.
+            raise HTTPException(429 if upstream.status_code == 429 else 502,
+                                messages.get(code) or by_status.get(upstream.status_code)
+                                or "Synthesia could not start the avatar. Please retry.")
+        return {"ok": True}
 
     return application
 

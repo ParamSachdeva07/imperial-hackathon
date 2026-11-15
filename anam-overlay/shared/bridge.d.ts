@@ -1,4 +1,5 @@
-export type TokenResult = { ok: true; sessionToken: string } | { ok: false; error: string };
+/** `livekit` is present for a Synthesia avatar: the room to join with sessionToken and the avatar's identity in it. */
+export type TokenResult = { ok: true; sessionToken: string; livekit?: { url: string; avatarIdentity: string } } | { ok: false; error: string };
 export type SpeakCommand =
   | { type: 'start'; session: number }
   | { type: 'end' }
@@ -13,6 +14,8 @@ export interface OverlayBridge {
   onSpeakCommand(callback: (command: SpeakCommand) => void): () => void;
   reportSpeak(report: SpeakReport): void;
   getSessionToken(): Promise<TokenResult>;
+  /** Synthesia: bring the avatar into the room this window has joined. Resolves once it is live (can take a minute). */
+  startAvatar(): Promise<{ ok: true } | { ok: false; error: string }>;
   requestMicrophone(): Promise<boolean>;
   setExpanded(expanded: boolean): Promise<void>;
   getLauncherVisibility(): Promise<boolean>;

@@ -93,8 +93,9 @@ export async function runPreflight(deps) {
   add("openai-key", openai, openai ? "OPENAI_API_KEY present" : "OPENAI_API_KEY missing", `Add OPENAI_API_KEY=... to ${rootEnv}`);
 
   if (!noAnam) {
-    const anam = readKeys(anamEnv).has("ANAM_API_KEY");
-    add("anam-key", anam, anam ? "ANAM_API_KEY present" : "ANAM_API_KEY missing", `Add ANAM_API_KEY=... to ${anamEnv} (see .env.example there)`);
+    const keys = readKeys(anamEnv);
+    const avatar = keys.has("SYNTHESIA_API_KEY") ? "SYNTHESIA_API_KEY" : keys.has("ANAM_API_KEY") ? "ANAM_API_KEY" : null;
+    add("anam-key", !!avatar, avatar ? `${avatar} present` : "no avatar key", `Add SYNTHESIA_API_KEY=... or ANAM_API_KEY=... to ${anamEnv} (see .env.example there)`);
 
     const venvPy = join(root, "anam-overlay/backend/.venv/bin/python");
     const hasUvicorn = exists(join(root, "anam-overlay/backend/.venv/bin/uvicorn"));

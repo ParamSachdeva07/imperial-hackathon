@@ -91,13 +91,15 @@ async function fetchToken(): Promise<TokenResult> {
       method: 'POST', headers: { 'X-Anam-Overlay': '1' },
       signal: AbortSignal.timeout(15_000), redirect: 'error', cache: 'no-store',
     });
-    const body = await response.json() as { detail?: unknown; sessionToken?: unknown };
+    const body = await response.json() as { detail?: unknown; sessionToken?: unknown; livekitUrl?: unknown; avatarIdentity?: unknown };
     if (!response.ok) return { ok: false, error: typeof body.detail === 'string'
       ? body.detail.slice(0, 240) : 'The local backend could not create a session.' };
     if (typeof body.sessionToken !== 'string' || !body.sessionToken.trim()) {
       return { ok: false, error: 'The local backend returned no session token.' };
     }
-    return { ok: true, sessionToken: body.sessionToken };
+    return { ok: true, sessionToken: body.sessionToken,
+      ...(typeof body.livekitUrl === 'string' && typeof body.avatarIdentity === 'string'
+        ? { livekit: { url: body.livekitUrl, avatarIdentity: body.avatarIdentity } } : {}) };
   } catch {
     return { ok: false, error: 'Cannot reach the local backend. Start FastAPI on 127.0.0.1:8765 and retry.' };
   }
@@ -154,6 +156,18 @@ ipcMain.handle('anam:session-token', async (event): Promise<TokenResult> => {
   if (!trusted(event)) return { ok: false, error: 'Untrusted window.' };
   tokenRequest ??= fetchToken().finally(() => { tokenRequest = null; });
   return tokenRequest;
+});
+ipcMain.handle('anam:avatar-session', async (event): Promise<{ ok: true } | { ok: false; error: string }> => {
+  if (!trusted(event)) return { ok: false, error: 'Untrusted window.' };
+  try {
+    const response = await fetch('http://127.0.0.1:8765/api/avatar-session', {
+      method: 'POST', headers: { 'X-Anam-Overlay': '1' },
+      signal: AbortSignal.timeout(90_000), redirect: 'error', cache: 'no-store',
+    });
+    if (response.ok) return { ok: true };
+    const body = await response.json().catch(() => null) as { detail?: unknown } | null;
+    return { ok: false, error: typeof body?.detail === 'string' ? body.detail.slice(0, 240) : 'The avatar could not be started.' };
+  } catch { return { ok: false, error: 'The avatar could not be started. Check that the local backend is running.' }; }
 });
 ipcMain.handle('overlay:microphone', async (event) => {
   if (!trusted(event)) return false;

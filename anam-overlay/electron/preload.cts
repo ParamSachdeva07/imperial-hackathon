@@ -10,6 +10,7 @@ const bridge: OverlayBridge = {
   },
   reportSpeak: (report) => ipcRenderer.send('anam:speak-report', report),
   getSessionToken: () => ipcRenderer.invoke('anam:session-token'),
+  startAvatar: () => ipcRenderer.invoke('anam:avatar-session'),
   requestMicrophone: () => ipcRenderer.invoke('overlay:microphone'),
   setExpanded: (expanded) => ipcRenderer.invoke('overlay:expanded', expanded),
   getLauncherVisibility: () => ipcRenderer.invoke('overlay:launcher-visibility'),
