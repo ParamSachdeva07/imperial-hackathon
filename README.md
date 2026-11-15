@@ -129,8 +129,6 @@ packages/gestures/ Camera hand tracking (MediaPipe) turned into gesture events
 anam-overlay/      The avatar window and its local token service (Python, FastAPI)
 execution/         The execution agent: planner (Luna), navigator, Chrome extension
 native/ax-helper/  Swift helper that reads on-screen controls through accessibility
-backend/, assets/  Optional explainer pictures (off by default)
-tools/pointy-draw/ Command-line tool for drawing overlays by hand while developing
 scripts/pointy.mjs One command that starts everything
 ```
 

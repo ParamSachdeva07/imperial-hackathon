@@ -2,7 +2,7 @@
  * ExplainerService (spec §7): builds explainer card bodies and loads their async parts.
  *  - sequence / compare text: rendered instantly (local templates).
  *  - concept panels and compare images: image slots start "loading" (calm shimmer) and become
- *    "ready" or "failed" (large nearest-icon fallback) via the ImageSource (FalClient).
+ *    "ready" or "failed" (large nearest-icon fallback) via the ImageSource.
  *  - anatomy: crop of the user's own screen (ScreenCaptureProvider) + callouts mapped into the
  *    crop. No fal.ai involved.
  */
@@ -19,7 +19,7 @@ import type {
 import { findDisplay } from "../coords";
 import type { ResolvedTarget } from "../TargetResolver";
 import { normaliseInCrop, planCrop } from "./anatomyCrop";
-import type { ImageSource } from "./falClient";
+import type { ImageSource } from "./imageSource";
 import { nearestIcon } from "./iconMatch";
 
 export interface ExplainerState {

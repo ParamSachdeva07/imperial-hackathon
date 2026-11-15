@@ -1,6 +1,5 @@
 /**
- * Production composition (POINTY_MODE=production, see mode.ts): the real desktop instead of the fake mail
- * app. Accessibility elements (AxBoundsProvider) + screenshots feed GPT Realtime (text out); the answer is
+ * The app's composition on the real desktop. Accessibility elements (AxBoundsProvider) + screenshots feed GPT Realtime (text out); the answer is
  * spoken by the Anam avatar and drawn with the overlay tools. A menu-bar app: tray, Cmd+Alt+P, no Dock icon.
  * The dev composition lives in index.ts and is untouched by this file.
  */
@@ -8,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, screen } from "electron";
 import { exportToolDefinitions, type ScreenCaptureProvider } from "@pointy/shared/overlay";
-import { createOverlayControl, AnamAvatarClient, anamControlFile, imagesEnabled, readManifestPrompts } from "./overlay";
+import { createOverlayControl, AnamAvatarClient, anamControlFile } from "./overlay";
 import { CompositeAvoidRects } from "./overlay/avatar/CompositeAvoidRects";
 import { TurnAvoidRects } from "./overlay/avatar/TurnAvoidRects";
 import { MockAvoidRects } from "./overlay/mocks/MockAvoidRects";
@@ -58,7 +57,7 @@ function anamPid(): number | null {
 export interface ProductionOptions {
   repoRoot: string;
   contentProtection: boolean;
-  /** Mode.devServer: also start the localhost dev server (pointy-draw) against the real AX ids. */
+  /** Also start the localhost developer server against the real AX ids. */
   devServer: boolean;
 }
 
@@ -68,7 +67,6 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   const env = process.env;
   const displays = new ElectronScreen();
   const primary = () => displays.getDisplays().find((d) => d.id === displays.getPrimaryDisplayId());
-  const assetsDir = join(repoRoot, "assets", "explainers");
 
   // --- real screen elements (Accessibility); without a grant the assistant falls back to screenshots
   const ax = new AxBoundsProvider({
@@ -102,8 +100,6 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     captureProvider: hideFeedback(provider),
     avoidRects: new CompositeAvoidRects(anam, new MockAvoidRects(primary, "none")),
     avatar: anam,
-    assetsDir,
-    images: imagesEnabled(env),
     screen: displays,
     dev: {
       contentProtection: opts.contentProtection,
@@ -170,7 +166,6 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   }
 
   // --- assistant: hidden Realtime window + controller
-  const images = imagesEnabled(env);
   // --- execution agent (POINTY_EXECUTION=0 turns it off): the assistant can hand a request to it and keep talking
   const executionOn = env.POINTY_EXECUTION !== "0";
   let mouseBeforeTask = false;
@@ -190,7 +185,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     log: plog,
   });
   const tools = [
-    ...exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] }),
+    ...exportToolDefinitions({ images: false }),
     ...(executionOn ? EXECUTION_TOOLS : []),
     END_CALL_TOOL,
   ];
@@ -199,7 +194,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     preloadDir: PRELOAD_DIR,
     loadPage: (w) => loadRendererPage(w, "assistant"),
     mintSecret: async () => {
-      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images, execution: executionOn }), tools });
+      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ execution: executionOn }), tools });
       plog(`realtime session: model=${secret.model}, effort=${secret.effort ?? "default"}`);
       return secret;
     },
@@ -360,7 +355,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
   tray.refresh(perms.summary);
   if (perms.missing.length > 0) void openMissingSettings(perms);
 
-  // --- optional dev server (POINTY_DEV_SERVER=1): pointy-draw against the real AX ids
+  // --- optional dev server (POINTY_DEV_SERVER=1) against the real AX ids
   if (opts.devServer) {
     await ax.snapshotNow("dev-server").catch(() => undefined); // seed the element cache (observer events only fire on later changes)
     const sim = new MockBoundsProvider((rect) => String(screen.getDisplayMatching(rect).id));
@@ -372,10 +367,6 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
       overlay,
       boundsProvider: sim,
       screen: displays,
-      assetsDir,
-      images,
-      openFixture: false,
-      openVoice: false,
       selection: { store: selectionStore, attach: attachSelection },
       gestures: gestures ? { sim: gestures.sim, session: gestures.session } : null,
     });

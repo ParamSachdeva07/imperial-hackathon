@@ -1,32 +1,21 @@
 /**
- * DEV-ONLY harness around the overlay: the fake mail app (fixture), the localhost dev server for
- * `pointy-draw`, the GPT Realtime voice test window, the second-instance hand-off and console logging.
- * Kept out of the production composition in main/index.ts.
+ * Developer harness around the overlay (POINTY_DEV_SERVER=1): the localhost developer server with gesture
+ * simulation, and renderer console logging.
  */
-import { app, type BrowserWindow } from "electron";
-import { delay } from "@pointy/shared/node/env";
-import { readManifestPrompts } from "../main/overlay/explainer/manifest";
+import { app } from "electron";
 import type { MockBoundsProvider } from "../main/overlay/mocks/MockBoundsProvider";
 import type { OverlayHandle, ScreenSource } from "../main/overlay";
 import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import { snapshotMeta } from "@pointy/shared/context/selection";
 import { launchGestureFeedback, primaryDisplayInfo } from "../main/gestures/feedbackHost";
 import { SimGestureService } from "../main/gestures/SimGestureService";
-import { loadRendererPage, PRELOAD_DIR } from "../main/rendererPages";
 import { startDevServer } from "./devServer";
 import { assertEventsForDisplay, GestureBody, GestureSessionBody } from "./gestureSchema";
-import { openFixtureWindow } from "./fixtureWindow";
-import { openVoiceWindow } from "./realtime/voiceWindow";
 
 export interface DevHarnessOptions {
   overlay: OverlayHandle;
   boundsProvider: MockBoundsProvider;
   screen: ScreenSource;
-  assetsDir: string;
-  /** Explainer pictures are on (POINTY_IMAGES=1): lists the pre-generated prompts and lets the model use pictures. Default off. */
-  images?: boolean;
-  openFixture: boolean;
-  openVoice: boolean;
   /**
    * The real gesture layer (POINTY_GESTURES=1), else null. Real: POST /gesture is merged into its
    * feedback window and session controller. Null: the feedback window is started lazily on the first
@@ -65,51 +54,6 @@ export function installDevLogging(): void {
 export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
   const { overlay, boundsProvider, screen } = opts;
 
-  // The fake mail app is the test surface: reopenable (CLI `pointy-draw fixture`, the voice
-  // window's button, and automatically when a voice session starts).
-  let fixtureWindow: BrowserWindow | null = null;
-  const ensureFixture = async (): Promise<void> => {
-    if (fixtureWindow && !fixtureWindow.isDestroyed()) {
-      if (fixtureWindow.isMinimized()) fixtureWindow.restore();
-      fixtureWindow.show();
-    } else {
-      fixtureWindow = openFixtureWindow(boundsProvider, (win) => loadRendererPage(win, "fixture"), PRELOAD_DIR);
-    }
-    // Wait (briefly) until its elements have been reported, so targets resolve right away.
-    for (let i = 0; i < 30 && boundsProvider.listElementIds().length === 0; i++) await delay(100);
-  };
-  if (opts.openFixture) void ensureFixture();
-
-  let voiceWindow: BrowserWindow | null = null;
-  const openVoice = () => {
-    if (voiceWindow && !voiceWindow.isDestroyed()) {
-      voiceWindow.show();
-      voiceWindow.focus();
-      return;
-    }
-    voiceWindow = openVoiceWindow({
-      control: overlay.control,
-      apiKey: process.env.OPENAI_API_KEY,
-      preloadDir: PRELOAD_DIR,
-      loadPage: (win) => loadRendererPage(win, "voice"),
-      ensureFixture,
-      ...(opts.selection ? { selectionSource: opts.selection.store } : {}),
-      ctx: {
-        listElements: () => boundsProvider.listElementRects(),
-        getDisplays: () => screen.getDisplays(),
-        primaryDisplayId: () => screen.getPrimaryDisplayId(),
-        pregeneratedImagePrompts: () => (opts.images ? readManifestPrompts(opts.assetsDir) : Promise.resolve([])),
-        images: opts.images === true,
-      },
-    });
-    console.log("[pointy] voice test window opened");
-  };
-  if (opts.openVoice) openVoice();
-  // `npm run voice` while Pointy is already running: open the voice window in this instance.
-  app.on("second-instance", (_e, _argv, _cwd, data) => {
-    if ((data as { voice?: boolean } | undefined)?.voice) openVoice();
-  });
-
   overlay.control.onEvent((e) => console.log(`[pointy] event ${JSON.stringify(e)}`));
 
   // Camera-free gestures drive the gestures package's own feedback window (not the AI overlay). With the
@@ -138,7 +82,7 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
     for (const d of lazyStop.splice(0)) d();
   });
 
-  // A dev-server problem (e.g. port in use) must not stop the overlay or the voice window.
+  // A dev-server problem (e.g. port in use) must not stop the overlay.
   const server = await startDevServer({
     control: overlay.control,
     debug: overlay.debug,
@@ -147,10 +91,6 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
     getPrimaryDisplayId: () => screen.getPrimaryDisplayId(),
     ...(opts.selection ? { getSelection: () => opts.selection!.store.latest() } : {}),
     routes: {
-      "/fixture": async () => {
-        await ensureFixture();
-        return { ok: true, elements: boundsProvider.listElementIds().length };
-      },
       "/gesture": async (body) => {
         const b = GestureBody.parse(body);
         const sim = await ensureSim();
@@ -170,7 +110,7 @@ export async function startDevHarness(opts: DevHarnessOptions): Promise<void> {
       },
     },
   }).catch((err: unknown) => {
-    console.error(`[pointy] dev server not started (pointy-draw unavailable): ${String(err)}`);
+    console.error(`[pointy] dev server not started: ${String(err)}`);
     return null;
   });
   if (server) {

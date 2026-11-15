@@ -1,7 +1,7 @@
 /**
  * Integration entry point for teammates:
  *
- *   const overlay = createOverlayControl({ boundsProvider, captureProvider, avoidRects, assetsDir });
+ *   const overlay = createOverlayControl({ boundsProvider, captureProvider, avoidRects });
  *   // register exportToolDefinitions() with the voice model; route its calls to overlay.control.handleTool
  *   // forward overlay.control.onEvent(...) to the model; call onTurnStart/onContextChange/onTargetSelected
  *   overlay.dispose();
@@ -12,14 +12,11 @@ import { join } from "node:path";
 import type { BrowserWindow } from "electron";
 import type { AvatarController, AvoidRectsProvider, BoundsProvider, OverlayControl, ScreenCaptureProvider } from "@pointy/shared/overlay";
 import { loadRendererPage, PRELOAD_DIR } from "../rendererPages";
-import type { ImageSource } from "./explainer/falClient";
-import { DEFAULT_BROKER_URL, imagesEnabled, resolveImageSource } from "./imagesFlag";
+import type { ImageSource } from "./explainer/imageSource";
 import { OverlayService } from "./OverlayService";
 import { ElectronScreen, OverlayWindowManager } from "./OverlayWindowManager";
 import { getOverlayPlatform } from "./platform";
 import type { OverlayDebug, ScreenSource } from "./ports";
-
-export { DEFAULT_BROKER_URL, imagesEnabled };
 
 export interface CreateOverlayOptions {
   /** Accessibility teammate: where elements are (spec §6). */
@@ -32,17 +29,7 @@ export interface CreateOverlayOptions {
   cardAvoidRects?: AvoidRectsProvider;
   /** The voice avatar window: enables the `move_avatar` tool and auto-dodge. Usually the same object as `avoidRects`. */
   avatar?: AvatarController;
-  /**
-   * Folder with pre-generated explainer pictures (assets/explainers). With `images: true` it enables
-   * concept/compare pictures (local assets first, then the fal.ai broker). Without it, or with
-   * `images` off, and without `imageSource`, those panels show their large fallback icon.
-   */
-  assetsDir?: string;
-  /** Opt in to explainer pictures (assetsDir + fal.ai broker). Default false: no ImageSource, no broker calls, no pregenerated assets. Apps pass `imagesEnabled()` (POINTY_IMAGES=1). */
-  images?: boolean;
-  /** fal.ai broker (backend/explainer-broker). Default DEFAULT_BROKER_URL. */
-  brokerUrl?: string;
-  /** Replace the picture source entirely (tests, other backends). */
+  /** A picture source for concept/compare cards. Without one those panels show their large fallback icon. */
   imageSource?: ImageSource;
   /** Share one display source with your own code (default: Electron's `screen`). */
   screen?: ScreenSource;
@@ -81,7 +68,6 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     screen,
   );
   windows.start();
-  const imageSource = resolveImageSource(opts);
   const service = new OverlayService({
     boundsProvider: opts.boundsProvider,
     captureProvider: opts.captureProvider,
@@ -90,7 +76,7 @@ export function createOverlayControl(opts: CreateOverlayOptions): OverlayHandle 
     ...(opts.avoidRects ? { avoidRects: opts.avoidRects } : {}),
     ...(opts.cardAvoidRects ? { cardAvoidRects: opts.cardAvoidRects } : {}),
     ...(opts.avatar ? { avatar: opts.avatar } : {}),
-    ...(imageSource ? { imageSource } : {}),
+    ...(opts.imageSource ? { imageSource: opts.imageSource } : {}),
     hideDuringCapture: dev.hideDuringCapture ?? false,
     reduceMotion: () => Boolean(dev.forceReduceMotion) || platform.prefersReducedMotion(),
   });

@@ -3,7 +3,7 @@ import type { AvatarController, DisplayInfo, OverlayEvent, Point, Rect, RenderIt
 import { OverlayService } from "./OverlayService";
 import type { SceneSink, ScreenSource } from "./ports";
 import { FakeBoundsProvider, FakeClock, flushPromises } from "./testing/fakeClock";
-import type { ImageSource } from "./explainer/falClient";
+import type { ImageSource } from "./explainer/imageSource";
 
 const PRIMARY: DisplayInfo = {
   id: "1",

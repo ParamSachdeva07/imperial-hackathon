@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-/** Load secrets (OPENAI_API_KEY, FAL_KEY, …) from the gitignored repo-root `.env`; a missing file is fine. */
+/** Load secrets (OPENAI_API_KEY, …) from the gitignored repo-root `.env`; a missing file is fine. */
 export function loadRepoEnv(repoRoot: string): void {
   const file = join(repoRoot, ".env");
   if (existsSync(file)) process.loadEnvFile(file);

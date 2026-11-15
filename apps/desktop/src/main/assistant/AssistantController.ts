@@ -16,7 +16,7 @@ import type { OverlayControl, Rect } from "@pointy/shared/overlay";
 import type { SelectionSnapshot } from "@pointy/shared/context/selection";
 import type { Clock, TimerHandle } from "../overlay/clock";
 import { SILENCE_MS } from "./realtimeProtocol";
-import { selectionItems } from "../../renderer/voice/realtimeEvents";
+import { selectionItems } from "./realtimeEvents";
 import { screenItemEventWithin, type ScreenContext } from "./screenContext";
 import { SentenceBatcher } from "./sentenceBatcher";
 import { estimateSpeakMs } from "./speechEstimate";

@@ -1,12 +1,10 @@
 /**
  * The overlay's public entry point (what teammates import). See README.md in this folder.
  */
-export { createOverlayControl, DEFAULT_BROKER_URL, imagesEnabled, type CreateOverlayOptions, type OverlayHandle } from "./createOverlayControl";
+export { createOverlayControl, type CreateOverlayOptions, type OverlayHandle } from "./createOverlayControl";
 export type { OverlayDebug, ScreenSource } from "./ports";
 /** The Anam voice avatar: an AvatarController + AvoidRectsProvider (see avatar/AnamAvatarClient.ts). */
 export { AnamAvatarClient, anamControlFile } from "./avatar/AnamAvatarClient";
-/** imagePrompts that have pre-generated pictures in assetsDir → exportToolDefinitions({ pregeneratedImagePrompts }). */
-export { readManifestPrompts } from "./explainer/manifest";
 export {
   exportToolDefinitions,
   type AvatarController,

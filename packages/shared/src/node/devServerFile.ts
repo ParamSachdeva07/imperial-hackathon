@@ -1,6 +1,6 @@
 /**
  * Where the dev app publishes its localhost dev-server connection ({ port, token }) for the
- * `pointy-draw` CLI and the scripts. POINTY_DEV_FILE overrides it (isolated test runs).
+ * developer scripts. POINTY_DEV_FILE overrides it (isolated test runs).
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -24,7 +24,7 @@ export function readDevConnection(): DevConnection {
   try {
     return JSON.parse(readFileSync(file, "utf8")) as DevConnection;
   } catch {
-    throw new Error(`Pointy dev app is not running (no ${file}). Start it with: npm run app`);
+    throw new Error(`Pointy dev app is not running (no ${file}). Start it with: npm run pointy -- --debug`);
   }
 }
 

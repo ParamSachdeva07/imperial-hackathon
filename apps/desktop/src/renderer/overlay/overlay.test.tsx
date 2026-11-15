@@ -5,7 +5,7 @@ import { OverlayRoot } from "./OverlayRoot";
 import { OverlayScene } from "./OverlayScene";
 import { calloutDot } from "./explainer/AnatomyTemplate";
 import { ImageSlotView } from "./explainer/ImageSlot";
-import { SCENES, DISPLAY } from "../gallery/scenes";
+import { SCENES, DISPLAY } from "./testing/scenes";
 import { ICON_NAMES } from "./icons/Icon";
 import { IconName } from "@pointy/shared/overlay/schemas";
 

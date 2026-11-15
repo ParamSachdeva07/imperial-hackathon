@@ -1,4 +1,4 @@
-/** Pure rendering of one RenderScene (shared by the real overlay window and the gallery). */
+/** Pure rendering of one RenderScene (shared by the real overlay window and the tests). */
 import type { RenderScene } from "@pointy/shared/overlay/render";
 import { CardView } from "./explainer/Card";
 import { HighlightView } from "./HighlightView";

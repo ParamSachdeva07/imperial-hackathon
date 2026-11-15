@@ -1,8 +1,0 @@
-{
-  "title": "Warning signs",
-  "items": [
-    { "target": { "kind": "element", "elementId": "fixture.emailSender" }, "label": "Odd sender address", "tone": "warning" },
-    { "target": { "kind": "element", "elementId": "fixture.emailBody" }, "label": "Pressure to act fast", "tone": "warning" },
-    { "target": { "kind": "element", "elementId": "fixture.emailLink" }, "label": "Link goes elsewhere", "tone": "warning" }
-  ]
-}

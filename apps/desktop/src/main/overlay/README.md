@@ -13,7 +13,6 @@ const overlay = createOverlayControl({
   boundsProvider,                 // you: where elements are         (BoundsProvider)
   captureProvider,                // you: screen crops for anatomy    (ScreenCaptureProvider, rect in GLOBAL DIP)
   avoidRects: { getAvoidRects: () => [avatarWindow.getBounds()] },   // optional
-  assetsDir: join(appRoot, "assets/explainers"),                     // pictures: also pass images: imagesEnabled() (POINTY_IMAGES=1; off by default)
 });
 
 realtime.registerTools(exportToolDefinitions());   // or packages/shared/generated/overlay-tools.json
@@ -85,16 +84,9 @@ async loading): see `measureCard` for its size and `renderer/overlay/explainer/V
 
 This overlay draws only what the AI shows. What the user does with their hand (cursor, trail, rings,
 wake ring, selection) is drawn by the gestures package's own feedback window, started from
-`../gestures/`. Neither draws the other's content. No camera needed to test: `npx pointy-draw gesture ...`.
+`../gestures/`. Neither draws the other's content.
 
-## Dev only
+## Developer server
 
-- `npm run app` — overlay + fake mail app + dev server. `npm run voice` — plus the GPT Realtime test
-  window (`OPENAI_API_KEY` in `.env`); running it while the app is up opens the window in that app.
-- `npx pointy-draw --help` — every tool from the terminal; `npx pointy-draw fixture` reopens the
-  fake mail app.
-- `npm run e2e` — every CLI command against the fake mail app. `npm run eval:voice` — the real model
-  choosing tools for typed requests, drawn live.
-- `npm run broker` / `npm run pregen` — fal.ai image broker / pre-generate pictures (`FAL_KEY`; only with `POINTY_IMAGES=1`).
-- `npm run capture:gallery -w @pointy/desktop` — screenshots of every visual state.
-- Env flags are listed at the top of `apps/desktop/src/main/index.ts`.
+`npm run pointy -- --debug` also starts a localhost developer server (`src/dev/devServer.ts`) for driving and
+inspecting the overlay and simulating gestures without a camera.

@@ -1,5 +1,5 @@
 /** Globals exposed by the preload scripts (contextIsolation bridge). */
-import type { FixtureBoundsMessage, ImageFailedMessage, PaintedMessage, RenderScene } from "@pointy/shared/overlay/render";
+import type { ImageFailedMessage, PaintedMessage, RenderScene } from "@pointy/shared/overlay/render";
 
 export interface PointyOverlayApi {
   /** Subscribe to scenes from main. Returns unsubscribe. */
@@ -15,13 +15,8 @@ export interface PointyOverlayApi {
   ready(): void;
 }
 
-export interface PointyFixtureApi {
-  reportBounds(msg: FixtureBoundsMessage): void;
-}
-
 declare global {
   interface Window {
     pointyOverlay?: PointyOverlayApi;
-    pointyFixture?: PointyFixtureApi;
   }
 }

@@ -24,8 +24,6 @@ export default defineConfig({
       rollupOptions: {
         input: {
           overlay: resolve(__dirname, "src/preload/overlay.ts"),
-          fixture: resolve(__dirname, "src/preload/fixture.ts"),
-          voice: resolve(__dirname, "src/preload/voice.ts"),
           gestures: resolve(__dirname, "src/preload/gestures.ts"),
           gestureFeedback: resolve(__dirname, "src/preload/gestureFeedback.ts"),
           assistant: resolve(__dirname, "src/preload/assistant.ts"),
@@ -42,9 +40,6 @@ export default defineConfig({
       rollupOptions: {
         input: {
           overlay: resolve(__dirname, "src/renderer/overlay/index.html"),
-          fixture: resolve(__dirname, "src/renderer/fixture/index.html"),
-          gallery: resolve(__dirname, "src/renderer/gallery/index.html"),
-          voice: resolve(__dirname, "src/renderer/voice/index.html"),
           gestures: resolve(__dirname, "src/renderer/gestures/index.html"),
           gestureFeedback: resolve(__dirname, "src/renderer/gestureFeedback/index.html"),
           assistant: resolve(__dirname, "src/renderer/assistant/index.html"),

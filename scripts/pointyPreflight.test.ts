@@ -100,7 +100,7 @@ describe("helpers", () => {
 });
 
 describe("runPreflight", () => {
-  it("never requires FAL_KEY or the explainer broker (pictures are off unless POINTY_IMAGES=1)", async () => {
+  it("never requires a picture key or broker", async () => {
     const r = await runPreflight(deps());
     expect(r.ok).toBe(true);
     expect(JSON.stringify(r.checks)).not.toMatch(/fal|explainer|47620/i);

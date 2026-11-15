@@ -29,7 +29,6 @@ Flags
   --rebuild   force rebuilding apps/desktop and anam-overlay
   --debug     also enable the dev server and the gesture camera preview
   --check     run the preflight only, start nothing
-  (explainer pictures are off; POINTY_IMAGES=1 turns them on and then needs FAL_KEY + the broker)
   -h, --help  show this help
 `;
 

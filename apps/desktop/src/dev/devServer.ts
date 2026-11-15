@@ -1,5 +1,5 @@
 /**
- * Dev server (spec §8.1): localhost-only HTTP API the `pointy-draw` CLI talks to. Dev builds only.
+ * Developer server: a localhost-only HTTP API for driving and inspecting the overlay by hand.
  *
  * Security: binds 127.0.0.1; every request needs the `X-Pointy-Token` header (random per run,
  * written to devServerFile() with mode 0600); Host must be 127.0.0.1/localhost (blocks
@@ -13,7 +13,7 @@
  *   GET  /state    debug snapshot     GET /displays     GET /elements     GET /element-rects
  *   GET  /debug/anatomy?id=…  an anatomy card's captured image (verify capture exclusion)
  *   GET  /debug/selection     latest gesture SelectionSnapshot (full JSON incl. image data URLs) or {snapshot:null}
- *   POST <route>   extra routes supplied by the dev harness (e.g. /fixture)
+ *   POST <route>   extra routes supplied by the dev harness (e.g. /gesture)
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -42,7 +42,7 @@ export interface DevServerDeps {
   getPrimaryDisplayId: () => string;
   /** Latest gesture selection snapshot (GET /debug/selection). */
   getSelection?: () => SelectionSnapshot | null;
-  /** Extra POST routes from the dev harness (e.g. /fixture). */
+  /** Extra POST routes from the dev harness (e.g. /gesture). */
   routes?: Record<string, (body: unknown) => Promise<unknown>>;
 }
 

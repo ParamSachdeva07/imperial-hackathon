@@ -4,7 +4,7 @@
  * main, where AssistantController decides what to do. When the model speaks (audio output), its voice is
  * played here, in the page that owns the microphone, so the browser's echo cancellation removes it from
  * what the model hears; the same audio is reported to main as PCM for the avatar to lip-sync to.
- * WebRTC flow as in the dev voice window (renderer/voice/main.tsx): ephemeral secret from main ->
+ * WebRTC flow: ephemeral secret from main ->
  * POST https://api.openai.com/v1/realtime/calls (application/sdp) -> data channel "oai-events".
  */
 import type { AssistantCommand, AssistantMessage } from "../../main/assistant/ipc";

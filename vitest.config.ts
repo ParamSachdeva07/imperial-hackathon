@@ -29,22 +29,6 @@ export default defineConfig({
       },
       {
         test: {
-          name: "broker",
-          root: "./backend/explainer-broker",
-          include: ["src/**/*.test.ts"],
-          environment: "node",
-        },
-      },
-      {
-        test: {
-          name: "cli",
-          root: "./tools/pointy-draw",
-          include: ["src/**/*.test.ts"],
-          environment: "node",
-        },
-      },
-      {
-        test: {
           name: "gestures",
           root: "./packages/gestures",
           include: ["test/**/*.test.ts"],

@@ -1,7 +1,7 @@
 /**
  * MockBoundsProvider (spec §6): stands in for the accessibility teammate's BoundsProvider.
- * Element rects come from named sources — a JSON file and/or the live fixture window — and can be
- * perturbed with simulated moves and removals (dev CLI `pointy-draw sim ...`).
+ * Element rects come from named sources — such as a JSON file — and can be
+ * perturbed with simulated moves and removals.
  */
 import { readFileSync } from "node:fs";
 import type { BoundsProvider, ElementBounds, ElementRect, Rect } from "@pointy/shared/overlay";
@@ -21,10 +21,10 @@ export class MockBoundsProvider implements BoundsProvider {
   private removed = new Set<string>();
   private listeners = new Set<() => void>();
 
-  /** @param displayFor resolves a display id for rects without one (e.g. from the fixture). */
+  /** @param displayFor resolves a display id for rects without one . */
   constructor(private readonly displayFor: (rect: Rect) => string = () => "0") {}
 
-  /** Replace one source's elements (e.g. "fixture" every time the fixture reports layout). */
+  /** Replace one source's elements . */
   setSource(name: string, elements: Record<string, { rect: Rect; displayId?: string | undefined }>): void {
     const map = new Map<string, ElementBounds>();
     for (const [id, e] of Object.entries(elements)) map.set(id, { rect: e.rect, displayId: e.displayId ?? this.displayFor(e.rect) });

@@ -48,7 +48,7 @@ import { realClock, type Clock, type TimerHandle } from "./clock";
 import { displayForRect, findDisplay } from "./coords";
 import { ExpiryManager, expiresAtTurnStart, expiresOnContextChange } from "./ExpiryManager";
 import { ExplainerService } from "./explainer/ExplainerService";
-import type { ImageSource } from "./explainer/falClient";
+import type { ImageSource } from "./explainer/imageSource";
 import { chooseAvatarPosition } from "./avatar/avatarPlacement";
 import { inflate, intersects, rectsEqual } from "./geometry";
 import { placeBeside, pointerBody, type Placement } from "./LayoutEngine";

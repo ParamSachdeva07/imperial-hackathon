@@ -9,8 +9,7 @@
     "prebuild": "node ../../packages/gestures/scripts/copy-wasm.mjs && ../../scripts/build-ax-helper.sh",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json",
-    "capture:gallery": "electron-vite build && electron scripts/capture-gallery.mjs"
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json"
   },
   "dependencies": {
     "@pointy/gestures": "*",
