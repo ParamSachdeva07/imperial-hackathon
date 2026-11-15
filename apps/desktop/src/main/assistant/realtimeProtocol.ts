@@ -7,12 +7,12 @@ export function realtimeModel(): string {
   return process.env.POINTY_REALTIME_MODEL || process.env.OPENAI_REALTIME_MODEL || DEFAULT_REALTIME_MODEL;
 }
 
-export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini";
+export const DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1";
 export const FALLBACK_REASONING_EFFORT = "low";
 
 /** Reasoning effort (GA field: session.reasoning.effort). Verified accepted: minimal|low|medium|high|xhigh (+none). */
 export function reasoningEffort(): string {
-  return process.env.POINTY_REASONING_EFFORT || "minimal";
+  return process.env.POINTY_REASONING_EFFORT || "low";
 }
 
 /** One-line summary for a start log. */

@@ -16,8 +16,6 @@ export type ControlOptions = {
   filePath?: string;
   /** Speak-only routes (ANAM_SPEAK_ONLY=1). Without it /session, /talk and /interrupt are 404. */
   speak?: SpeakController;
-  /** Agent mode: put a text message into the live conversation (POST /message {text}). Without it the route is 404. */
-  message?(text: string): boolean;
 };
 export type ControlServer = { close(): Promise<void>; removeFileSync(): void; port: number };
 
@@ -118,14 +116,6 @@ export async function startControlServer(opts: ControlOptions): Promise<ControlS
         if (result === 'no_call') return send(res, 503, { ok: false, reason: 'no_call' });
         if (result === 'queue_full') return send(res, 429, { ok: false, reason: 'queue_full' });
         return send(res, 200, { ok: true, queued: result === 'queued' });
-      }
-      if (opts.message && req.method === 'POST' && url.pathname === '/message') {
-        const raw = await readBody(req, TALK_BODY_LIMIT);
-        let body: unknown = null;
-        try { body = raw === null ? null : JSON.parse(raw); } catch { body = null; }
-        const text = (body && typeof body === 'object' ? (body as { text?: unknown }).text : null);
-        if (typeof text !== 'string' || !text.trim() || text.length > 4000) return send(res, 400, { ok: false, reason: 'invalid_input' });
-        return opts.message(text) ? send(res, 200, { ok: true }) : send(res, 503, { ok: false, reason: 'no_call' });
       }
       if (req.method === 'POST' && url.pathname === '/move') {
         const raw = await readBody(req);

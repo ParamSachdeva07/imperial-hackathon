@@ -5,7 +5,7 @@
  *
  *   npx tsx scripts/realtime-smoke.ts
  *
- * Needs OPENAI_API_KEY in the repo-root .env (never printed). Model: POINTY_REALTIME_MODEL ?? OPENAI_REALTIME_MODEL ?? gpt-realtime-2.1-mini; effort POINTY_REASONING_EFFORT ?? minimal.
+ * Needs OPENAI_API_KEY in the repo-root .env (never printed). Model: POINTY_REALTIME_MODEL ?? OPENAI_REALTIME_MODEL ?? gpt-realtime-2.1; effort POINTY_REASONING_EFFORT ?? minimal.
  */
 import { resolve } from "node:path";
 import { deflateSync } from "node:zlib";

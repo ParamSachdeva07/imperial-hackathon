@@ -8,52 +8,40 @@ Anything marked **unconfirmed** has to be tested in Phase 0 before work that dep
 
 ## Status (15 November 2026)
 
+**Decision: the voice agent is GPT Realtime 2.1, spoken through the Anam avatar. ElevenLabs is not used.**
+The ElevenLabs stack was built, run once (the call connected and injected notes were spoken) and then
+removed at the owner's request; it is in the history at commit `7473a31`. Phases 0 and 3 below are kept
+only as a record of that route.
+
 The two repositories are merged in this one: the voice app at the root, the execution agent in
 `execution/`. The standalone execution agent is kept as the tag `execution-standalone`, the branch
 `execution-standalone-branch`, and a copy in `~/Documents/personal-assistant`.
 
-**Done and tested**
+**How the voice agent works now**
 
-- Phase 1: the headless execution service (`npm run serve` in `execution/`). It boots, checks the
-  token and answers `/state`; a full task through it has not been run.
-- Phase 2: the asynchronous execution tool on the current OpenAI Realtime stack. `run_on_computer`
-  returns at once, the result is announced when it ends, a new request replaces the running task, the
-  assistant stays open while a task runs, drawings are cleared and the hand stops driving the mouse.
-  Unit-tested with fakes; **not yet run by voice.**
-- ElevenLabs agent definition: `scripts/elevenlabs-agent.ts` builds the agent with GPT-6.1 Sol on the
-  fast service tier, low reasoning, PCM 16000 Hz input and all twelve tools as client tools.
-  `--print` works; **creating the agent has not been run** (no ElevenLabs key on this machine).
-- Avatar backend: with `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` and `ANAM_AVATAR_ID` set, the
-  session token is created for that ElevenLabs agent on a Cara 4 avatar. Tested with fake upstreams.
+- Model: `gpt-realtime-2.1` (was the mini), reasoning effort `low`, text out. `POINTY_REALTIME_MODEL`
+  and `POINTY_REASONING_EFFORT` override both.
+- Speech: Anam speaks the text, sentence by sentence. Interruption is the existing barge-in guard.
+- Tools, registered with the Realtime session like any agent's tool list: the eleven drawing tools
+  and the three execution tools (`run_on_computer`, `stop_computer_task`, `computer_task_status`).
+- Context: the live conversation; each turn's screenshot and control list, with older images removed;
+  a rolling 20-minute memory re-injected when a session reopens; and every finished task as an
+  "[execution]" note, which is how one execution call can build on the last.
+- Execution is asynchronous: the tool returns at once, the task runs in the execution service, and
+  the outcome is spoken when it ends, at a quiet moment.
+- One start command, `npm run pointy`, launches the avatar, the voice app and the execution service.
 
-- Agent mode, both apps (`POINTY_VOICE_STACK=elevenlabs`): the avatar app turns the microphone on,
-  registers a handler per tool with the Anam SDK and forwards each call to the main app's tool bridge;
-  the main app runs the tool (drawing, execution, or `look_at_screen`, which returns today's
-  "[screen]" text) and a small session class replaces the Realtime controller for opening, closing,
-  idle, gestures and menu-bar status. Typechecked and unit-tested; **never run against Anam.**
-- One start command: `npm run pointy` also launches the execution service, and picks the avatar's
-  mode from `POINTY_VOICE_STACK`.
+**Verified**
 
-**Checked live (15 November 2026)**
+- Unit tests across all four parts.
+- `gpt-realtime-2.1` is available to the configured key.
 
-- The agent was created by the script: GPT-6.1 Sol, fast tier, low reasoning, twelve tools. Tool
-  schemas had to be folded into the subset ElevenLabs accepts (no unions or constants).
-- The avatar call opened on the ElevenLabs stack in about 3 seconds.
-- A message sent through the avatar app's `/message` route reached the agent, and the agent answered
-  it aloud. So notes from the app (a finished task) do work on this stack.
-- The agent heard the microphone and replied.
+**Not verified**
 
-**Still to do**
-
-1. Run `scripts/elevenlabs-agent.ts` to create the agent, and put its id, the ElevenLabs key and a
-   Cara 4 avatar id in `anam-overlay/backend/.env`. The API paths in the script are from the
-   documentation and have not been called.
-2. Phase 0's questions, now concrete:
-   - Does the avatar's own voice trigger the agent on laptop speakers? Interruption is ElevenLabs'.
-   - Can an image reach the agent? Until then the agent gets the control list as text, no picture.
-3. The spoken offer right after a selection is not built in agent mode. The selection is included
-   the next time the agent calls `look_at_screen`.
-4. Try it by voice on both stacks. Nothing here has been spoken to yet.
+- A task started by voice while the conversation continues. Nothing on this stack has been spoken
+  to since the execution tool was added.
+- Camera and Screen Recording must be granted to the app that launches it (Terminal); they cannot be
+  granted when it is launched from a Claude session.
 
 ## Target shape
 

@@ -176,9 +176,7 @@ export function pointyEnv(base, { debug }) {
 
 /** Environment for the Anam child: never leak browser-exposed or stray keys, speak-only mode on. */
 export function anamEnv(base) {
-  // realtime stack: the avatar only speaks text we send. elevenlabs stack: an ElevenLabs agent runs the
-  // conversation through the avatar, with the microphone on, and its tool calls come back to us.
-  const env = { ...base, ...(base.POINTY_VOICE_STACK === "elevenlabs" ? { ANAM_AGENT_MODE: "1" } : { ANAM_SPEAK_ONLY: "1" }) };
+  const env = { ...base, ANAM_SPEAK_ONLY: "1" };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.VITE_ANAM_API_KEY;
   return env;

@@ -25,14 +25,6 @@ class Settings:
     api_key: str = field(default="", repr=False)
     api_base: str = "https://api.anam.ai"
     persona_id: str = "ec3b8e17-2ff7-517d-92e5-c13a3a865023"
-    # ElevenLabs agent mode: when all three are set, the avatar is the face and voice of that agent.
-    elevenlabs_api_key: str = field(default="", repr=False)
-    elevenlabs_agent_id: str = ""
-    avatar_id: str = ""
-
-    @property
-    def agent_mode(self) -> bool:
-        return bool(self.elevenlabs_api_key and self.elevenlabs_agent_id and self.avatar_id)
 
     @classmethod
     def load(cls):
@@ -42,9 +34,6 @@ class Settings:
             api_key=(values.get("ANAM_API_KEY") or "").strip(),
             api_base=(values.get("ANAM_API_BASE") or "https://api.anam.ai").rstrip("/"),
             persona_id=(values.get("ANAM_PERSONA_ID") or "").strip(),
-            elevenlabs_api_key=(values.get("ELEVENLABS_API_KEY") or "").strip(),
-            elevenlabs_agent_id=(values.get("ELEVENLABS_AGENT_ID") or "").strip(),
-            avatar_id=(values.get("ANAM_AVATAR_ID") or "").strip(),
         )
 
     def validate(self):
@@ -54,8 +43,6 @@ class Settings:
         if (base.scheme != "https" or not base.hostname or base.username
                 or base.password or base.query or base.fragment or base.path not in ("", "/")):
             raise HTTPException(503, "ANAM_API_BASE must be an HTTPS origin, such as https://api.anam.ai.")
-        if self.agent_mode:
-            return
         try:
             UUID(self.persona_id)
         except (ValueError, TypeError, AttributeError):
@@ -115,30 +102,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             if len(attempts) >= 6:
                 raise HTTPException(429, "Too many connection attempts. Retry in a minute.", headers={"Retry-After": "60"})
             attempts.append(now)
-        body = {"personaConfig": {"personaId": config.persona_id}}
-        if config.agent_mode:
-            # ElevenLabs runs the conversation (speech in, GPT-6.1 Sol, speech out); Anam renders it.
-            # The signed URL is short-lived, so it is fetched for each session.
-            try:
-                signed = await request.app.state.anam_http.get(
-                    "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url",
-                    params={"agent_id": config.elevenlabs_agent_id},
-                    headers={"xi-api-key": config.elevenlabs_api_key},
-                )
-            except httpx.HTTPError:
-                raise HTTPException(502, "Cannot reach ElevenLabs. Check your internet connection.") from None
-            url = signed.json().get("signed_url") if signed.is_success else None
-            if not isinstance(url, str) or not url:
-                raise HTTPException(502, "ElevenLabs did not return a signed URL. Check ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID.")
-            body = {
-                "personaConfig": {"avatarId": config.avatar_id, "avatarModel": "cara-4"},
-                "environment": {"elevenLabsAgentSettings": {"signedUrl": url, "agentId": config.elevenlabs_agent_id}},
-            }
         try:
             upstream = await request.app.state.anam_http.post(
                 f"{config.api_base}/v1/auth/session-token",
                 headers={"Authorization": f"Bearer {config.api_key}"},
-                json=body,
+                json={"personaConfig": {"personaId": config.persona_id}},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "Anam took too long to respond. Please retry.") from None

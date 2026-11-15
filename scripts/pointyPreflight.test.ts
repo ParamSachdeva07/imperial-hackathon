@@ -95,9 +95,6 @@ describe("helpers", () => {
     expect(pointyEnv({ ELECTRON_RUN_AS_NODE: "1" }, { debug: false }).ELECTRON_RUN_AS_NODE).toBeUndefined();
     const a = anamEnv({ VITE_ANAM_API_KEY: "k" });
     expect(a.ANAM_SPEAK_ONLY).toBe("1");
-    const agent = anamEnv({ POINTY_VOICE_STACK: "elevenlabs" });
-    expect(agent.ANAM_AGENT_MODE).toBe("1");
-    expect(agent.ANAM_SPEAK_ONLY).toBeUndefined();
     expect(a.VITE_ANAM_API_KEY).toBeUndefined();
   });
 });

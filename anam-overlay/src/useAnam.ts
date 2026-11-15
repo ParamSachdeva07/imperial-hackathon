@@ -40,12 +40,10 @@ export function useAnam() {
   const mounted = useRef(true);
   const [speaking, setSpeaking] = useState(false);
   const speakOnlyRef = useRef(false);
-  /** Agent mode: the tools the ElevenLabs agent may call, run by the main app. null outside agent mode. */
-  const agentTools = useRef<string[] | null>(null);
   // Resolved once from the main process: speak-only is decided by ANAM_SPEAK_ONLY, not by the page.
   const modeRef = useRef<Promise<boolean> | null>(null);
   modeRef.current ??= (window.overlay?.getMode?.() ?? Promise.resolve({ speakOnly: false }))
-    .then((mode) => { agentTools.current = mode.agent ? mode.tools ?? [] : null; return mode.speakOnly; }, () => false);
+    .then((mode) => mode.speakOnly, () => false);
 
   const stop = useCallback(async () => {
     ++generation.current;
@@ -69,12 +67,6 @@ export function useAnam() {
     const attempt = ++generation.current;
     const speakOnly = await modeRef.current!;
     speakOnlyRef.current = speakOnly;
-    // Agent mode: ask for the tool list at the start of every call. The main app may have started after this
-    // window loaded, and a call that registers no handlers leaves every tool the agent calls unanswered.
-    if (agentTools.current) {
-      const mode = await window.overlay.getMode().catch(() => null);
-      if (mode?.agent && mode.tools?.length) agentTools.current = mode.tools;
-    }
     const useMicrophone = wantMicrophone && !speakOnly; // speak-only never touches the microphone
     if (generation.current !== attempt) { busy.current = false; return; }
     const current = () => mounted.current && generation.current === attempt;
@@ -102,8 +94,6 @@ export function useAnam() {
       const onSpeech = () => { if (current()) setStatus('Listening to you…'); };
       const onMessage = (message: Message & { endOfSpeech?: boolean; interrupted?: boolean }) => {
         if (!current()) return;
-        if (agentTools.current) window.overlay.agentEvent({ role: message.role, id: message.id, content: message.content,
-          end: !!message.endOfSpeech, interrupted: !!message.interrupted });
         if (message.role === 'persona') setSpeaking(!(message.endOfSpeech || message.interrupted));
         setMessages((previous) => {
           const existing = previous.find((item) => item.id === message.id);
@@ -161,12 +151,6 @@ export function useAnam() {
         () => client.removeListener(AnamEvent.MIC_PERMISSION_DENIED, onDenied),
         () => client.removeListener(AnamEvent.INPUT_AUDIO_STREAM_STARTED, onInputStream),
       );
-      // Agent mode: each tool the agent calls runs in the main app; its answer goes back into the conversation.
-      for (const name of agentTools.current ?? []) {
-        disposers.push(client.registerToolCallHandler(name, {
-          onStart: async ({ arguments: args }: { arguments: unknown }) => window.overlay.callTool(name, args),
-        }));
-      }
       setStatus('Connecting to your persona…');
       const starting = client.streamToVideoElement('persona-video');
       // If setup completes after a timeout/cancel, stop the newly created connection too.
@@ -252,11 +236,6 @@ export function useAnam() {
     setSpeaking(false);
   }, []);
 
-  /** Agent mode: put a note from the main app (a finished task, a selection) into the conversation. */
-  const inject = useCallback((text: string) => {
-    try { session.current?.client.sendUserMessage(text); } catch { /* not connected */ }
-  }, []);
-
   const send = (text: string): boolean => {
     if (speakOnlyRef.current) return false; // speak-only never sends user messages (the LLM is off)
     if (!text.trim() || !session.current || phase !== 'connected') return false;
@@ -288,5 +267,5 @@ export function useAnam() {
     };
   }, []);
 
-  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, interrupt, inject };
+  return { phase, status, error, muted, messages, speaking, start, stop, toggleMute, send, talk, interrupt };
 }

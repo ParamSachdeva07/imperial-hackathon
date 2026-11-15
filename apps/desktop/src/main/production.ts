@@ -38,9 +38,6 @@ import { loadRendererPage, PRELOAD_DIR } from "./rendererPages";
 import { startDevHarness } from "../dev/devHarness";
 import { ExecutionClient } from "./execution/ExecutionClient";
 import { EXECUTION_TOOLS, ExecutionToolHost } from "./execution/ExecutionTools";
-import { AgentSession } from "./agent/AgentSession";
-import { ToolBridge } from "./agent/ToolBridge";
-import type { StatusEmitter } from "./assistant/status";
 
 /** Safety cap for the kept selection outline; the AssistantController removes it much earlier. */
 const SELECTION_OUTLINE_TTL_MS = 120_000;
@@ -195,128 +192,82 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     ...exportToolDefinitions({ images, pregeneratedImagePrompts: images ? await readManifestPrompts(assetsDir) : [] }),
     ...(executionOn ? EXECUTION_TOOLS : []),
   ];
-  // --- the assistant. Two voice stacks share everything above:
-  //   realtime   (default) OpenAI Realtime in a hidden window; the avatar only speaks our text
-  //   elevenlabs           an ElevenLabs agent runs the conversation through the avatar; we run its tools
-  const agentStack = env.POINTY_VOICE_STACK === "elevenlabs";
-  interface Assistant {
-    readonly status: StatusEmitter;
-    isOpen(): boolean;
-    open(reason?: string): Promise<void>;
-    close(reason?: string): Promise<void>;
-    wake(): Promise<void>;
-    hotkey(): Promise<void>;
-    interrupt(): Promise<void>;
-    clearMemory(): void;
-    notify(text: string): void;
-    dispose(): void;
-  }
-  const buildContext = (o?: { skipScreenshot?: boolean }) =>
-    captureScreenContext({
-      skipScreenshot: o?.skipScreenshot,
-      getDisplays: () => displays.getDisplays(),
-      primaryDisplayId: () => displays.getPrimaryDisplayId(),
-      cursorDisplayId: () => String(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id),
-      getPointer: () => {
-        const real = screen.getCursorScreenPoint();
-        // While the user points with a finger the real cursor may not follow (mouse control off / frozen after a selection).
-        const g = gestures?.pointerActiveRecently(POINTER_ACTIVE_MS) ? gestures.lastPointer() : null;
-        const p = pickPointer({ gestureActive: g !== null, gesture: g, real });
-        return { x: p.x, y: p.y, displayId: String(screen.getDisplayNearestPoint({ x: Math.round(p.x), y: Math.round(p.y) }).id) };
-      },
-      pointerActiveRecently: (ms) => gestures?.pointerActiveRecently(ms) ?? false,
-      overlays: () => summarizeOverlays(overlay.debug.items?.() ?? []),
-      elementAt: async (p) => {
-        const e = (await ax.elementAt?.(p)) ?? null;
-        return e ? { id: e.id, role: e.role, label: e.label, window: e.window } : null;
-      },
-      capture: bgraCapture(provider),
-      hiding,
-      ops: nativeImageOps,
-      ax,
-      log: plog,
-    });
-  const gestureSession = {
-    // The gesture session (and with it the mouse) is active only while the assistant is open.
-    setSessionActive: (active: boolean) => {
-      ax.setActive(active || opts.devServer);
-      if (active) void ax.snapshotNow("session-open").catch(() => undefined); // attach AX observers even if the user selects before speaking
-      if (!gestures) return;
-      gestures.setSessionPaused(false, false); // a real open/close supersedes a pause for the spoken answer
-      if (active && gesturesEnabled) gestures.session.open();
-      else gestures.session.close();
+  plog(`realtime ${describeRealtimeConfig()}`);
+  const assistantWin = createAssistantWindow({
+    preloadDir: PRELOAD_DIR,
+    loadPage: (w) => loadRendererPage(w, "assistant"),
+    mintSecret: async () => {
+      const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images, execution: executionOn }), tools });
+      plog(`realtime session: model=${secret.model}, effort=${secret.effort ?? "default"}`);
+      return secret;
     },
-    clearSelection: () => gestures?.clearSelection(),
-  };
-  const runTool = (name: string, input: unknown, o?: Parameters<typeof overlay.control.handleTool>[2]) =>
-    execution.handles(name) ? (execution.handle(name, input) as ReturnType<typeof overlay.control.handleTool>) : overlay.control.handleTool(name, input, o);
-  let assistantWin: ReturnType<typeof createAssistantWindow> | null = null;
-  let toolBridge: ToolBridge | null = null;
-  let controller: Assistant;
-  if (agentStack) {
-    const session = new AgentSession({
-      anam: new AnamSpeaker(),
-      gestures: gestureSession,
-      tools: { names: () => tools.map((t) => t.name), run: (name, input) => runTool(name, input) },
-      buildContext: () => buildContext({ skipScreenshot: true }), // the agent reads the control list; it is given no image
-      selectionNote: () => {
-        const sel = selectionStore.latest();
-        if (!sel) return "";
-        const r = sel.regionGlobal;
-        return `[selection] The user selected the area at ${Math.round(r.x)},${Math.round(r.y)} size ${Math.round(r.width)}x${Math.round(r.height)} with a gesture. Controls inside it in the list above are what they mean by "this".`;
-      },
-      backgroundWork: () => execution.isRunning(),
-      clock: realClock,
-      log: plog,
-    });
-    toolBridge = new ToolBridge({ toolNames: () => session.toolNames(), runTool: (name, input) => session.runTool(name, input), onSpoken: (e) => session.onSpoken(e), log: plog });
-    await toolBridge.start();
-    plog(`voice stack: elevenlabs through the avatar (tool bridge on :${toolBridge.port})`);
-    controller = session;
-  } else {
-    plog(`realtime ${describeRealtimeConfig()}`);
-    assistantWin = createAssistantWindow({
-      preloadDir: PRELOAD_DIR,
-      loadPage: (w) => loadRendererPage(w, "assistant"),
-      mintSecret: async () => {
-        const secret = await mintAssistantSecret({ apiKey: process.env.OPENAI_API_KEY, instructions: buildAssistantInstructions({ images, execution: executionOn }), tools });
-        plog(`realtime session: model=${secret.model}, effort=${secret.effort ?? "default"}`);
-        return secret;
-      },
-      log: plog,
-    });
-    const win = assistantWin;
-    controller = new AssistantController({
-      transport: win.transport,
-      buildContext,
-      anam: new AnamSpeaker(),
-      overlay: {
-        onTurnStart: (turnId) => overlay.control.onTurnStart(turnId),
-        handleTool: runTool,
-      },
-      backgroundWork: () => execution.isRunning(),
-      gestures: gestureSession,
-      selection: selectionStore,
-      bargeIn: parseBargeIn(env.POINTY_BARGE_IN),
-      // Pause ONLY the gesture session while Anam speaks (so the open hand can interrupt and the mouse is not driven by a
-      // hand that is just resting). Deliberately NOT the setSessionActive wrapper above: ax.setActive(false) would cancel
-      // the anchors (target_lost, the AI's drawings vanish) and the selection must survive until the answer is done.
-      onAnswerSpeaking: (speaking) => {
+    log: plog,
+  });
+  const controller = new AssistantController({
+    transport: assistantWin.transport,
+    buildContext: (o) =>
+      captureScreenContext({
+        skipScreenshot: o?.skipScreenshot,
+        getDisplays: () => displays.getDisplays(),
+        primaryDisplayId: () => displays.getPrimaryDisplayId(),
+        cursorDisplayId: () => String(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id),
+        getPointer: () => {
+          const real = screen.getCursorScreenPoint();
+          // While the user points with a finger the real cursor may not follow (mouse control off / frozen after a selection).
+          const g = gestures?.pointerActiveRecently(POINTER_ACTIVE_MS) ? gestures.lastPointer() : null;
+          const p = pickPointer({ gestureActive: g !== null, gesture: g, real });
+          return { x: p.x, y: p.y, displayId: String(screen.getDisplayNearestPoint({ x: Math.round(p.x), y: Math.round(p.y) }).id) };
+        },
+        pointerActiveRecently: (ms) => gestures?.pointerActiveRecently(ms) ?? false,
+        overlays: () => summarizeOverlays(overlay.debug.items?.() ?? []),
+        elementAt: async (p) => {
+          const e = (await ax.elementAt?.(p)) ?? null;
+          return e ? { id: e.id, role: e.role, label: e.label, window: e.window } : null;
+        },
+        capture: bgraCapture(provider),
+        hiding,
+        ops: nativeImageOps,
+        ax,
+        log: plog,
+      }),
+    anam: new AnamSpeaker(),
+    overlay: {
+      onTurnStart: (turnId) => overlay.control.onTurnStart(turnId),
+      handleTool: (name, input, o) => (execution.handles(name) ? (execution.handle(name, input) as ReturnType<typeof overlay.control.handleTool>) : overlay.control.handleTool(name, input, o)),
+    },
+    backgroundWork: () => execution.isRunning(),
+    gestures: {
+      // The gesture session (and with it the mouse) is active only while the assistant is open.
+      setSessionActive: (active) => {
+        ax.setActive(active || opts.devServer);
+        if (active) void ax.snapshotNow("session-open").catch(() => undefined); // attach AX observers even if the user selects before speaking
         if (!gestures) return;
-        if (speaking) {
-          if (gesturesEnabled && gestures.session.isActive()) gestures.setSessionPaused(true);
-        } else if (gestures.sessionPaused) {
-          // Also while gestures are toggled off: the pause flag must not outlive the speech (a stale flag makes the next pause a no-op).
-          gestures.setSessionPaused(false, controller.isOpen() && gesturesEnabled);
-        }
+        gestures.setSessionPaused(false, false); // a real open/close supersedes a pause for the spoken answer
+        if (active && gesturesEnabled) gestures.session.open();
+        else gestures.session.close();
       },
-      contextRevision: () => contextRevision,
-      overlayState: () => summarizeOverlays(overlay.debug.items?.() ?? []),
-      setTurnAvoid: (rects) => turnAvoid.set(rects),
-      clock: realClock,
-      log: plog,
-    });
-  }
+      clearSelection: () => gestures?.clearSelection(),
+    },
+    selection: selectionStore,
+    bargeIn: parseBargeIn(env.POINTY_BARGE_IN),
+    // Pause ONLY the gesture session while Anam speaks (so the open hand can interrupt and the mouse is not driven by a
+    // hand that is just resting). Deliberately NOT the setSessionActive wrapper above: ax.setActive(false) would cancel
+    // the anchors (target_lost, the AI's drawings vanish) and the selection must survive until the answer is done.
+    onAnswerSpeaking: (speaking) => {
+      if (!gestures) return;
+      if (speaking) {
+        if (gesturesEnabled && gestures.session.isActive()) gestures.setSessionPaused(true);
+      } else if (gestures.sessionPaused) {
+        // Also while gestures are toggled off: the pause flag must not outlive the speech (a stale flag makes the next pause a no-op).
+        gestures.setSessionPaused(false, controller.isOpen() && gesturesEnabled);
+      }
+    },
+    contextRevision: () => contextRevision,
+    overlayState: () => summarizeOverlays(overlay.debug.items?.() ?? []),
+    setTurnAvoid: (rects) => turnAvoid.set(rects),
+    clock: realClock,
+    log: plog,
+  });
   controller.status.onChange((s) => {
     if (s === "idle" || s === "error") {
       execution.dispose(); // the assistant closed: nobody is left to hear the result, so the task stops with it
@@ -403,8 +354,7 @@ export async function startProduction(opts: ProductionOptions): Promise<void> {
     tray.destroy();
     execution.dispose();
     controller.dispose();
-    assistantWin?.dispose();
-    toolBridge?.stop();
+    assistantWin.dispose();
     for (const d of stopSelection.splice(0)) d();
     gestures?.dispose();
     anam.dispose();

@@ -493,6 +493,6 @@ gallery scenes `parts-scam`, `explainer-verdict`; `pointy-draw label-parts ID:"L
 - **Pointer questions** ("what am I pointing at / explain this"): each turn's context gets a `[pointer]` line (position, the AX element under it via
   `AxBoundsProvider.elementAt`, which skips Pointy and Anam pids), a pointer marker on the screenshot and a close-up crop when the pointer
   moved within 10 s. The model answers verbally without drawing.
-- **Model / effort:** `POINTY_REALTIME_MODEL` (default `gpt-realtime-2.1-mini`) and `POINTY_REASONING_EFFORT` (default `minimal`, auto
+- **Model / effort:** `POINTY_REALTIME_MODEL` (default `gpt-realtime-2.1`) and `POINTY_REASONING_EFFORT` (default `low`, auto
   fallback to `low` if the API rejects it). Start log: `[pointy] realtime model=..., effort=...` and the effective values after minting.
 
