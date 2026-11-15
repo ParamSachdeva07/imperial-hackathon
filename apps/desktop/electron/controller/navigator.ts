@@ -411,7 +411,9 @@ export class Navigator {
       const report = this.bridge.takeActionReport?.();
       if (delivery === 'delivered' && report?.verification === 'unverified' && (report.nativeError || ['uncertain', 'unknown'].includes(report.delivery))) {
         delivery = 'uncertain';
-        note = report.nativeError?.message || 'The input was sent but its delivery could not be confirmed.';
+        note = (report.nativeError?.message || 'The input was sent but its delivery could not be confirmed.') +
+          // Some fields take text, or show it, only while they have keyboard focus.
+          (WRITE_OPERATIONS.has(operation) ? ' The field does not show the text. Click or focus the field and look again before writing it a second time.' : '');
         next = recovery;
       }
       if (report?.verification === 'already_satisfied') note = 'The control already held this value; nothing was sent.';
@@ -427,7 +429,8 @@ export class Navigator {
             ...(acting.observation.context.driver === 'browser' ? { beforePage: { url: acting.observation.snapshots[0]?.tree?.value || '', content: pageContentKey(acting.index) } } : {}),
             intervalMs: SETTLE.intervalMs,
             // Focusing or scrolling changes nothing the content comparison looks at, so it is not waited on.
-            capMs: ['FOCUS', 'SCROLL', 'SCROLL_TO'].includes(operation) ? 0 : SETTLE.capMs });
+            // Nor is a write the adapter already watched without seeing its text appear.
+            capMs: ['FOCUS', 'SCROLL', 'SCROLL_TO'].includes(operation) || report?.verification === 'unverified' ? 0 : SETTLE.capMs });
       } catch (error) {
         signal.throwIfAborted();
         // The action was sent whether or not the screen can be read afterwards. Record that first.
